@@ -29,8 +29,8 @@ Thumbs.db
 *.swp
 
 # Prisma
-prisma/migrations/dev.db*
 prisma/*.db
+prisma/migrations/dev.db*
 
 # Misc
 .turbo
