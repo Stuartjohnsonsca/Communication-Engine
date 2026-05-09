@@ -4,7 +4,7 @@ Multi-tenant SaaS for governed firm-wide communications. Built to the PRD held l
 
 ## Stack
 
-Next.js 15 (App Router, TypeScript) · Postgres + Prisma · NextAuth v5 magic-link · Anthropic Claude (Sonnet 4.6) · Tailwind CSS · Railway deploy.
+Next.js 15 (App Router, TypeScript) · Postgres + Prisma · NextAuth v5 magic-link · pluggable LLM providers (Anthropic Claude · Together AI Llama · mock) bound per agent role · Tailwind CSS · Railway deploy.
 
 ## Phase 1 (built)
 
@@ -41,7 +41,9 @@ Push to `main`. Railway auto-builds via `nixpacks.toml`. Required env vars:
 | `DATABASE_URL`, `DIRECT_URL` | Postgres (use Railway's managed plugin) |
 | `NEXTAUTH_URL` | `https://communicationsengine-production.up.railway.app` |
 | `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
-| `ANTHROPIC_API_KEY` | Anthropic console |
+| `ANTHROPIC_API_KEY` | Anthropic console (used by default for the Compliance Judge + statutory Verifier — the quality-critical roles) |
+| `TOGETHER_API_KEY` | api.together.xyz (used by default for FCG/UCG chat, drafting, sentiment) |
+| `LLM_<ROLE>` | Optional per-role override, format `provider:model` (see `src/lib/ai/models.ts`) |
 | `EMAIL_SERVER`, `EMAIL_FROM` | SMTP for magic links |
 | `ENCRYPTION_KEY` | `openssl rand -base64 32` (AES-GCM for OAuth tokens — Phase 2) |
 | `AUDIT_HASH_SEED` | Any non-empty string (do not rotate) |

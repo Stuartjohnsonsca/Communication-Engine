@@ -1,88 +1,57 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { MODEL_FOR, type AgentRole } from "@/lib/ai/models";
-
-declare global {
-  // eslint-disable-next-line no-var
-  var __anthropic: Anthropic | undefined;
-}
+import { bindingFor } from "@/lib/ai/models";
+import { effectiveProvider } from "@/lib/ai/providers";
+import type {
+  AgentRole,
+  CallToolOpts,
+  ChatOpts,
+  ChatResult,
+  ToolDef,
+  ToolResult,
+  SystemBlock,
+} from "@/lib/ai/providers/types";
 
 /**
- * Singleton Anthropic client.
+ * Top-level entry points. `chat()` is for open-ended turns with optional
+ * tool calls (FCG/UCG drafting). `callTool()` is for forced single-tool
+ * structured outputs (Judge, drafting final, sentiment, etc.).
  *
- * Headers:
- *  - `extended-cache-ttl-2025-04-11` enables 1h ephemeral prompt cache TTL
- *    instead of the 5-min default. Required for the FCG/UCG hot path
- *    where a single user produces many drafts in a session against a
- *    stable FCG+UCG context.
- *
- * TODO (PRD §12.6): pin to an in-region (UK/EU) endpoint and assert
- * no-training/no-retention flags before any tenant goes live.
+ * Each call dispatches to the provider bound to the agent role.
  */
-function makeClient() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY not set");
-  }
-  return new Anthropic({
-    apiKey,
-    defaultHeaders: {
-      "anthropic-beta": "extended-cache-ttl-2025-04-11",
-    },
+
+export async function chat(opts: ChatOpts): Promise<ChatResult> {
+  const binding = bindingFor(opts.role);
+  const provider = effectiveProvider(binding.provider);
+  return provider.chat({
+    ...opts,
+    model: opts.model ?? binding.model,
+    maxTokens: opts.maxTokens ?? binding.maxTokens,
+    temperature: opts.temperature ?? binding.temperature,
   });
 }
 
-export function anthropic(): Anthropic {
-  if (!global.__anthropic) global.__anthropic = makeClient();
-  return global.__anthropic;
-}
-
-export type CachedSystemBlock = {
-  type: "text";
-  text: string;
-  cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" };
-};
-
-/**
- * Build a system message as an array of blocks ordered most-stable to
- * least-stable. Mark the boundary of every stable region with
- * `cache_control: { type: 'ephemeral', ttl: '1h' }`.
- *
- * Anthropic caches the *prefix* up to and including the marked block,
- * so caching the FCG block automatically caches the static system prompt
- * block before it.
- */
-export function buildCachedSystem(blocks: { text: string; cache?: boolean }[]): CachedSystemBlock[] {
-  return blocks.map((b) => ({
-    type: "text" as const,
-    text: b.text,
-    ...(b.cache ? { cache_control: { type: "ephemeral" as const, ttl: "1h" as const } } : {}),
-  }));
-}
-
-/**
- * Force-tool-call helper. The model is required to invoke `tool.name` exactly
- * once and stop; the tool's `input` is parsed as the structured response.
- */
-export async function callTool<T>(opts: {
-  role: AgentRole;
-  system: CachedSystemBlock[];
-  messages: Anthropic.Messages.MessageParam[];
-  tool: Anthropic.Messages.Tool;
-  tenantId?: string;
-}): Promise<{ output: T; raw: Anthropic.Messages.Message }> {
-  const cfg = MODEL_FOR[opts.role];
-  const msg = await anthropic().messages.create({
-    model: cfg.model,
-    max_tokens: cfg.maxTokens,
-    temperature: cfg.temperature,
-    system: opts.system,
-    messages: opts.messages,
-    tools: [opts.tool],
-    tool_choice: { type: "tool", name: opts.tool.name },
+export async function callTool<T>(opts: CallToolOpts): Promise<ToolResult<T>> {
+  const binding = bindingFor(opts.role);
+  const provider = effectiveProvider(binding.provider);
+  return provider.callTool<T>({
+    ...opts,
+    model: opts.model ?? binding.model,
+    maxTokens: opts.maxTokens ?? binding.maxTokens,
+    temperature: opts.temperature ?? binding.temperature,
   });
-  const block = msg.content.find((c) => c.type === "tool_use");
-  if (!block || block.type !== "tool_use" || block.name !== opts.tool.name) {
-    throw new Error(`callTool: model did not invoke ${opts.tool.name}`);
-  }
-  return { output: block.input as T, raw: msg };
 }
+
+/** Helper for agents to declare a tool with a JSON-Schema input. */
+export function tool(name: string, description: string, schema: Record<string, unknown>): ToolDef {
+  return { name, description, schema };
+}
+
+/**
+ * Build a layered system message. `cache: true` blocks are cached on
+ * Anthropic with 1h TTL; non-Anthropic providers ignore the hint.
+ */
+export function buildSystem(blocks: { text: string; cache?: boolean }[]): SystemBlock[] {
+  return blocks.map((b) => ({ text: b.text, cache: b.cache }));
+}
+
+/** Re-exports for convenience. */
+export type { AgentRole, ChatOpts, CallToolOpts, ChatResult, ToolResult, SystemBlock, ToolDef };

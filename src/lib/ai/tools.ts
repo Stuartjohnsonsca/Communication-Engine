@@ -1,9 +1,9 @@
-import type Anthropic from "@anthropic-ai/sdk";
+import type { ToolDef } from "@/lib/ai/providers/types";
 
 /**
- * Anthropic tool definitions. Each `respond_with_X` tool is forced via
- * `tool_choice: { type: 'tool', name: ... }` so the model emits one
- * structured payload and stops.
+ * Tool definitions, provider-agnostic. JSON Schema input.
+ * Anthropic uses `input_schema`, OpenAI/Together uses `parameters` —
+ * provider adapters do the rename.
  */
 
 const ruleSchema = {
@@ -30,12 +30,12 @@ const ruleSchema = {
   required: ["externalId","category","statement"],
 } as const;
 
-export const fcgTools: Anthropic.Messages.Tool[] = [
+export const fcgTools: ToolDef[] = [
   {
     name: "propose_rule_change",
     description:
       "Stage a single add/modify/remove operation on the working FCG draft. The FCT will see the staged operation and may approve, reject, or refine before the proposal goes to a vote.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["add","modify","remove"] },
@@ -49,7 +49,7 @@ export const fcgTools: Anthropic.Messages.Tool[] = [
   {
     name: "summarise_section",
     description: "Produce a short summary of one FCG category and return it inline to the chat.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: { category: { type: "string" }, summary: { type: "string" } },
       required: ["category","summary"],
@@ -58,7 +58,7 @@ export const fcgTools: Anthropic.Messages.Tool[] = [
   {
     name: "request_evidence",
     description: "Ask the server for scan extracts you need to ground a rule. Server returns matching snippets.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: { query: { type: "string" }, k: { type: "integer", default: 5 } },
       required: ["query"],
@@ -67,7 +67,7 @@ export const fcgTools: Anthropic.Messages.Tool[] = [
   {
     name: "finalise_fcg",
     description: "Hand the full proposed FCG (all rules + signature block) over for FCT vote.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: {
         rules: { type: "array", items: ruleSchema },
@@ -87,11 +87,11 @@ const ucgRuleSchema = {
   },
 } as const;
 
-export const ucgTools: Anthropic.Messages.Tool[] = [
+export const ucgTools: ToolDef[] = [
   {
     name: "propose_user_rule",
     description: "Stage a single add/modify/remove on the working UCG draft. Will be screened against the FCG.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["add","modify","remove"] },
@@ -104,7 +104,7 @@ export const ucgTools: Anthropic.Messages.Tool[] = [
   {
     name: "request_clarification",
     description: "Ask the user a follow-up question.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: { question: { type: "string" } },
       required: ["question"],
@@ -114,7 +114,7 @@ export const ucgTools: Anthropic.Messages.Tool[] = [
     name: "flag_fcg_conflict_for_amendment",
     description:
       "User wants something the FCG forbids. Emit an FCG amendment proposal request that the FCT can act on.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: { fcgRuleId: { type: "string" }, reason: { type: "string" } },
       required: ["fcgRuleId","reason"],
@@ -123,7 +123,7 @@ export const ucgTools: Anthropic.Messages.Tool[] = [
   {
     name: "finalise_ucg",
     description: "Hand the full UCG draft to the Judge for compliance evaluation.",
-    input_schema: {
+    schema: {
       type: "object",
       properties: {
         rules: { type: "array", items: ucgRuleSchema },
@@ -135,10 +135,10 @@ export const ucgTools: Anthropic.Messages.Tool[] = [
   },
 ];
 
-export const judgeTool: Anthropic.Messages.Tool = {
+export const judgeTool: ToolDef = {
   name: "respond_with_judgement",
   description: "Return the structured compliance verdict for the candidate UCG against the authoritative FCG.",
-  input_schema: {
+  schema: {
     type: "object",
     properties: {
       overall: { type: "string", enum: ["pass","fail","partial"] },
@@ -162,10 +162,10 @@ export const judgeTool: Anthropic.Messages.Tool = {
   },
 };
 
-export const draftTool: Anthropic.Messages.Tool = {
+export const draftTool: ToolDef = {
   name: "respond_with_draft",
   description: "Return the final draft. Terminates the turn. Must be called exactly once and last.",
-  input_schema: {
+  schema: {
     type: "object",
     properties: {
       type: { type: "string", enum: ["substantive","holding","technical","holding_research"] },

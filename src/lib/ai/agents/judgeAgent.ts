@@ -5,13 +5,12 @@ import { judgement, type Judgement } from "@/lib/ai/schemas";
 
 /**
  * Judge agent — separate request, no chat history. The Judge sees the
- * authoritative FCG and the candidate UCG, returns a structured
- * Judgement, and never produces freeform text.
+ * authoritative FCG and the candidate UCG, returns a structured Judgement,
+ * and never produces freeform text.
  *
  * "Separate model instance" per PRD §5.3 is satisfied because this is a
  * fresh request with its own system prompt that never includes any chat
- * history from the UCG drafting agent. (Same Sonnet model is fine; the
- * separation is functional, not by model id.)
+ * history from the UCG drafting agent.
  */
 export async function judgeUcg(opts: {
   fcg: unknown;
@@ -30,7 +29,6 @@ export async function judgeUcg(opts: {
     system,
     messages: [{ role: "user", content: userMsg }],
     tool: judgeTool,
-    tenantId: opts.tenantId,
   });
 
   return judgement.parse(output);

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type Anthropic from "@anthropic-ai/sdk";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { ucgChatTurn } from "@/lib/ai/agents/ucgAgent";
+import type { ChatMessage } from "@/lib/ai/providers/types";
 import { requirePermission } from "@/lib/rbac";
 
 const inputSchema = z.object({
@@ -74,7 +74,7 @@ export async function POST(req: Request) {
     where: { ucgId: ucg.id },
     orderBy: { createdAt: "asc" },
   });
-  const history: Anthropic.Messages.MessageParam[] = turns.map((t) => ({
+  const history: ChatMessage[] = turns.map((t) => ({
     role: t.role === "assistant" ? "assistant" : "user",
     content: t.content,
   }));
