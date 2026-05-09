@@ -3,7 +3,9 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { eligibleVoterIds } from "@/lib/voting/quorum";
+import { hasPermission } from "@/lib/rbac";
 import VoteButtons from "./VoteButtons";
+import OpenForVoteButton from "./OpenForVoteButton";
 
 export default async function ProposalPage({
   params,
@@ -80,6 +82,17 @@ export default async function ProposalPage({
           {proposal.votes.length === 0 && <li className="py-2 text-ink/50">No votes yet.</li>}
         </ul>
       </div>
+
+      {proposal.state === "DRAFTING" && hasPermission(ctx.membership.role, "fcg:propose") && (
+        <div className="card">
+          <h2 className="text-base font-medium">Open for vote</h2>
+          <p className="mt-1 text-xs text-ink/60">
+            This proposal is still a draft. Open it to start the Firm Culture Team vote.
+            {ops.length === 0 && " Note: nothing is staged yet — you may want to add rules in chat first."}
+          </p>
+          <OpenForVoteButton tenantSlug={tenantSlug} proposalId={proposal.id} />
+        </div>
+      )}
 
       {proposal.state === "OPEN_FOR_VOTE" && isEligible && (
         <div className="card">

@@ -27,7 +27,10 @@ export default async function FCGIndex({
       where: { tenantId: ctx.tenant.id },
       orderBy: { updatedAt: "desc" },
       take: 20,
-      include: { _count: { select: { votes: true } } },
+      include: {
+        _count: { select: { votes: true } },
+        proposedBy: { include: { user: true } },
+      },
     }),
   ]);
 
@@ -79,17 +82,23 @@ export default async function FCGIndex({
         ) : (
           <ul className="mt-3 divide-y divide-ink/5 text-sm">
             {proposals.map((p) => (
-              <li key={p.id} className="flex items-center justify-between py-2">
-                <div>
-                  <Link href={`/${tenantSlug}/fcg/proposals/${p.id}`} className="font-medium">
-                    {p.title}
-                  </Link>
-                  <div className="text-xs text-ink/50">
-                    {p.proposedById} · {p._count.votes} votes
-                    {p.votingClosesAt && ` · closes ${p.votingClosesAt.toISOString()}`}
+              <li key={p.id}>
+                <Link
+                  href={`/${tenantSlug}/fcg/proposals/${p.id}`}
+                  className="flex items-center justify-between gap-3 rounded py-2 px-2 -mx-2 hover:bg-ink/5"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium">{p.title}</div>
+                    <div className="text-xs text-ink/50">
+                      {p.proposedBy.user.email} · {p._count.votes} vote{p._count.votes === 1 ? "" : "s"}
+                      {p.votingClosesAt && ` · closes ${p.votingClosesAt.toISOString().slice(0, 10)}`}
+                    </div>
                   </div>
-                </div>
-                <span className="tag">{p.state}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="tag">{p.state}</span>
+                    <span className="text-ink/40" aria-hidden>→</span>
+                  </div>
+                </Link>
               </li>
             ))}
           </ul>
