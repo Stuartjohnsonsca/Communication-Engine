@@ -7,6 +7,7 @@ import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
 import { evaluate } from "@/lib/voting/state-machine";
 import { eligibleVoterIds } from "@/lib/voting/quorum";
+import { flagConflictsAfterFcgCommit } from "@/lib/ucg/propagation";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -69,6 +70,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         where: { id: proposal.id },
         data: { state: "PASSED", decidedAt: new Date(), newFcgId },
       });
+      // PRD §5.2.2 — propagate the new FCG to existing UCGs. Fire-and-forget
+      // so the vote response isn't blocked on per-UCG judge calls; the
+      // function flags every UCG synchronously before yielding so the grace
+      // clock starts immediately.
+      void flagConflictsAfterFcgCommit({
+        tenantId: ctx.tenant.id,
+        newFcgId,
+        actorMembershipId: ctx.membership.id,
+      }).catch((e) => console.error("[flagConflictsAfterFcgCommit] failed:", e));
       return NextResponse.json({ proposalState: "PASSED", reason: decision.reason, newFcgId });
     } catch (e) {
       console.error("commitProposal failed:", e);

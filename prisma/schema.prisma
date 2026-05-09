@@ -96,6 +96,7 @@ enum UCGStatus {
   JUDGED_PASS
   JUDGED_FAIL
   COMMITTED
+  CONFLICTED
   SUPERSEDED
   FROZEN
 }
@@ -141,6 +142,8 @@ enum AuditEventType {
   UCG_AMENDED
   COMPLIANCE_RULING
   COMPLIANCE_OVERRIDE
+  UCG_CONFLICT_FLAGGED
+  UCG_RULE_AUTO_SUSPENDED
   DRAFT_PRODUCED
   DRAFT_SENT_MARKED
   DPIA_ATTESTED
@@ -386,6 +389,14 @@ model UserCultureGuide {
   signatureBlock Json?
   judgeStatus   String?   // "pending" | "pass" | "fail" | "partial"
   committedAt   DateTime?
+  // PRD §5.2.2 — when an FCG amendment commits, every current UCG is flagged
+  // and given a 10-working-day grace period. After that, conflicting rules
+  // auto-suspend. Cleared (set null + status back to COMMITTED) when the user
+  // commits a new UCG version that judges clean against the new FCG.
+  conflictedSinceFcgId    String?
+  conflictFlaggedAt       DateTime?
+  gracePeriodEndsAt       DateTime?
+  conflictAutoSuspendedAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -412,6 +423,11 @@ model UCGRule {
   narrowsFcgRule  String?     // FCGRule.externalId
   evidenceRefs    Json?
   channelOverrides Json?
+  // Auto-suspension under PRD §5.2.2 grace-period sweep. Suspended rules
+  // remain in the UCG row for audit but are excluded from drafting and
+  // adherence evaluation.
+  suspendedAt     DateTime?
+  suspendReason   String?
 
   ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
 

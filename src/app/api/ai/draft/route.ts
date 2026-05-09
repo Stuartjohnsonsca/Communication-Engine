@@ -40,9 +40,17 @@ export async function POST(req: Request) {
   });
   if (!fcg) return NextResponse.json({ error: "no committed FCG" }, { status: 409 });
 
+  // Drafting falls back to FCG-only when there is no live UCG, or when the
+  // UCG is in CONFLICTED state but the user hasn't yet remediated. A
+  // CONFLICTED UCG is still usable — only its individual auto-suspended
+  // rules are filtered out below (PRD §5.2.2).
   const ucg = await superDb.userCultureGuide.findFirst({
-    where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id, status: "COMMITTED" },
-    include: { rules: true },
+    where: {
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
+      status: { in: ["COMMITTED", "CONFLICTED"] },
+    },
+    include: { rules: { where: { suspendedAt: null } } },
     orderBy: { version: "desc" },
   });
 

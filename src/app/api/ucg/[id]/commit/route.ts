@@ -38,14 +38,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
   }
 
-  // Mark prior committed UCGs for this user as SUPERSEDED
+  // Mark prior committed-or-conflicted UCGs for this user as SUPERSEDED.
+  // Including CONFLICTED here is how users resolve a §5.2.2 conflict: they
+  // commit a new UCG version that judges clean against the new FCG, and the
+  // old conflicted version is superseded.
   await superDb.userCultureGuide.updateMany({
-    where: { membershipId: ctx.membership.id, status: "COMMITTED" },
+    where: {
+      membershipId: ctx.membership.id,
+      status: { in: ["COMMITTED", "CONFLICTED"] },
+      id: { not: ucg.id },
+    },
     data: { status: "SUPERSEDED" },
   });
   const updated = await superDb.userCultureGuide.update({
     where: { id: ucg.id },
-    data: { status: "COMMITTED", committedAt: new Date() },
+    data: {
+      status: "COMMITTED",
+      committedAt: new Date(),
+      conflictedSinceFcgId: null,
+      conflictFlaggedAt: null,
+      gracePeriodEndsAt: null,
+      conflictAutoSuspendedAt: null,
+    },
   });
 
   await writeAuditEvent({
