@@ -342,6 +342,74 @@ export const opportunityTool: ToolDef = {
   },
 };
 
+/**
+ * PRD §5.1.1 Firm Culture Scan tool. Single forced tool call: the analyser
+ * returns a fully-formed proposed FCG (rules + signature + summary + gaps)
+ * which the server lifts into a staged FCGProposal for FCT review.
+ */
+export const cultureScanTool: ToolDef = {
+  name: "respond_with_culture_scan",
+  description:
+    "Return the proposed Firm Culture Guide inferred from the corpus. Terminates the turn — call exactly once.",
+  schema: {
+    type: "object",
+    properties: {
+      proposedRules: {
+        type: "array",
+        minItems: 1,
+        maxItems: 60,
+        items: {
+          type: "object",
+          properties: {
+            externalId: { type: "string", maxLength: 80 },
+            category: {
+              type: "string",
+              enum: [
+                "tone",
+                "response_time",
+                "salutation",
+                "signoff",
+                "signature",
+                "mandatory_phrase",
+                "prohibited_phrase",
+                "escalation",
+                "regulatory",
+                "language",
+              ],
+            },
+            channel: {
+              type: "string",
+              enum: ["email", "slack", "teams", "letter", "report", "whatsapp_business", "any"],
+              default: "any",
+            },
+            statement: { type: "string", maxLength: 600 },
+            payload: { type: "object" },
+            rationale: { type: "string", maxLength: 600 },
+            mandatory: { type: "boolean", default: false },
+            priority: { type: "integer", default: 100 },
+            evidenceMessageIds: {
+              type: "array",
+              items: { type: "string" },
+              maxItems: 10,
+              default: [],
+            },
+            channelOverrides: { type: "object" },
+          },
+          required: ["externalId", "category", "statement"],
+        },
+      },
+      signatureBlock: { type: ["object", "null"] },
+      summary: { type: "string", maxLength: 1500 },
+      gapsFlagged: {
+        type: "array",
+        items: { type: "string", maxLength: 60 },
+        default: [],
+      },
+    },
+    required: ["proposedRules", "summary"],
+  },
+};
+
 export const draftTool: ToolDef = {
   name: "respond_with_draft",
   description: "Return the final draft. Terminates the turn. Must be called exactly once and last.",

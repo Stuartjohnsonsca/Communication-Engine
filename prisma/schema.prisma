@@ -231,6 +231,11 @@ enum AuditEventType {
   TERMS_ACTIVATED
   TERMS_SUPERSEDED
   TERMS_AMENDED
+  FCG_SCAN_INITIATED
+  FCG_SCAN_COMPLETED
+  FCG_SCAN_FAILED
+  FCG_SCAN_PROMOTED
+  FCG_SCAN_DISCARDED
 }
 
 enum BillingPeriodStatus {
@@ -355,6 +360,20 @@ enum TermsStatus {
   DRAFT
   ACTIVE
   SUPERSEDED
+}
+
+/// PRD §5.1.1 Firm Culture Scan lifecycle. PENDING = scan record created;
+/// ANALYSING = corpus pulled, model running; DRAFTED = proposal staged for
+/// FCT review; PROMOTED = the proposal opened for vote (or already committed);
+/// ERRORED = scan failed (errorMessage holds the reason); DISCARDED =
+/// operator decided not to use the scan output.
+enum FirmCultureScanStatus {
+  PENDING
+  ANALYSING
+  DRAFTED
+  PROMOTED
+  ERRORED
+  DISCARDED
 }
 
 // ─── NextAuth ──────────────────────────────────────────────────────────────
@@ -489,6 +508,7 @@ model Tenant {
   memberships           Membership[]
   fcgs                  FirmCultureGuide[]
   fcgProposals          FCGProposal[]
+  cultureScans          FirmCultureScan[]
   ucgs                  UserCultureGuide[]
   drafts                Draft[]
   actions               Action[]
@@ -563,6 +583,7 @@ model Membership {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   ucgs                  UserCultureGuide[]
+  cultureScansInitiated FirmCultureScan[]        @relation("FCGScanAuthor")
   proposalsAuthored     FCGProposal[]            @relation("ProposalAuthor")
   votesCast             FCGVote[]                @relation("Voter")
   votesCastAlternate    FCGVote[]                @relation("Alternate")
@@ -649,12 +670,43 @@ model FCGProposal {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  proposedBy Membership    @relation("ProposalAuthor", fields: [proposedById], references: [id])
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proposedBy Membership        @relation("ProposalAuthor", fields: [proposedById], references: [id])
   votes      FCGVote[]
   chatTurns  FCGChatTurn[]
+  scans      FirmCultureScan[]
 
   @@index([tenantId, state])
+}
+
+/// PRD §5.1.1. The Firm Administrator launches a bounded scan over FCT-member
+/// communications (date range + channel scope set under DPIA) and the system
+/// produces a draft FCG. The scan stages an `FCGProposal` for the FCT to
+/// review and open for vote — promotion remains governed by §6 quorum.
+model FirmCultureScan {
+  id               String                @id @default(cuid())
+  tenantId         String
+  initiatedById    String
+  dateRangeFrom    DateTime
+  dateRangeTo      DateTime
+  /// JSON array of channel-kind strings in scope (e.g. ["M365","SLACK"]).
+  channelKinds     Json
+  status           FirmCultureScanStatus @default(PENDING)
+  messagesAnalysed Int                   @default(0)
+  proposalId       String?
+  /// Raw analyser output: proposed rules, evidence snippets, rationale.
+  analysisResult   Json?
+  errorMessage     String?               @db.Text
+  completedAt      DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  initiatedBy Membership   @relation("FCGScanAuthor", fields: [initiatedById], references: [id])
+  proposal    FCGProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt(sort: Desc)])
 }
 
 model FCGChatTurn {

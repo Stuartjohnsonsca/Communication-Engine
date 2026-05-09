@@ -23,7 +23,7 @@ DECLARE
   t text;
   tenant_tables text[] := ARRAY[
     'Membership',
-    'FirmCultureGuide','FCGRule','FCGProposal','FCGChatTurn','FCGVote',
+    'FirmCultureGuide','FCGRule','FCGProposal','FCGChatTurn','FCGVote','FirmCultureScan',
     'UserCultureGuide','UCGRule','UCGChatTurn','ComplianceRuling',
     'Draft','Action','AuditEvent',
     'Channel','ChannelAuth','IngestedMessage','Meeting','MeetingParticipant',

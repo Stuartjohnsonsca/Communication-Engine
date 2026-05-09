@@ -47,5 +47,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     },
   });
 
+  // PRD §5.1.1 — if this proposal was staged by a Firm Culture Scan,
+  // advance the scan's lifecycle to PROMOTED so the scan history shows
+  // the §6 quorum vote was actually opened.
+  const linkedScan = await superDb.firmCultureScan.findFirst({
+    where: { tenantId: ctx.tenant.id, proposalId: updated.id, status: "DRAFTED" },
+  });
+  if (linkedScan) {
+    const { recordPromotion } = await import("@/lib/culture-scan");
+    await recordPromotion({
+      scanId: linkedScan.id,
+      tenantId: ctx.tenant.id,
+      actorMembershipId: ctx.membership.id,
+    });
+  }
+
   return NextResponse.json(updated);
 }

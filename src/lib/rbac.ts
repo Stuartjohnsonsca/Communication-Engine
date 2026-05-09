@@ -11,6 +11,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "fcg:vote":            ["FCT_MEMBER", "FIRM_ADMIN"],
   "fcg:commit":          ["FCT_MEMBER", "FIRM_ADMIN"],
   "fcg:emergency":       ["FIRM_ADMIN"],
+  // Firm Culture Scan (PRD §5.1.1). The Firm Administrator initiates scans;
+  // the FCT can read scan history for governance oversight (the audit chain
+  // anchors what corpus was sampled and what the model proposed).
+  "fcg:scan:read":       ["FIRM_ADMIN", "FCT_MEMBER"],
+  "fcg:scan:run":        ["FIRM_ADMIN"],
 
   // UCG
   "ucg:read:self":       ["USER", "FCT_MEMBER", "FIRM_ADMIN", "SALES_REVIEWER"],

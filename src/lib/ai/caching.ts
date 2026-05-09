@@ -219,6 +219,56 @@ export async function meetingRecordSystem(ctx: MeetingRecordContext): Promise<Sy
   ]);
 }
 
+export type CultureScanContext = {
+  /// Tenant-level facts the analyser should know up front: jurisdiction, the
+  /// language(s) the firm operates in, the channel kinds in scope, and the
+  /// observed date range. These bias the rule defaults (e.g. en-GB salutations
+  /// for UK firms) without prejudicing what the corpus actually shows.
+  tenantJurisdiction: string;
+  workingLanguage: string;
+  channelsInScope: string[];
+  dateRangeFrom: string;
+  dateRangeTo: string;
+  /// Sampled IngestedMessage rows. Each one has `id`, `direction`, `sender`,
+  /// `subject`, `body`, `sentAt`, and the channel kind. The model uses message
+  /// `id` values in `evidenceMessageIds` to point back at what it observed.
+  corpus: unknown[];
+};
+export async function cultureScanSystem(ctx: CultureScanContext): Promise<SystemBlock[]> {
+  const sys = await loadPrompt("culture-scan");
+  return buildSystem([
+    { text: sys, cache: true },
+    {
+      text:
+        "# Tenant context\n\n" +
+        "```json\n" +
+        JSON.stringify(
+          {
+            jurisdiction: ctx.tenantJurisdiction,
+            workingLanguage: ctx.workingLanguage,
+            channelsInScope: ctx.channelsInScope,
+            dateRangeFrom: ctx.dateRangeFrom,
+            dateRangeTo: ctx.dateRangeTo,
+            corpusSize: ctx.corpus.length,
+          },
+          null,
+          2,
+        ) +
+        "\n```",
+      cache: false,
+    },
+    {
+      text:
+        "# Sampled FCT communications corpus\n\n" +
+        "Use the `id` field of any message you cite in `evidenceMessageIds`.\n\n" +
+        "```json\n" +
+        JSON.stringify(ctx.corpus, null, 2) +
+        "\n```",
+      cache: false,
+    },
+  ]);
+}
+
 export async function draftSystem(ctx: { fcg: unknown; ucg: unknown; kb?: unknown[] }): Promise<SystemBlock[]> {
   const sys = await loadPrompt("draft");
   return buildSystem([

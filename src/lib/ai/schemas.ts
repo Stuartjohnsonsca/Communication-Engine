@@ -212,3 +212,32 @@ export const meetingRecord = z.object({
     .default([]),
 });
 export type MeetingRecord = z.infer<typeof meetingRecord>;
+
+// ─── Firm Culture Scan (PRD §5.1.1) ───────────────────────────────────────
+
+/// Output of the bounded scan: a fully-formed proposed FCG with rules
+/// grounded in the corpus. The server lifts `proposedRules` into a staged
+/// `FCGProposal` for the FCT to review and open for vote (§6 quorum).
+/// `evidenceMessageIds` carries the IngestedMessage ids the model used to
+/// ground each rule — these are persisted on FCGRule.evidenceRefs.
+export const cultureScanRule = z.object({
+  externalId: z.string().min(1),
+  category: z.enum(FCG_CATEGORIES),
+  channel: z.enum(CHANNELS).default("any"),
+  statement: z.string(),
+  payload: z.record(z.unknown()).default({}),
+  rationale: z.string().optional(),
+  mandatory: z.boolean().default(false),
+  priority: z.number().int().min(0).default(100),
+  evidenceMessageIds: z.array(z.string()).default([]),
+  channelOverrides: z.record(z.unknown()).optional(),
+});
+export type CultureScanRule = z.infer<typeof cultureScanRule>;
+
+export const cultureScanResult = z.object({
+  proposedRules: z.array(cultureScanRule).min(1).max(60),
+  signatureBlock: z.record(z.unknown()).nullable().optional(),
+  summary: z.string().max(1500),
+  gapsFlagged: z.array(z.string().max(60)).default([]),
+});
+export type CultureScanResult = z.infer<typeof cultureScanResult>;
