@@ -115,6 +115,34 @@ export async function sentimentSystem(): Promise<SystemBlock[]> {
   return buildSystem([{ text: sys, cache: true }]);
 }
 
+export type OpportunityContext = {
+  jurisdiction: string;
+  /// Short string the firm uses to describe its service mix; helps the model
+  /// keep `serviceLine` suggestions on-vocabulary.
+  serviceLineHints?: string[];
+};
+export async function opportunitySystem(ctx: OpportunityContext): Promise<SystemBlock[]> {
+  const sys = await loadPrompt("opportunity");
+  return buildSystem([
+    { text: sys, cache: true },
+    {
+      text:
+        "# Tenant context\n\n" +
+        "```json\n" +
+        JSON.stringify(
+          {
+            tenantJurisdiction: ctx.jurisdiction,
+            serviceLineHints: ctx.serviceLineHints ?? [],
+          },
+          null,
+          2,
+        ) +
+        "\n```",
+      cache: true,
+    },
+  ]);
+}
+
 export type MeetingPaperContext = {
   fcg: unknown;
   meeting: unknown;

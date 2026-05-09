@@ -275,6 +275,40 @@ export const meetingPaperTool: ToolDef = {
   },
 };
 
+export const opportunityTool: ToolDef = {
+  name: "respond_with_opportunity",
+  description:
+    "Return the structured Sales Identifier classification for the inbound. Always call this tool exactly once and last. If the inbound is NOT an opportunity, set `confidence` to 0 and use `classification`=\"new_engagement\" with `rationale` explaining why no signal was detected; the system treats anything below the firm's confidence floor as no-op.",
+  schema: {
+    type: "object",
+    properties: {
+      jurisdiction: { type: "string", maxLength: 60 },
+      serviceLine: { type: "string", maxLength: 120 },
+      classification: {
+        type: "string",
+        enum: ["new_engagement", "expansion", "renewal", "cross_sell", "referral"],
+      },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      rationale: { type: "string", maxLength: 800 },
+      signalQuotes: {
+        type: "array",
+        items: { type: "string", maxLength: 240 },
+        maxItems: 4,
+        default: [],
+      },
+      suggestedReviewerTeam: { type: "string", maxLength: 120 },
+    },
+    required: [
+      "jurisdiction",
+      "serviceLine",
+      "classification",
+      "confidence",
+      "rationale",
+      "suggestedReviewerTeam",
+    ],
+  },
+};
+
 export const draftTool: ToolDef = {
   name: "respond_with_draft",
   description: "Return the final draft. Terminates the turn. Must be called exactly once and last.",

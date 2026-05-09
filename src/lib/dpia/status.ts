@@ -69,10 +69,14 @@ export type DpiaStatus = {
  * change the hash and trigger re-attestation.
  */
 export async function computeLiveScope(tenantId: string): Promise<DpiaScopeSnapshot> {
-  const [tenant, channels, perfOptIns, sentOptIns, oppCount] = await Promise.all([
+  const [tenant, channels, perfOptIns, sentOptIns] = await Promise.all([
     superDb.tenant.findUnique({
       where: { id: tenantId },
-      select: { jurisdiction: true, retentionDays: true },
+      select: {
+        jurisdiction: true,
+        retentionDays: true,
+        salesIdentifierEnabled: true,
+      },
     }),
     superDb.channel.findMany({
       where: { tenantId, status: { not: "INACTIVE" } },
@@ -84,7 +88,6 @@ export async function computeLiveScope(tenantId: string): Promise<DpiaScopeSnaps
     superDb.membership.count({
       where: { tenantId, status: "ACTIVE", sentimentOutOptIn: true },
     }),
-    superDb.opportunityCandidate.count({ where: { tenantId } }),
   ]);
   if (!tenant) throw new Error(`computeLiveScope: tenant ${tenantId} not found`);
 
@@ -95,7 +98,7 @@ export async function computeLiveScope(tenantId: string): Promise<DpiaScopeSnaps
     channelKinds,
     perfDashOptInUserCount: perfOptIns,
     sentimentOutOptInUserCount: sentOptIns,
-    salesIdentifierEnabled: oppCount > 0,
+    salesIdentifierEnabled: tenant.salesIdentifierEnabled,
   };
   return { ...snapshot, hash: hashScope(snapshot) };
 }

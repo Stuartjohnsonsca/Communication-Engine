@@ -153,6 +153,12 @@ export const adherence = z.object({
 });
 export type Adherence = z.infer<typeof adherence>;
 
+/// Sales Identifier classifier output (PRD §8). The model always returns a
+/// structured classification; `confidence` is treated as the gate. Below
+/// `OPPORTUNITY_CONFIDENCE_FLOOR` the detector treats the inbound as
+/// "not an opportunity" and discards the result without persisting a row.
+/// Mirrors the sentiment flow: a single forced tool with a deterministic
+/// gate in code.
 export const opportunity = z.object({
   jurisdiction: z.string(),
   serviceLine: z.string(),

@@ -65,12 +65,16 @@ function mockToolOutput(role: string, toolName: string): unknown {
         overall: 1,
       };
     case "respond_with_opportunity":
+      // Mock provider returns a low-confidence call by default so the
+      // detector's confidence floor discards it (no spam candidates in
+      // demo). Set LLM_OPPORTUNITY=together:... or anthropic:... to get
+      // real classifications.
       return {
         jurisdiction: "UK",
         serviceLine: "advisory",
         classification: "expansion",
-        confidence: 0.5,
-        rationale: "(mock)",
+        confidence: 0,
+        rationale: "(mock — no real LLM configured for opportunity role)",
         signalQuotes: [],
         suggestedReviewerTeam: "Sales",
       };

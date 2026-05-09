@@ -165,6 +165,15 @@ enum AuditEventType {
   MEETING_PAPER_REGENERATED
   MEETING_PAPER_EDITED
   MEETING_PAPER_ISSUED
+  SALES_IDENTIFIER_ENABLED
+  SALES_IDENTIFIER_DISABLED
+  SI_LAWFUL_BASIS_ATTESTED
+  OPPORTUNITY_DETECTED
+  OPPORTUNITY_ACCEPTED
+  OPPORTUNITY_REVISED
+  OPPORTUNITY_REJECTED
+  OPPORTUNITY_ROUTED_TO_PARTNER
+  OPPORTUNITY_COMMENTED
 }
 
 enum MeetingPaperStatus {
@@ -213,38 +222,49 @@ model VerificationToken {
 // ─── Core ──────────────────────────────────────────────────────────────────
 
 model Tenant {
-  id              String       @id @default(cuid())
-  slug            String       @unique
-  name            String
-  jurisdiction    Jurisdiction @default(UK)
-  status          TenantStatus @default(ACTIVE)
-  isSandbox       Boolean      @default(false)
-  parentTenantId  String?
-  parentTenant    Tenant?      @relation("SandboxOf", fields: [parentTenantId], references: [id])
-  sandboxes       Tenant[]     @relation("SandboxOf")
-  retentionDays   Int          @default(2555)
-  quorumPct       Int          @default(50) // simple majority of total membership
-  votingWindowDays Int         @default(5)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id                                   String       @id @default(cuid())
+  slug                                 String       @unique
+  name                                 String
+  jurisdiction                         Jurisdiction @default(UK)
+  status                               TenantStatus @default(ACTIVE)
+  isSandbox                            Boolean      @default(false)
+  parentTenantId                       String?
+  parentTenant                         Tenant?      @relation("SandboxOf", fields: [parentTenantId], references: [id])
+  sandboxes                            Tenant[]     @relation("SandboxOf")
+  retentionDays                        Int          @default(2555)
+  quorumPct                            Int          @default(50) // simple majority of total membership
+  votingWindowDays                     Int          @default(5)
+  // Sales Identifier (PRD §8) — opt-in add-on. Enabling is a DPIA-relevant
+  // scope change and is gated on a separate lawful-basis attestation by the
+  // Firm Administrator (PRD §8.5: mining counterparty correspondence to
+  // identify revenue is a separate processing purpose). The detector and
+  // the reviewer console refuse to run unless `salesIdentifierEnabled`
+  // is true and the lawful-basis acknowledgement is on file.
+  salesIdentifierEnabled               Boolean      @default(false)
+  salesIdentifierEnabledAt             DateTime?
+  salesIdentifierLawfulBasisAttestedAt DateTime?
+  salesIdentifierLawfulBasisAttestedBy String?
+  salesIdentifierLawfulBasisNote       String?      @db.Text
+  createdAt                            DateTime     @default(now())
+  updatedAt                            DateTime     @updatedAt
 
-  memberships          Membership[]
-  fcgs                 FirmCultureGuide[]
-  fcgProposals         FCGProposal[]
-  ucgs                 UserCultureGuide[]
-  drafts               Draft[]
-  actions              Action[]
-  auditEvents          AuditEvent[]
-  channels             Channel[]
-  ingestedMessages     IngestedMessage[]
-  meetings             Meeting[]
+  memberships           Membership[]
+  fcgs                  FirmCultureGuide[]
+  fcgProposals          FCGProposal[]
+  ucgs                  UserCultureGuide[]
+  drafts                Draft[]
+  actions               Action[]
+  auditEvents           AuditEvent[]
+  channels              Channel[]
+  ingestedMessages      IngestedMessage[]
+  meetings              Meeting[]
   opportunityCandidates OpportunityCandidate[]
-  sentimentSignals     SentimentSignal[]
-  adherenceScores      AdherenceScore[]
-  commAdherence        CommunicationAdherence[]
-  dpiaAttestations     DPIAAttestation[]
-  dsarRequests         DSARequest[]
-  noGoSubjects         NoGoSubject[]
+  sentimentSignals      SentimentSignal[]
+  adherenceScores       AdherenceScore[]
+  commAdherence         CommunicationAdherence[]
+  dpiaAttestations      DPIAAttestation[]
+  dsarRequests          DSARequest[]
+  noGoSubjects          NoGoSubject[]
 
   @@index([status])
 }
@@ -278,20 +298,22 @@ model Membership {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   ucgs                  UserCultureGuide[]
-  proposalsAuthored     FCGProposal[]      @relation("ProposalAuthor")
-  votesCast             FCGVote[]          @relation("Voter")
-  votesCastAlternate    FCGVote[]          @relation("Alternate")
+  proposalsAuthored     FCGProposal[]            @relation("ProposalAuthor")
+  votesCast             FCGVote[]                @relation("Voter")
+  votesCastAlternate    FCGVote[]                @relation("Alternate")
   drafts                Draft[]
   actions               Action[]
   channelAuths          ChannelAuth[]
   meetingsAsPaperAuthor Meeting[]
-  meetingsCreated       Meeting[]              @relation("MeetingCreator")
-  opportunitiesAssigned OpportunityCandidate[]
+  meetingsCreated       Meeting[]                @relation("MeetingCreator")
+  opportunitiesAssigned OpportunityCandidate[]   @relation("OpportunityReviewer")
+  opportunitiesDecided  OpportunityCandidate[]   @relation("OpportunityDecider")
+  opportunityComments   OpportunityComment[]     @relation("OpportunityCommentAuthor")
   adherenceScores       AdherenceScore[]
   commAdherence         CommunicationAdherence[]
-  sentimentAssigned     SentimentSignal[]  @relation("SentimentAssignee")
-  sentimentAcknowledged SentimentSignal[]  @relation("SentimentAcknowledger")
-  auditEventsActor      AuditEvent[]       @relation("AuditActor")
+  sentimentAssigned     SentimentSignal[]        @relation("SentimentAssignee")
+  sentimentAcknowledged SentimentSignal[]        @relation("SentimentAcknowledger")
+  auditEventsActor      AuditEvent[]             @relation("AuditActor")
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -300,21 +322,21 @@ model Membership {
 // ─── Culture Guides ────────────────────────────────────────────────────────
 
 model FirmCultureGuide {
-  id            String    @id @default(cuid())
-  tenantId      String
-  version       Int
-  status        FCGStatus @default(DRAFT)
-  language      String    @default("en-GB")
-  effectiveAt   DateTime?
-  supersededAt  DateTime?
-  parentId      String?
-  parent        FirmCultureGuide?  @relation("FCGVersionLineage", fields: [parentId], references: [id])
-  children      FirmCultureGuide[] @relation("FCGVersionLineage")
-  committedById String?
+  id             String             @id @default(cuid())
+  tenantId       String
+  version        Int
+  status         FCGStatus          @default(DRAFT)
+  language       String             @default("en-GB")
+  effectiveAt    DateTime?
+  supersededAt   DateTime?
+  parentId       String?
+  parent         FirmCultureGuide?  @relation("FCGVersionLineage", fields: [parentId], references: [id])
+  children       FirmCultureGuide[] @relation("FCGVersionLineage")
+  committedById  String?
   signatureBlock Json?
-  createdAt     DateTime  @default(now())
+  createdAt      DateTime           @default(now())
 
-  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rules     FCGRule[]
   ucgsBased UserCultureGuide[]
 
@@ -323,19 +345,19 @@ model FirmCultureGuide {
 }
 
 model FCGRule {
-  id              String      @id @default(cuid())
-  tenantId        String
-  fcgId           String
-  externalId      String      // stable id like "rule_xxx" used for citations
-  category        FCGCategory
-  channel         CommChannel @default(ANY)
-  statement       String      @db.Text
-  payload         Json        // structured value e.g. {windowHours:24}
-  rationale       String?     @db.Text
-  mandatory       Boolean     @default(false)
-  priority        Int         @default(100)
-  evidenceRefs    Json?       // array of scan references
-  channelOverrides Json?      // per-channel overrides
+  id               String      @id @default(cuid())
+  tenantId         String
+  fcgId            String
+  externalId       String // stable id like "rule_xxx" used for citations
+  category         FCGCategory
+  channel          CommChannel @default(ANY)
+  statement        String      @db.Text
+  payload          Json // structured value e.g. {windowHours:24}
+  rationale        String?     @db.Text
+  mandatory        Boolean     @default(false)
+  priority         Int         @default(100)
+  evidenceRefs     Json? // array of scan references
+  channelOverrides Json? // per-channel overrides
 
   fcg FirmCultureGuide @relation(fields: [fcgId], references: [id], onDelete: Cascade)
 
@@ -349,7 +371,7 @@ model FCGProposal {
   parentFcgId    String?
   title          String
   body           String        @db.Text
-  diff           Json          // staged add/modify/remove operations
+  diff           Json // staged add/modify/remove operations
   proposedById   String
   isEmergency    Boolean       @default(false)
   state          ProposalState @default(DRAFTING)
@@ -360,8 +382,8 @@ model FCGProposal {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  proposedBy Membership @relation("ProposalAuthor", fields: [proposedById], references: [id])
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proposedBy Membership    @relation("ProposalAuthor", fields: [proposedById], references: [id])
   votes      FCGVote[]
   chatTurns  FCGChatTurn[]
 
@@ -373,7 +395,7 @@ model FCGChatTurn {
   tenantId     String
   proposalId   String
   membershipId String?
-  role         String   // "user" | "assistant" | "tool"
+  role         String // "user" | "assistant" | "tool"
   content      String   @db.Text
   toolCalls    Json?
   modelRunId   String?
@@ -394,8 +416,8 @@ model FCGVote {
   comment            String?
   castAt             DateTime     @default(now())
 
-  proposal       FCGProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  voter          Membership  @relation("Voter", fields: [membershipId], references: [id])
+  proposal        FCGProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  voter           Membership  @relation("Voter", fields: [membershipId], references: [id])
   castByAlternate Membership? @relation("Alternate", fields: [castByMembershipId], references: [id])
 
   @@unique([proposalId, membershipId])
@@ -403,19 +425,19 @@ model FCGVote {
 }
 
 model UserCultureGuide {
-  id            String    @id @default(cuid())
-  tenantId      String
-  membershipId  String
-  version       Int
-  status        UCGStatus @default(DRAFT)
-  basedOnFcgId  String
-  parentId      String?
-  parent        UserCultureGuide?  @relation("UCGVersionLineage", fields: [parentId], references: [id])
-  children      UserCultureGuide[] @relation("UCGVersionLineage")
-  language      String    @default("en-GB")
-  signatureBlock Json?
-  judgeStatus   String?   // "pending" | "pass" | "fail" | "partial"
-  committedAt   DateTime?
+  id                      String             @id @default(cuid())
+  tenantId                String
+  membershipId            String
+  version                 Int
+  status                  UCGStatus          @default(DRAFT)
+  basedOnFcgId            String
+  parentId                String?
+  parent                  UserCultureGuide?  @relation("UCGVersionLineage", fields: [parentId], references: [id])
+  children                UserCultureGuide[] @relation("UCGVersionLineage")
+  language                String             @default("en-GB")
+  signatureBlock          Json?
+  judgeStatus             String? // "pending" | "pass" | "fail" | "partial"
+  committedAt             DateTime?
   // PRD §5.2.2 — when an FCG amendment commits, every current UCG is flagged
   // and given a 10-working-day grace period. After that, conflicting rules
   // auto-suspend. Cleared (set null + status back to COMMITTED) when the user
@@ -424,12 +446,12 @@ model UserCultureGuide {
   conflictFlaggedAt       DateTime?
   gracePeriodEndsAt       DateTime?
   conflictAutoSuspendedAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
-  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  membership Membership        @relation(fields: [membershipId], references: [id], onDelete: Cascade)
-  basedOnFcg FirmCultureGuide  @relation(fields: [basedOnFcgId], references: [id])
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership         @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  basedOnFcg FirmCultureGuide   @relation(fields: [basedOnFcgId], references: [id])
   rules      UCGRule[]
   rulings    ComplianceRuling[]
   chatTurns  UCGChatTurn[]
@@ -439,22 +461,22 @@ model UserCultureGuide {
 }
 
 model UCGRule {
-  id              String      @id @default(cuid())
-  tenantId        String
-  ucgId           String
-  externalId      String
-  category        FCGCategory
-  channel         CommChannel @default(ANY)
-  statement       String      @db.Text
-  payload         Json
-  narrowsFcgRule  String?     // FCGRule.externalId
-  evidenceRefs    Json?
+  id               String      @id @default(cuid())
+  tenantId         String
+  ucgId            String
+  externalId       String
+  category         FCGCategory
+  channel          CommChannel @default(ANY)
+  statement        String      @db.Text
+  payload          Json
+  narrowsFcgRule   String? // FCGRule.externalId
+  evidenceRefs     Json?
   channelOverrides Json?
   // Auto-suspension under PRD §5.2.2 grace-period sweep. Suspended rules
   // remain in the UCG row for audit but are excluded from drafting and
   // adherence evaluation.
-  suspendedAt     DateTime?
-  suspendReason   String?
+  suspendedAt      DateTime?
+  suspendReason    String?
 
   ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
 
@@ -463,14 +485,14 @@ model UCGRule {
 }
 
 model UCGChatTurn {
-  id           String   @id @default(cuid())
-  tenantId     String
-  ucgId        String
-  role         String
-  content      String   @db.Text
-  toolCalls    Json?
-  modelRunId   String?
-  createdAt    DateTime @default(now())
+  id         String   @id @default(cuid())
+  tenantId   String
+  ucgId      String
+  role       String
+  content    String   @db.Text
+  toolCalls  Json?
+  modelRunId String?
+  createdAt  DateTime @default(now())
 
   ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
 
@@ -478,20 +500,20 @@ model UCGChatTurn {
 }
 
 model ComplianceRuling {
-  id            String   @id @default(cuid())
-  tenantId      String
-  ucgId         String
-  ucgRuleId     String?
-  fcgRuleId     String?
-  verdict       Verdict
-  severity      String?  // "blocking" | "advisory"
-  explanation   String   @db.Text
-  suggestedFix  String?  @db.Text
-  judgeModel    String
-  judgeRunId    String?
-  appealedById  String?
-  overrideById  String?
-  createdAt     DateTime @default(now())
+  id           String   @id @default(cuid())
+  tenantId     String
+  ucgId        String
+  ucgRuleId    String?
+  fcgRuleId    String?
+  verdict      Verdict
+  severity     String? // "blocking" | "advisory"
+  explanation  String   @db.Text
+  suggestedFix String?  @db.Text
+  judgeModel   String
+  judgeRunId   String?
+  appealedById String?
+  overrideById String?
+  createdAt    DateTime @default(now())
 
   ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
 
@@ -501,74 +523,74 @@ model ComplianceRuling {
 // ─── Drafting ──────────────────────────────────────────────────────────────
 
 model Draft {
-  id                 String      @id @default(cuid())
-  tenantId           String
-  membershipId       String
-  ingestedMessageId  String?
-  kind               DraftKind   @default(EMAIL)
-  status             DraftStatus @default(PROPOSED)
-  channel            CommChannel @default(EMAIL)
-  language           String      @default("en-GB")
-  subject            String?
-  body               String      @db.Text
-  citations          Json?
-  holdingRequired    Boolean     @default(false)
-  holdingReason      String?
-  fcgWindowDeadline  DateTime?
-  noGoSubjectHit     Boolean     @default(false)
-  researchTaskRequired Boolean   @default(false)
-  modelRunId         String?
-  fcgVersionUsed     Int?
-  ucgVersionUsed     Int?
+  id                     String      @id @default(cuid())
+  tenantId               String
+  membershipId           String
+  ingestedMessageId      String?
+  kind                   DraftKind   @default(EMAIL)
+  status                 DraftStatus @default(PROPOSED)
+  channel                CommChannel @default(EMAIL)
+  language               String      @default("en-GB")
+  subject                String?
+  body                   String      @db.Text
+  citations              Json?
+  holdingRequired        Boolean     @default(false)
+  holdingReason          String?
+  fcgWindowDeadline      DateTime?
+  noGoSubjectHit         Boolean     @default(false)
+  researchTaskRequired   Boolean     @default(false)
+  modelRunId             String?
+  fcgVersionUsed         Int?
+  ucgVersionUsed         Int?
   // Snapshot of the inbound that triggered this draft, persisted so the
   // /drafts/[id] page can offer Regenerate for both manual-paste and
   // ingestion-driven flows. For ingestion drafts these mirror IngestedMessage;
   // for manual-paste they are the only record.
-  inboundChannel     String?
-  inboundSender      String?
-  inboundSubject     String?
-  inboundBody        String?     @db.Text
+  inboundChannel         String?
+  inboundSender          String?
+  inboundSubject         String?
+  inboundBody            String?     @db.Text
   // Lineage: when a draft is regenerated we DISCARD the prior version and
   // create a new row pointing back via parentId so the audit and UI can
   // surface the prior attempt without clobbering history.
-  parentId           String?
-  parent             Draft?      @relation("DraftLineage", fields: [parentId], references: [id])
-  children           Draft[]     @relation("DraftLineage")
-  createdAt          DateTime    @default(now())
-  sentMarkedAt       DateTime?
+  parentId               String?
+  parent                 Draft?      @relation("DraftLineage", fields: [parentId], references: [id])
+  children               Draft[]     @relation("DraftLineage")
+  createdAt              DateTime    @default(now())
+  sentMarkedAt           DateTime?
   // PRD §9.1 — adherence is measured against what was actually sent, not
   // the system's draft. Captured at mark-sent: the user's final text and
   // (if a holding deadline applied) how late they sent relative to it.
-  sentText                  String?  @db.Text
-  sentResponseLatencyMin    Int?
+  sentText               String?     @db.Text
+  sentResponseLatencyMin Int?
 
-  tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  membership        Membership             @relation(fields: [membershipId], references: [id])
-  ingestedMessage   IngestedMessage?       @relation(fields: [ingestedMessageId], references: [id])
-  actions           Action[]
-  adherence         CommunicationAdherence?
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership      Membership              @relation(fields: [membershipId], references: [id])
+  ingestedMessage IngestedMessage?        @relation(fields: [ingestedMessageId], references: [id])
+  actions         Action[]
+  adherence       CommunicationAdherence?
 
   @@index([tenantId, membershipId, status])
 }
 
 model Action {
-  id            String    @id @default(cuid())
-  tenantId      String
-  membershipId  String
-  draftId       String?
-  title         String
-  detail        String?   @db.Text
-  type          String    @default("task") // task | calendar | followup | research
-  dueAt         DateTime?
-  status        String    @default("OPEN")
+  id             String    @id @default(cuid())
+  tenantId       String
+  membershipId   String
+  draftId        String?
+  title          String
+  detail         String?   @db.Text
+  type           String    @default("task") // task | calendar | followup | research
+  dueAt          DateTime?
+  status         String    @default("OPEN")
   externalSystem String?
-  externalId    String?
-  createdAt     DateTime  @default(now())
-  completedAt   DateTime?
+  externalId     String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
 
-  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  membership Membership  @relation(fields: [membershipId], references: [id])
-  draft      Draft?      @relation(fields: [draftId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id])
+  draft      Draft?     @relation(fields: [draftId], references: [id])
 
   @@index([tenantId, membershipId, status])
 }
@@ -578,7 +600,7 @@ model Action {
 model AuditEvent {
   id                String         @id @default(cuid())
   tenantId          String
-  seq               BigInt         // tenant-scoped monotonic sequence
+  seq               BigInt // tenant-scoped monotonic sequence
   eventType         AuditEventType
   actorMembershipId String?
   subjectType       String
@@ -598,16 +620,16 @@ model AuditEvent {
 // ─── Phase 2+ entities (minimal — schema present so migrations don't churn)
 
 model Channel {
-  id          String   @id @default(cuid())
-  tenantId    String
-  kind        String   // M365 | GOOGLE | SLACK | SHAREPOINT | IMANAGE | TEAMS | ZOOM | WHATSAPP_BUSINESS
-  scope       Json?
-  status      String   @default("INACTIVE")
-  dpiaApproved Boolean @default(false)
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  tenantId     String
+  kind         String // M365 | GOOGLE | SLACK | SHAREPOINT | IMANAGE | TEAMS | ZOOM | WHATSAPP_BUSINESS
+  scope        Json?
+  status       String   @default("INACTIVE")
+  dpiaApproved Boolean  @default(false)
+  createdAt    DateTime @default(now())
 
-  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  auths  ChannelAuth[]
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auths    ChannelAuth[]
   messages IngestedMessage[]
 
   @@index([tenantId, kind])
@@ -631,25 +653,26 @@ model ChannelAuth {
 }
 
 model IngestedMessage {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   tenantId    String
   channelId   String?
   externalId  String?
   threadId    String?
-  direction   String   // IN | OUT
+  direction   String // IN | OUT
   sender      String?
   recipients  Json?
   subject     String?
-  body        String   @db.Text
+  body        String    @db.Text
   sentAt      DateTime?
   hash        String?
   redactFlags Json?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
-  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  channel    Channel?          @relation(fields: [channelId], references: [id])
-  drafts     Draft[]
-  sentiments SentimentSignal[]
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel       Channel?               @relation(fields: [channelId], references: [id])
+  drafts        Draft[]
+  sentiments    SentimentSignal[]
+  opportunities OpportunityCandidate[]
 
   @@index([tenantId, threadId])
 }
@@ -662,36 +685,36 @@ model IngestedMessage {
 /// flagged short-notice but the paper is still drafted as soon as the user
 /// asks.
 model Meeting {
-  id                      String              @id @default(cuid())
+  id                      String             @id @default(cuid())
   tenantId                String
   externalId              String?
   title                   String
-  description             String?             @db.Text
+  description             String?            @db.Text
   location                String?
   startsAt                DateTime
-  durationMin             Int                 @default(60)
+  durationMin             Int                @default(60)
   createdByMembershipId   String?
   paperAuthorMembershipId String?
   transcriptOptIns        Json?
   /// Working days of lead time the FCG demanded for paper issuance at the
   /// time of creation. Snapshotted so the short-notice flag remains stable
   /// even if the FCG changes later.
-  leadTimeWorkingDays     Int                 @default(3)
-  shortNotice             Boolean             @default(false)
-  paperStatus             MeetingPaperStatus  @default(NONE)
-  agenda                  Json?               // [{ item, durationMin?, owner? }]
-  paperBody               String?             @db.Text
-  openQuestions           Json?               // string[]
+  leadTimeWorkingDays     Int                @default(3)
+  shortNotice             Boolean            @default(false)
+  paperStatus             MeetingPaperStatus @default(NONE)
+  agenda                  Json? // [{ item, durationMin?, owner? }]
+  paperBody               String?            @db.Text
+  openQuestions           Json? // string[]
   paperGeneratedAt        DateTime?
   paperIssuedAt           DateTime?
   paperFcgVersionUsed     Int?
   paperModelRunId         String?
-  createdAt               DateTime            @default(now())
-  updatedAt               DateTime            @updatedAt
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
-  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy    Membership?           @relation("MeetingCreator", fields: [createdByMembershipId], references: [id])
-  paperAuthor  Membership?           @relation(fields: [paperAuthorMembershipId], references: [id])
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy    Membership?          @relation("MeetingCreator", fields: [createdByMembershipId], references: [id])
+  paperAuthor  Membership?          @relation(fields: [paperAuthorMembershipId], references: [id])
   participants MeetingParticipant[]
 
   @@index([tenantId, startsAt])
@@ -720,24 +743,69 @@ model MeetingParticipant {
   @@index([tenantId, meetingId])
 }
 
+/// Sales Identifier candidate (PRD §8). Detected from inbound communications
+/// — never autonomously routed externally. The Sales Reviewer designated by
+/// the FCG for the (jurisdiction × serviceLine) classification accepts /
+/// revises / rejects / routes-to-Partner. Default Partner is Acumon
+/// Intelligence (PRD §8.3).
+///
+/// `signalQuotes` and `rationale` are evidence the model produced; we keep
+/// them so the reviewer can sanity-check the classification before acting.
+/// `decidedAt`/`decidedBy` capture the lifecycle terminator. Comments are a
+/// separate model.
 model OpportunityCandidate {
-  id                     String   @id @default(cuid())
-  tenantId               String
-  jurisdiction           String?
-  serviceLine            String?
-  classification         String?
-  confidence             Float?
-  rationale              String?  @db.Text
-  status                 String   @default("NEW")
-  reviewerMembershipId   String?
-  partnerType            String   @default("DEFAULT")
-  payload                Json?
-  createdAt              DateTime @default(now())
+  id                      String    @id @default(cuid())
+  tenantId                String
+  /// The IngestedMessage that surfaced the candidate. Null only for
+  /// manual-create entries (Phase 4: external feeds).
+  sourceIngestedMessageId String?
+  jurisdiction            String?
+  serviceLine             String?
+  /// new_engagement | expansion | renewal | cross_sell | referral
+  classification          String?
+  confidence              Float?
+  rationale               String?   @db.Text
+  signalQuotes            Json? // string[] of supporting quotes from the inbound
+  suggestedReviewerTeam   String?
+  /// NEW | UNDER_REVIEW | ACCEPTED | REVISED | REJECTED | ROUTED_TO_PARTNER
+  status                  String    @default("NEW")
+  reviewerMembershipId    String?
+  /// DEFAULT (Acumon Intelligence) | CLIENT | THIRD_PARTY (PRD §8.3).
+  partnerType             String    @default("DEFAULT")
+  payload                 Json?
+  modelRunId              String?
+  decidedAt               DateTime?
+  decidedByMembershipId   String?
+  decisionReason          String?   @db.Text
+  routeNotes              String?   @db.Text
+  createdAt               DateTime  @default(now())
 
-  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  reviewer Membership? @relation(fields: [reviewerMembershipId], references: [id])
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sourceMessage IngestedMessage?     @relation(fields: [sourceIngestedMessageId], references: [id])
+  reviewer      Membership?          @relation("OpportunityReviewer", fields: [reviewerMembershipId], references: [id])
+  decidedBy     Membership?          @relation("OpportunityDecider", fields: [decidedByMembershipId], references: [id])
+  comments      OpportunityComment[]
 
   @@index([tenantId, status])
+  @@index([tenantId, reviewerMembershipId, status])
+}
+
+/// Free-form comment thread on a candidate (PRD §8.2). Reviewer notes flow
+/// here before a decision is recorded; once the candidate is decided the
+/// thread remains for audit and (under XCL opt-in, Phase 4) feeds the
+/// curator pipeline.
+model OpportunityComment {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  candidateId        String
+  authorMembershipId String
+  body               String   @db.Text
+  createdAt          DateTime @default(now())
+
+  candidate OpportunityCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  author    Membership           @relation("OpportunityCommentAuthor", fields: [authorMembershipId], references: [id])
+
+  @@index([tenantId, candidateId])
 }
 
 /// Sentiment classification of a single inbound (PRD §9.3). Boundary detector
@@ -745,30 +813,30 @@ model OpportunityCandidate {
 /// handling*. Most rows are NEUTRAL; only EXTREME_NEG against firm handling
 /// triggers escalation routing to the assigned User and the FCT.
 model SentimentSignal {
-  id                String   @id @default(cuid())
-  tenantId          String
-  ingestedMessageId String?
+  id                     String    @id @default(cuid())
+  tenantId               String
+  ingestedMessageId      String?
   /// EXTREME_NEG | EXTREME_POS | NEUTRAL
-  classification    String
-  confidence        Float?
+  classification         String
+  confidence             Float?
   /// Whether the signal is about the firm's handling of the matter (PRD §9.3).
   /// Counterparty unhappiness about their own outcomes is `false` and never
   /// escalates.
-  isAboutFirmHandling Boolean @default(false)
-  trigger           String?
-  evidence          Json?
-  shouldEscalate    Boolean  @default(false)
+  isAboutFirmHandling    Boolean   @default(false)
+  trigger                String?
+  evidence               Json?
+  shouldEscalate         Boolean   @default(false)
   /// Set when the signal is routed to the user/FCT inbox. Distinct from
   /// `shouldEscalate` (which is the model's recommendation) so we can audit
   /// the actual escalation event.
-  escalatedAt       DateTime?
-  acknowledgedAt    DateTime?
-  acknowledgedById  String?
+  escalatedAt            DateTime?
+  acknowledgedAt         DateTime?
+  acknowledgedById       String?
   /// Membership (draft owner) the escalation is routed to. The FCT also sees
   /// it via the firm-wide list.
   assignedToMembershipId String?
-  modelRunId        String?
-  createdAt         DateTime @default(now())
+  modelRunId             String?
+  createdAt              DateTime  @default(now())
 
   tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ingestedMessage IngestedMessage? @relation(fields: [ingestedMessageId], references: [id])
@@ -783,8 +851,8 @@ model AdherenceScore {
   id           String   @id @default(cuid())
   tenantId     String
   membershipId String
-  period       String   // YYYY-MM
-  payload      Json     // per-dimension scores
+  period       String // YYYY-MM
+  payload      Json // per-dimension scores
   overall      Float
   sampleN      Int
   createdAt    DateTime @default(now())
@@ -799,17 +867,17 @@ model AdherenceScore {
 /// Per-communication adherence score (PRD §9.1). One row per sent draft.
 /// Aggregated up into AdherenceScore monthly for the FCT-facing dashboard.
 model CommunicationAdherence {
-  id              String   @id @default(cuid())
-  tenantId        String
-  draftId         String   @unique
-  membershipId    String
-  fcgVersionUsed  Int
-  ucgVersionUsed  Int?
-  overall         Float    // 0..1
-  perDimension    Json     // { responseTime, tone, mandatoryPhrase, prohibitedPhrase, escalation } -> {score, verdict, evidence}
-  perRule         Json     // [{ ruleExternalId, source: "fcg"|"ucg", verdict, explanation }]
-  modelRunId      String?
-  createdAt       DateTime @default(now())
+  id             String   @id @default(cuid())
+  tenantId       String
+  draftId        String   @unique
+  membershipId   String
+  fcgVersionUsed Int
+  ucgVersionUsed Int?
+  overall        Float // 0..1
+  perDimension   Json // { responseTime, tone, mandatoryPhrase, prohibitedPhrase, escalation } -> {score, verdict, evidence}
+  perRule        Json // [{ ruleExternalId, source: "fcg"|"ucg", verdict, explanation }]
+  modelRunId     String?
+  createdAt      DateTime @default(now())
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   draft      Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
@@ -819,7 +887,7 @@ model CommunicationAdherence {
 }
 
 model DPIAAttestation {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   tenantId     String
   version      Int
   scope        Json
@@ -828,7 +896,7 @@ model DPIAAttestation {
   signedAt     DateTime
   expiresAt    DateTime?
   documentRef  String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -836,13 +904,13 @@ model DPIAAttestation {
 }
 
 model DSARequest {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   tenantId     String
-  subjectType  String   // USER | COUNTERPARTY
+  subjectType  String // USER | COUNTERPARTY
   subjectIdent String
-  kind         String   // ACCESS | RECTIFY | ERASE | RESTRICT | PORT | OBJECT
-  status       String   @default("OPEN")
-  openedAt     DateTime @default(now())
+  kind         String // ACCESS | RECTIFY | ERASE | RESTRICT | PORT | OBJECT
+  status       String    @default("OPEN")
+  openedAt     DateTime  @default(now())
   dueAt        DateTime?
   fulfilledAt  DateTime?
   packageRef   String?
@@ -864,18 +932,18 @@ model NoGoSubject {
 }
 
 model ModelRun {
-  id        String   @id @default(cuid())
-  tenantId  String?
-  purpose   String
-  model     String
-  inputHash String?
-  outputHash String?
-  latencyMs Int?
-  inputTokens Int?
-  outputTokens Int?
-  cacheReadTokens Int?
+  id                  String   @id @default(cuid())
+  tenantId            String?
+  purpose             String
+  model               String
+  inputHash           String?
+  outputHash          String?
+  latencyMs           Int?
+  inputTokens         Int?
+  outputTokens        Int?
+  cacheReadTokens     Int?
   cacheCreationTokens Int?
-  createdAt DateTime @default(now())
+  createdAt           DateTime @default(now())
 
   @@index([tenantId, purpose, createdAt])
 }

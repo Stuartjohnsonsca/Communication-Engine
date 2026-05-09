@@ -34,6 +34,7 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/admin/members`, label: "Members" },
     { href: `/${tenantSlug}/admin/channels`, label: "Channels" },
     { href: `/${tenantSlug}/admin/conflicts`, label: "UCG conflicts" },
+    { href: `/${tenantSlug}/admin/sales-identifier`, label: "Sales Identifier" },
   ];
 
   return (
