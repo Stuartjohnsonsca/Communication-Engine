@@ -110,6 +110,17 @@ export async function POST(req: Request) {
   });
 
   // Apply staged tool calls — for Phase 1 we only handle propose_user_rule and finalise_ucg
+  const upCat = (v: unknown) => {
+    const valid = ["TONE","RESPONSE_TIME","SALUTATION","SIGNOFF","SIGNATURE","MANDATORY_PHRASE","PROHIBITED_PHRASE","ESCALATION","REGULATORY","LANGUAGE"];
+    const up = String(v ?? "").toUpperCase();
+    return (valid.includes(up) ? up : "TONE") as never;
+  };
+  const upChan = (v: unknown) => {
+    const valid = ["EMAIL","SLACK","TEAMS","LETTER","REPORT","WHATSAPP_BUSINESS","ANY"];
+    const up = String(v ?? "").toUpperCase();
+    return (valid.includes(up) ? up : "ANY") as never;
+  };
+
   for (const tc of result.toolCalls) {
     if (tc.name === "propose_user_rule") {
       const ruleInput = tc.input as { action: "add" | "modify" | "remove"; rule: Record<string, unknown> };
@@ -123,16 +134,16 @@ export async function POST(req: Request) {
             tenantId: ctx.tenant.id,
             ucgId: ucg.id,
             externalId: r.externalId as string,
-            category: r.category as never,
-            channel: (r.channel ?? "ANY") as never,
+            category: upCat(r.category),
+            channel: upChan(r.channel),
             statement: r.statement as string,
             payload: (r.payload ?? {}) as never,
             narrowsFcgRule: (r.narrowsFcgRule ?? null) as string | null,
             channelOverrides: (r.channelOverrides ?? null) as never,
           },
           update: {
-            category: r.category as never,
-            channel: (r.channel ?? "ANY") as never,
+            category: upCat(r.category),
+            channel: upChan(r.channel),
             statement: r.statement as string,
             payload: (r.payload ?? {}) as never,
             narrowsFcgRule: (r.narrowsFcgRule ?? null) as string | null,

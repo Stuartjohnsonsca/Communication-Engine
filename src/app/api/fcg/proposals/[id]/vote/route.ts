@@ -63,12 +63,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const decision = evaluate(proposal, votes, eligible.length, ctx.tenant.quorumPct);
 
   if (decision.state === "PASSED") {
-    const newFcgId = await commitProposal(proposal.id, ctx.tenant.id, ctx.membership.id);
-    await superDb.fCGProposal.update({
-      where: { id: proposal.id },
-      data: { state: "PASSED", decidedAt: new Date(), newFcgId },
-    });
-    return NextResponse.json({ proposalState: "PASSED", reason: decision.reason, newFcgId });
+    try {
+      const newFcgId = await commitProposal(proposal.id, ctx.tenant.id, ctx.membership.id);
+      await superDb.fCGProposal.update({
+        where: { id: proposal.id },
+        data: { state: "PASSED", decidedAt: new Date(), newFcgId },
+      });
+      return NextResponse.json({ proposalState: "PASSED", reason: decision.reason, newFcgId });
+    } catch (e) {
+      console.error("commitProposal failed:", e);
+      return NextResponse.json(
+        {
+          proposalState: "OPEN_FOR_VOTE",
+          error: "Vote recorded but commit failed: " + (e instanceof Error ? e.message : String(e)),
+        },
+        { status: 500 },
+      );
+    }
   }
   if (decision.state === "FAILED" || decision.state === "EXPIRED") {
     await superDb.fCGProposal.update({
@@ -86,6 +97,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ proposalState: decision.state, reason: decision.reason });
   }
   return NextResponse.json({ proposalState: "OPEN_FOR_VOTE", reason: decision.reason });
+}
+
+/**
+ * Claude's tool schema uses lowercase enum values ("tone", "email") for
+ * readability; the Prisma enums are uppercase. Normalise here so an invalid
+ * cast doesn't roll back the commit transaction silently.
+ */
+function normaliseCategory(v: unknown): never {
+  const valid = ["TONE","RESPONSE_TIME","SALUTATION","SIGNOFF","SIGNATURE","MANDATORY_PHRASE","PROHIBITED_PHRASE","ESCALATION","REGULATORY","LANGUAGE"];
+  const up = String(v ?? "").toUpperCase();
+  return (valid.includes(up) ? up : "TONE") as never;
+}
+function normaliseChannel(v: unknown): never {
+  const valid = ["EMAIL","SLACK","TEAMS","LETTER","REPORT","WHATSAPP_BUSINESS","ANY"];
+  const up = String(v ?? "").toUpperCase();
+  return (valid.includes(up) ? up : "ANY") as never;
 }
 
 /**
@@ -133,8 +160,8 @@ async function commitProposal(proposalId: string, tenantId: string, actorMembers
           ruleMap.set(externalId, {
             tenantId,
             externalId,
-            category: r.category as never,
-            channel: ((r.channel as string)?.toUpperCase() ?? "ANY") as never,
+            category: normaliseCategory(r.category),
+            channel: normaliseChannel(r.channel),
             statement: r.statement as string,
             payload: (r.payload ?? {}) as Prisma.InputJsonValue,
             rationale: (r.rationale as string) ?? null,
@@ -150,8 +177,8 @@ async function commitProposal(proposalId: string, tenantId: string, actorMembers
           ruleMap.set(r.externalId as string, {
             tenantId,
             externalId: r.externalId as string,
-            category: r.category as never,
-            channel: ((r.channel as string)?.toUpperCase() ?? "ANY") as never,
+            category: normaliseCategory(r.category),
+            channel: normaliseChannel(r.channel),
             statement: r.statement as string,
             payload: (r.payload ?? {}) as Prisma.InputJsonValue,
             rationale: (r.rationale as string) ?? null,
