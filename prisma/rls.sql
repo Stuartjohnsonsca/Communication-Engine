@@ -28,7 +28,8 @@ DECLARE
     'Draft','Action','AuditEvent',
     'Channel','ChannelAuth','IngestedMessage','Meeting','MeetingParticipant',
     'OpportunityCandidate','OpportunityComment','SentimentSignal','AdherenceScore','CommunicationAdherence',
-    'DPIAAttestation','DSARequest','NoGoSubject'
+    'DPIAAttestation','DSARequest','NoGoSubject',
+    'BillingPeriod','BillingUserSnapshot'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

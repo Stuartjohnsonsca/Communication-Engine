@@ -183,6 +183,14 @@ enum AuditEventType {
   MEMBERSHIP_ANONYMISED
   UCG_FROZEN
   UCG_ANONYMISED
+  BILLING_PLAN_UPDATED
+  BILLING_PERIOD_CLOSED
+  BILLING_PERIOD_REOPENED
+}
+
+enum BillingPeriodStatus {
+  DRAFT
+  CLOSED
 }
 
 enum MeetingPaperStatus {
@@ -254,6 +262,23 @@ model Tenant {
   salesIdentifierLawfulBasisAttestedAt DateTime?
   salesIdentifierLawfulBasisAttestedBy String?
   salesIdentifierLawfulBasisNote       String?      @db.Text
+  // PRD §15.1 pricing structure. Currency + base licence per active User per
+  // month, plus the Sales Identifier add-on (with the Acumon-default-Partner
+  // discount and the Cross-Client Learning opt-in discount stacking on top),
+  // plus the flat per-tenant Customer-Managed-Keys uplift. Sandbox tenants
+  // get the first 30 days free per §15.1; `sandboxBillingFreeUntil` snapshots
+  // that window so it remains stable if the tenant exits sandbox mid-month.
+  // All money is stored in minor units (e.g. pence) to avoid floating point.
+  pricingCurrency                      String       @default("GBP")
+  pricingBaseMinor                     Int          @default(5000)
+  pricingSalesIdMinor                  Int          @default(2000)
+  pricingSalesIdPartnerDefault         Boolean      @default(true)
+  pricingSalesIdPartnerDiscountPct     Int          @default(25)
+  pricingCrossClientLearningOptIn      Boolean      @default(false)
+  pricingCclDiscountPct                Int          @default(10)
+  pricingCmkEnabled                    Boolean      @default(false)
+  pricingCmkMinor                      Int          @default(50000)
+  sandboxBillingFreeUntil              DateTime?
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 
@@ -274,6 +299,8 @@ model Tenant {
   dpiaAttestations      DPIAAttestation[]
   dsarRequests          DSARequest[]
   noGoSubjects          NoGoSubject[]
+  billingPeriods        BillingPeriod[]
+  billingUserSnapshots  BillingUserSnapshot[]
 
   @@index([status])
 }
@@ -318,6 +345,12 @@ model Membership {
   anonymiseDueAt    DateTime?
   anonymisedAt      DateTime?
   lifecycleNotes    String?          @db.Text
+  // PRD §15.2 active-User definition needs "logged in within the billing
+  // month". `lastLoginAt` is stamped by `getTenantContext` on every authed
+  // request resolution (debounced) so the billing engine can answer that
+  // question without scraping NextAuth's Session table. Distinct from
+  // `User.emailVerified`, which is set once per email.
+  lastLoginAt       DateTime?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -339,6 +372,7 @@ model Membership {
   sentimentAssigned     SentimentSignal[]        @relation("SentimentAssignee")
   sentimentAcknowledged SentimentSignal[]        @relation("SentimentAcknowledger")
   auditEventsActor      AuditEvent[]             @relation("AuditActor")
+  billingUserSnapshots  BillingUserSnapshot[]
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -979,4 +1013,79 @@ model ModelRun {
   createdAt           DateTime @default(now())
 
   @@index([tenantId, purpose, createdAt])
+}
+
+/// Per-tenant per-month billing roll-up (PRD §15.1 + §15.2). One row per
+/// tenant per calendar month. While the period is open (`status = DRAFT`)
+/// the totals are recomputable from live data. When the Firm Administrator
+/// (or the cron at month-end) closes the period, totals + plan snapshot are
+/// frozen here for the invoice and a `BILLING_PERIOD_CLOSED` audit event is
+/// written. Re-opening is an explicit, audited action.
+model BillingPeriod {
+  id              String              @id @default(cuid())
+  tenantId        String
+  /// "YYYY-MM" — the calendar month the line items cover.
+  period          String
+  status          BillingPeriodStatus @default(DRAFT)
+  closedAt        DateTime?
+  closedByMembershipId String?
+  currency        String              @default("GBP")
+  /// Count of memberships that met the §15.2 "active" definition during the
+  /// period. May exceed `billableUsers` if some active users were on a
+  /// suspended membership at close time.
+  activeUsers     Int                 @default(0)
+  /// Memberships actually billed (active AND not suspended/anonymised AND
+  /// not in revocation grace at the time of close).
+  billableUsers   Int                 @default(0)
+  /// Subset who additionally have the Sales Identifier add-on applied.
+  salesIdUsers    Int                 @default(0)
+  baseSubtotalMinor    Int            @default(0)
+  salesIdSubtotalMinor Int            @default(0)
+  cmkSubtotalMinor     Int            @default(0)
+  totalMinor      Int                 @default(0)
+  /// Snapshot of the pricing plan + line-by-line breakdown at close time so
+  /// invoices remain reproducible even if the tenant later changes plan.
+  payload         Json
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  tenant    Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  snapshots BillingUserSnapshot[]
+
+  @@unique([tenantId, period])
+  @@index([tenantId, status])
+}
+
+/// Per-User-per-period snapshot. Captures the §15.2 active-vs-billable
+/// determination so invoices are explainable: "this User was billed because
+/// they had an authorised channel and produced 7 drafts in March".
+///
+/// `userEmail` is denormalised so the snapshot remains readable after a
+/// Membership is anonymised.
+model BillingUserSnapshot {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  periodId              String
+  membershipId          String?
+  userEmail             String
+  role                  Role
+  membershipStatus      MembershipStatus
+  hasAuthorisedChannel  Boolean  @default(false)
+  loggedInThisPeriod    Boolean  @default(false)
+  hadDraftThisPeriod    Boolean  @default(false)
+  draftCount            Int      @default(0)
+  isActiveByPRD         Boolean  @default(false)
+  isBillable            Boolean  @default(false)
+  salesIdentifierApplies Boolean @default(false)
+  /// Short human-readable note on inclusion / exclusion ("billed", "no
+  /// authorised channel", "suspended at close", "revocation grace", etc.).
+  reason                String   @default("")
+  createdAt             DateTime @default(now())
+
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  period     BillingPeriod  @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  membership Membership?    @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, periodId])
+  @@index([periodId, isBillable])
 }

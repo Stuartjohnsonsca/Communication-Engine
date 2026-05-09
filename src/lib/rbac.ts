@@ -60,6 +60,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "lifecycle:read":      ["FIRM_ADMIN", "FCT_MEMBER"],
   "lifecycle:write":     ["FIRM_ADMIN"],
 
+  // Billing (PRD §15). Commercial concern — kept to the Firm Administrator
+  // alone. The FCT does not see invoices or pricing.
+  "billing:read":        ["FIRM_ADMIN"],
+  "billing:manage":      ["FIRM_ADMIN"],
+
   // Acumon side
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],

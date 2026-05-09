@@ -47,8 +47,18 @@ Push to `main`. Railway auto-builds via `nixpacks.toml`. Required env vars:
 | `EMAIL_SERVER`, `EMAIL_FROM` | SMTP for magic links |
 | `ENCRYPTION_KEY` | `openssl rand -base64 32` (AES-GCM for OAuth tokens — Phase 2) |
 | `AUDIT_HASH_SEED` | Any non-empty string (do not rotate) |
+| `CRON_SECRET` | Bearer token shared with the Railway cron service(s) |
 
 Healthcheck: `/api/health`.
+
+### Scheduled jobs
+
+Both cron endpoints require `Authorization: Bearer $CRON_SECRET` and are idempotent.
+
+| Endpoint | Schedule (UTC) | Purpose |
+|---|---|---|
+| `/api/cron/lifecycle-sweep` | `0 3 * * *` | PRD §14.3 — flip revoke / leaver memberships at end of grace |
+| `/api/cron/billing-close` | `5 3 1 * *` | PRD §15.1 — close the previous month's `BillingPeriod` for every active/sandbox tenant |
 
 ## Verification
 

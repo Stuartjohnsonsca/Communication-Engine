@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { signOut } from "@/lib/auth";
 import { getDpiaStatus } from "@/lib/dpia/status";
+import { hasPermission } from "@/lib/rbac";
 
 export default async function TenantLayout({
   children,
@@ -38,6 +39,9 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/admin/conflicts`, label: "UCG conflicts" },
     { href: `/${tenantSlug}/admin/sales-identifier`, label: "Sales Identifier" },
   ];
+  if (hasPermission(ctx.membership.role, "billing:read")) {
+    nav.push({ href: `/${tenantSlug}/admin/billing`, label: "Billing" });
+  }
 
   return (
     <div className="min-h-screen flex">
