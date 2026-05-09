@@ -15,7 +15,7 @@ export default async function DraftsPage({
   const drafts = await superDb.draft.findMany({
     where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
     orderBy: { createdAt: "desc" },
-    include: { actions: true },
+    include: { _count: { select: { actions: true } } },
     take: 50,
   });
 
@@ -34,43 +34,45 @@ export default async function DraftsPage({
           generate one.
         </p>
       ) : (
-        <ul className="space-y-3">
-          {drafts.map((d) => (
-            <li key={d.id} className="card">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium">{d.subject ?? "(no subject)"}</div>
-                  <div className="text-xs text-ink/50">
-                    {d.kind} · {d.channel} · {d.createdAt.toISOString()}{" "}
-                    {d.holdingRequired && <span className="tag bg-amber-100 ml-2">holding</span>}
-                    {d.researchTaskRequired && (
-                      <span className="tag bg-violet-100 ml-2">research required</span>
-                    )}
-                  </div>
-                </div>
-                <span className="tag">{d.status}</span>
-              </div>
-              <pre className="mt-3 whitespace-pre-wrap rounded bg-ink/5 p-3 text-sm">{d.body}</pre>
-              {d.actions.length > 0 && (
-                <div className="mt-3">
-                  <div className="label">Extracted actions ({d.actions.length})</div>
-                  <ul className="space-y-1 text-sm">
-                    {d.actions.map((a) => (
-                      <li key={a.id} className="flex items-baseline gap-2">
-                        <span className="tag">{a.type}</span>
-                        <span>{a.title}</span>
-                        {a.dueAt && (
-                          <span className="text-xs text-ink/50">
-                            due {a.dueAt.toISOString().slice(0, 10)}
-                          </span>
+        <ul className="space-y-2">
+          {drafts.map((d) => {
+            const preview = d.body.slice(0, 180).replace(/\s+/g, " ");
+            return (
+              <li key={d.id}>
+                <Link
+                  href={`/${tenantSlug}/drafts/${d.id}`}
+                  className="card block hover:bg-ink/[0.02]"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">
+                        {d.subject ?? "(no subject)"}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-ink/60">
+                        <span className="tag">{d.kind}</span>
+                        <span className="tag">{d.channel}</span>
+                        {d.holdingRequired && (
+                          <span className="tag bg-amber-100">holding</span>
                         )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </li>
-          ))}
+                        {d.researchTaskRequired && (
+                          <span className="tag bg-violet-100">research required</span>
+                        )}
+                        {d.noGoSubjectHit && (
+                          <span className="tag bg-red-100">no-go subject</span>
+                        )}
+                        <span>{d.createdAt.toISOString().slice(0, 16).replace("T", " ")}</span>
+                        {d._count.actions > 0 && (
+                          <span>· {d._count.actions} actions</span>
+                        )}
+                      </div>
+                      <div className="mt-2 truncate text-xs text-ink/60">{preview}</div>
+                    </div>
+                    <span className="tag shrink-0">{d.status}</span>
+                  </div>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

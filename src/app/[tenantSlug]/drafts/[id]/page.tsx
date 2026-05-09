@@ -1,0 +1,73 @@
+import { notFound, redirect } from "next/navigation";
+import { getTenantContext } from "@/lib/tenant";
+import { superDb } from "@/lib/db";
+import DraftDetailClient, { type DraftDetail } from "./DraftDetailClient";
+
+export default async function DraftDetailPage({
+  params,
+}: {
+  params: Promise<{ tenantSlug: string; id: string }>;
+}) {
+  const { tenantSlug, id } = await params;
+  const ctx = await getTenantContext(tenantSlug);
+  if (!ctx) redirect("/login");
+
+  const draft = await superDb.draft.findFirst({
+    where: { id, tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
+    include: {
+      actions: { orderBy: { createdAt: "asc" } },
+      parent: { select: { id: true, status: true, createdAt: true } },
+      children: {
+        select: { id: true, status: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      },
+    },
+  });
+  if (!draft) notFound();
+
+  const detail: DraftDetail = {
+    id: draft.id,
+    kind: draft.kind,
+    status: draft.status,
+    channel: draft.channel,
+    language: draft.language,
+    subject: draft.subject,
+    body: draft.body,
+    citations: (draft.citations ?? []) as DraftDetail["citations"],
+    holdingRequired: draft.holdingRequired,
+    holdingReason: draft.holdingReason,
+    fcgWindowDeadline: draft.fcgWindowDeadline?.toISOString() ?? null,
+    noGoSubjectHit: draft.noGoSubjectHit,
+    researchTaskRequired: draft.researchTaskRequired,
+    fcgVersionUsed: draft.fcgVersionUsed,
+    ucgVersionUsed: draft.ucgVersionUsed,
+    inboundChannel: draft.inboundChannel,
+    inboundSender: draft.inboundSender,
+    inboundSubject: draft.inboundSubject,
+    inboundBody: draft.inboundBody,
+    createdAt: draft.createdAt.toISOString(),
+    sentMarkedAt: draft.sentMarkedAt?.toISOString() ?? null,
+    actions: draft.actions.map((a) => ({
+      id: a.id,
+      title: a.title,
+      detail: a.detail,
+      type: a.type,
+      status: a.status,
+      dueAt: a.dueAt?.toISOString() ?? null,
+    })),
+    parent: draft.parent
+      ? {
+          id: draft.parent.id,
+          status: draft.parent.status,
+          createdAt: draft.parent.createdAt.toISOString(),
+        }
+      : null,
+    children: draft.children.map((c) => ({
+      id: c.id,
+      status: c.status,
+      createdAt: c.createdAt.toISOString(),
+    })),
+  };
+
+  return <DraftDetailClient tenantSlug={tenantSlug} draft={detail} />;
+}

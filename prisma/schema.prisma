@@ -145,6 +145,8 @@ enum AuditEventType {
   UCG_CONFLICT_FLAGGED
   UCG_RULE_AUTO_SUSPENDED
   DRAFT_PRODUCED
+  DRAFT_EDITED
+  DRAFT_REGENERATED
   DRAFT_SENT_MARKED
   ACTION_CREATED
   ACTION_COMPLETED
@@ -497,6 +499,20 @@ model Draft {
   modelRunId         String?
   fcgVersionUsed     Int?
   ucgVersionUsed     Int?
+  // Snapshot of the inbound that triggered this draft, persisted so the
+  // /drafts/[id] page can offer Regenerate for both manual-paste and
+  // ingestion-driven flows. For ingestion drafts these mirror IngestedMessage;
+  // for manual-paste they are the only record.
+  inboundChannel     String?
+  inboundSender      String?
+  inboundSubject     String?
+  inboundBody        String?     @db.Text
+  // Lineage: when a draft is regenerated we DISCARD the prior version and
+  // create a new row pointing back via parentId so the audit and UI can
+  // surface the prior attempt without clobbering history.
+  parentId           String?
+  parent             Draft?      @relation("DraftLineage", fields: [parentId], references: [id])
+  children           Draft[]     @relation("DraftLineage")
   createdAt          DateTime    @default(now())
   sentMarkedAt       DateTime?
 
