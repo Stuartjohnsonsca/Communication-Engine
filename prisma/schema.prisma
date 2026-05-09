@@ -341,6 +341,7 @@ model Tenant {
   noGoSubjects          NoGoSubject[]
   billingPeriods        BillingPeriod[]
   billingUserSnapshots  BillingUserSnapshot[]
+  signOffQuestions      SignOffQuestion[]
 
   @@index([status])
 }
@@ -1215,19 +1216,25 @@ model Risk {
   @@index([severity, status])
 }
 
-/// Open Question for Sign-Off (PRD §18). Ten enumerated product / legal /
-/// commercial decisions that need explicit answers before GA. Unlike the
-/// Roadmap (§16) and Risks (§17) registers — which are published to every
-/// Client per §15.3 transparency — these are NOT a transparency surface;
-/// they're internal Acumon governance still under deliberation. Both reads
-/// and writes are gated to the "acumon" tenant in the page handler.
+/// Open Question for Sign-Off (PRD §18). Each tenant has its own copy of
+/// the ten enumerated questions; the canonical text is seeded lazily on
+/// first read (see `src/lib/signoff/index.ts`). Unlike the Roadmap (§16)
+/// and Risks (§17) registers — which are §15.3 transparency surfaces and
+/// therefore correctly modelled as global — these are each Client's own
+/// governance answers (their retention period, their quorum default, their
+/// pricing position). Two Clients on the same product instance must NOT
+/// see each other's answers.
 ///
-/// Not under RLS — see `prisma/rls.sql`. The model is global (no tenantId);
-/// audit events for decisions are written against the operator's tenant chain.
+/// Tenant-scoped: under RLS via `prisma/rls.sql`. Audit events for
+/// decisions are written into the same tenant's audit chain. The Acumon
+/// vendor tenant is itself a Client of the product and uses this exactly
+/// the same way; there is no privileged cross-tenant view.
 model SignOffQuestion {
   id             String        @id @default(cuid())
-  /// Stable short code Q-01, Q-02, … — used in URLs and audit payloads.
-  code           String        @unique
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Stable short code Q-01, Q-02, … — unique per tenant, used in URLs and audit payloads.
+  code           String
   ordinal        Int
   question       String        @db.Text
   /// PRD-side hint baked in (e.g. "default 30 days, anonymise or delete").
@@ -1243,6 +1250,8 @@ model SignOffQuestion {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@index([ordinal])
   @@index([status])
 }

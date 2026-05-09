@@ -1,28 +1,115 @@
 import type { Prisma, SignOffQuestion, SignOffStatus } from "@prisma/client";
-import { superDb } from "@/lib/db";
+import { tenantDb, superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 
 /**
- * Open Questions for Sign-Off (PRD §18). Internal Acumon governance — the
- * eleven product / legal / commercial decisions enumerated in the PRD body
- * that need explicit answers before GA. NOT a §15.3 transparency surface;
- * this module is read-only to Client tenants by being entirely invisible to
- * them. Both reads and writes are gated on `tenant.slug === "acumon"` in the
- * page handler.
+ * Open Questions for Sign-Off (PRD §18). Each tenant has its own copy of
+ * the ten enumerated questions and answers them for themselves (their
+ * controller/processor model, their UCG retention period, their quorum
+ * default, their WhatsApp posture, their pricing position). Two tenants on
+ * the same product instance must NOT see each other's answers.
  *
- * SignOffQuestion rows live outside RLS (see `prisma/rls.sql`). Audit events
- * for decisions/updates are written against the *operator's* tenant chain so
- * they're verifiable inside the standard audit-log UI.
+ * Security model:
+ *  1. RLS on `SignOffQuestion` (see `prisma/rls.sql`) blocks cross-tenant
+ *     reads/writes at the database level — defence in depth on top of the
+ *     WHERE clauses below.
+ *  2. Every public function requires a `tenantId`; queries go through
+ *     `tenantDb(tenantId)` so the per-transaction `app.current_tenant`
+ *     GUC is set before any row is read or written.
+ *  3. The page handler enforces RBAC (`signoff:read` / `signoff:manage`)
+ *     within the tenant — the FIRM_ADMIN of THIS tenant manages THEIR
+ *     questions; nobody manages anyone else's.
+ *  4. Audit events are written into the same tenant's audit chain.
  *
- * Defence-in-depth: every mutation function below re-reads the actor's
- * Membership and refuses if the membership is not in the "acumon" tenant.
- * A misconfigured caller cannot bypass the gate by passing a forged
- * `actorTenantId`.
+ * Acumon (the vendor) is itself a Client tenant and uses this module
+ * exactly the same way every other Client does. There is no privileged
+ * cross-tenant view.
  */
 
-const ACUMON_SLUG = "acumon";
-
 export const STATUS_OPTIONS: SignOffStatus[] = ["OPEN", "DECIDED", "DEFERRED"];
+
+const MAX_DECISION_LEN = 4_000;
+const MAX_NOTES_LEN = 4_000;
+const MAX_DECIDED_BY_LEN = 200;
+
+type CanonicalQuestion = {
+  code: string;
+  ordinal: number;
+  question: string;
+  prdAssumption: string | null;
+};
+
+/**
+ * Canonical PRD §18 questions, used for lazy-seeding a tenant on first
+ * read. Mirrors the static columns the migration would otherwise INSERT —
+ * we do it from the application instead so we don't need to backfill all
+ * existing tenants in the migration, and so revising the question list
+ * later is a code change rather than a schema migration.
+ */
+export const PRD_SIGNOFF_QUESTIONS: ReadonlyArray<CanonicalQuestion> = [
+  {
+    code: "Q-01",
+    ordinal: 0,
+    question: "Confirm controller / processor model for the core service.",
+    prdAssumption: "PRD assumption A1.",
+  },
+  {
+    code: "Q-02",
+    ordinal: 1,
+    question: "Confirm the User Culture Guide retention period post-departure.",
+    prdAssumption: "Default 30 days, anonymise or delete.",
+  },
+  {
+    code: "Q-03",
+    ordinal: 2,
+    question: "Confirm quorum default and the Emergency amendment window.",
+    prdAssumption: "Simple majority of total membership; 24-hour Emergency window.",
+  },
+  {
+    code: "Q-04",
+    ordinal: 3,
+    question: "Confirm Sales Identifier Partner pricing structure.",
+    prdAssumption: "Default discount; Client-as-Partner free; third-party fee.",
+  },
+  {
+    code: "Q-05",
+    ordinal: 4,
+    question: "Confirm jurisdictional split for EU residency.",
+    prdAssumption:
+      "Single EU region (Ireland) or Client-selected (Ireland / Frankfurt / Paris).",
+  },
+  {
+    code: "Q-06",
+    ordinal: 5,
+    question:
+      "Confirm whether voice transcription has an in-region sub-processor available for all v1 jurisdictions, or whether voice is held back to P2.",
+    prdAssumption: null,
+  },
+  {
+    code: "Q-07",
+    ordinal: 6,
+    question: "Confirm position on personal WhatsApp.",
+    prdAssumption: "Excluded by design (recommended) versus opt-in by User.",
+  },
+  {
+    code: "Q-08",
+    ordinal: 7,
+    question: "Confirm certifications budget and timeline.",
+    prdAssumption: "ISO 27001 + Cyber Essentials Plus by GA — aggressive.",
+  },
+  {
+    code: "Q-09",
+    ordinal: 8,
+    question: "Confirm pilot scope and timing for Acumon Intelligence as Pilot Client.",
+    prdAssumption: null,
+  },
+  {
+    code: "Q-10",
+    ordinal: 9,
+    question: "Confirm pricing tiers and the discount values.",
+    prdAssumption: "Acumon-as-default-Partner; Cross-Client Learning opt-in.",
+  },
+];
 
 export type SignOffView = {
   questions: SignOffQuestion[];
@@ -32,10 +119,36 @@ export type SignOffView = {
   };
 };
 
-export async function getSignOffQuestions(): Promise<SignOffView> {
-  const questions = await superDb.signOffQuestion.findMany({
-    orderBy: { ordinal: "asc" },
+/**
+ * Idempotent lazy seed. Inserts any missing canonical questions for the
+ * tenant; existing rows (with their captured decisions) are preserved.
+ *
+ * Run inside the tenant-scoped client so RLS still enforces isolation
+ * even though the unique constraint already does. We deliberately use
+ * `createMany` with `skipDuplicates` so a concurrent first read from two
+ * sessions can't double-insert.
+ */
+async function ensureSeeded(tenantId: string) {
+  const db = tenantDb(tenantId);
+  const existingCount = await db.signOffQuestion.count();
+  if (existingCount >= PRD_SIGNOFF_QUESTIONS.length) return;
+
+  await db.signOffQuestion.createMany({
+    data: PRD_SIGNOFF_QUESTIONS.map((q) => ({
+      tenantId,
+      code: q.code,
+      ordinal: q.ordinal,
+      question: q.question,
+      prdAssumption: q.prdAssumption,
+    })),
+    skipDuplicates: true,
   });
+}
+
+export async function getSignOffQuestions(tenantId: string): Promise<SignOffView> {
+  await ensureSeeded(tenantId);
+  const db = tenantDb(tenantId);
+  const questions = await db.signOffQuestion.findMany({ orderBy: { ordinal: "asc" } });
   const byStatus: Record<SignOffStatus, number> = {
     OPEN: 0,
     DECIDED: 0,
@@ -50,31 +163,6 @@ export async function getSignOffQuestions(): Promise<SignOffView> {
 
 // ─── Mutations ─────────────────────────────────────────────────────────────
 
-/**
- * Re-validate that the operator is on the Acumon tenant by reading the
- * membership server-side, not by trusting whatever the caller passed in.
- * Throws if not — callers should not catch; let the request 500 (and audit
- * via the surrounding error boundary) so the caller is forced to fix the gate.
- */
-async function assertAcumonOperator(actorMembershipId: string) {
-  const membership = await superDb.membership.findUnique({
-    where: { id: actorMembershipId },
-    include: { tenant: { select: { slug: true } } },
-  });
-  if (!membership) throw new Error("signoff: actor membership not found");
-  if (membership.tenant.slug !== ACUMON_SLUG) {
-    throw new Error("signoff: actor is not on the Acumon tenant");
-  }
-  if (membership.status !== "ACTIVE") {
-    throw new Error("signoff: actor membership is not ACTIVE");
-  }
-  return membership;
-}
-
-const MAX_DECISION_LEN = 4_000;
-const MAX_NOTES_LEN = 4_000;
-const MAX_DECIDED_BY_LEN = 200;
-
 function clampText(value: string | null | undefined, max: number): string | null {
   if (value == null) return null;
   const trimmed = value.trim();
@@ -82,31 +170,55 @@ function clampText(value: string | null | undefined, max: number): string | null
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
 }
 
+/**
+ * Defence in depth: re-read the actor's membership server-side and
+ * confirm it belongs to the tenant the caller claims to be acting in.
+ * Refuses the action otherwise. Catches the case where a forged
+ * `actorMembershipId` is paired with a different `tenantId`.
+ */
+async function assertMembershipOnTenant(actorMembershipId: string, tenantId: string) {
+  const membership = await superDb.membership.findUnique({
+    where: { id: actorMembershipId },
+    select: { id: true, tenantId: true, status: true },
+  });
+  if (!membership) throw new Error("signoff: actor membership not found");
+  if (membership.tenantId !== tenantId) {
+    throw new Error("signoff: actor membership is not on this tenant");
+  }
+  if (membership.status !== "ACTIVE") {
+    throw new Error("signoff: actor membership is not ACTIVE");
+  }
+}
+
 export type DecideQuestionInput = {
+  tenantId: string;
   code: string;
   decision: string;
   decidedByName?: string | null;
   notes?: string | null;
-  actorTenantId: string;
   actorMembershipId: string;
   actorName: string;
 };
 
 export async function decideQuestion(input: DecideQuestionInput): Promise<SignOffQuestion> {
-  await assertAcumonOperator(input.actorMembershipId);
+  await assertMembershipOnTenant(input.actorMembershipId, input.tenantId);
+  await ensureSeeded(input.tenantId);
 
   const decision = clampText(input.decision, MAX_DECISION_LEN);
   if (!decision) throw new Error("signoff: decision text is required");
 
-  const before = await superDb.signOffQuestion.findUnique({ where: { code: input.code } });
-  if (!before) throw new Error(`signoff: question ${input.code} not found`);
+  const db = tenantDb(input.tenantId);
+  const before = await db.signOffQuestion.findUnique({
+    where: { tenantId_code: { tenantId: input.tenantId, code: input.code } },
+  });
+  if (!before) throw new Error(`signoff: question ${input.code} not found for tenant`);
 
   const decidedByName =
     clampText(input.decidedByName, MAX_DECIDED_BY_LEN) ??
     clampText(input.actorName, MAX_DECIDED_BY_LEN);
   const notes = clampText(input.notes, MAX_NOTES_LEN);
 
-  const after = await superDb.signOffQuestion.update({
+  const after = await db.signOffQuestion.update({
     where: { id: before.id },
     data: {
       status: "DECIDED",
@@ -118,7 +230,7 @@ export async function decideQuestion(input: DecideQuestionInput): Promise<SignOf
   });
 
   await writeAuditEvent({
-    tenantId: input.actorTenantId,
+    tenantId: input.tenantId,
     eventType: "SIGNOFF_QUESTION_DECIDED",
     actorMembershipId: input.actorMembershipId,
     subjectType: "SignOffQuestion",
@@ -135,23 +247,26 @@ export async function decideQuestion(input: DecideQuestionInput): Promise<SignOf
 }
 
 export type ReopenQuestionInput = {
+  tenantId: string;
   code: string;
   notes?: string | null;
-  actorTenantId: string;
   actorMembershipId: string;
 };
 
 export async function reopenQuestion(input: ReopenQuestionInput): Promise<SignOffQuestion> {
-  await assertAcumonOperator(input.actorMembershipId);
+  await assertMembershipOnTenant(input.actorMembershipId, input.tenantId);
 
-  const before = await superDb.signOffQuestion.findUnique({ where: { code: input.code } });
-  if (!before) throw new Error(`signoff: question ${input.code} not found`);
+  const db = tenantDb(input.tenantId);
+  const before = await db.signOffQuestion.findUnique({
+    where: { tenantId_code: { tenantId: input.tenantId, code: input.code } },
+  });
+  if (!before) throw new Error(`signoff: question ${input.code} not found for tenant`);
 
   if (before.status === "OPEN") return before;
 
   const notes = clampText(input.notes, MAX_NOTES_LEN);
 
-  const after = await superDb.signOffQuestion.update({
+  const after = await db.signOffQuestion.update({
     where: { id: before.id },
     data: {
       status: "OPEN",
@@ -163,7 +278,7 @@ export async function reopenQuestion(input: ReopenQuestionInput): Promise<SignOf
   });
 
   await writeAuditEvent({
-    tenantId: input.actorTenantId,
+    tenantId: input.tenantId,
     eventType: "SIGNOFF_QUESTION_REOPENED",
     actorMembershipId: input.actorMembershipId,
     subjectType: "SignOffQuestion",
@@ -179,24 +294,26 @@ export async function reopenQuestion(input: ReopenQuestionInput): Promise<SignOf
 }
 
 export type UpdateQuestionInput = {
+  tenantId: string;
   code: string;
   status?: SignOffStatus;
   notes?: string | null;
-  actorTenantId: string;
   actorMembershipId: string;
 };
 
 /**
- * Edit a question's tracking metadata WITHOUT recording a decision. Used for
- * the "Defer" action and free-form notes edits. Status transitions to/from
- * DECIDED must go through `decideQuestion` / `reopenQuestion`, which handle
- * the `decision` / `decidedAt` columns and emit the corresponding event.
+ * Edit a question's tracking metadata WITHOUT recording a decision. Used
+ * for the "Defer" action and free-form notes edits. Status transitions
+ * to/from DECIDED must go through `decideQuestion` / `reopenQuestion`.
  */
 export async function updateQuestion(input: UpdateQuestionInput): Promise<SignOffQuestion> {
-  await assertAcumonOperator(input.actorMembershipId);
+  await assertMembershipOnTenant(input.actorMembershipId, input.tenantId);
 
-  const before = await superDb.signOffQuestion.findUnique({ where: { code: input.code } });
-  if (!before) throw new Error(`signoff: question ${input.code} not found`);
+  const db = tenantDb(input.tenantId);
+  const before = await db.signOffQuestion.findUnique({
+    where: { tenantId_code: { tenantId: input.tenantId, code: input.code } },
+  });
+  if (!before) throw new Error(`signoff: question ${input.code} not found for tenant`);
 
   const data: Prisma.SignOffQuestionUpdateInput = {};
   const changes: Record<string, { from: unknown; to: unknown }> = {};
@@ -228,13 +345,13 @@ export async function updateQuestion(input: UpdateQuestionInput): Promise<SignOf
 
   if (Object.keys(changes).length === 0) return before;
 
-  const after = await superDb.signOffQuestion.update({
+  const after = await db.signOffQuestion.update({
     where: { id: before.id },
     data,
   });
 
   await writeAuditEvent({
-    tenantId: input.actorTenantId,
+    tenantId: input.tenantId,
     eventType: "SIGNOFF_QUESTION_UPDATED",
     actorMembershipId: input.actorMembershipId,
     subjectType: "SignOffQuestion",

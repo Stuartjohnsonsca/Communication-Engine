@@ -29,7 +29,8 @@ DECLARE
     'Channel','ChannelAuth','IngestedMessage','Meeting','MeetingParticipant',
     'OpportunityCandidate','OpportunityComment','SentimentSignal','AdherenceScore','CommunicationAdherence',
     'DPIAAttestation','DSARequest','NoGoSubject',
-    'BillingPeriod','BillingUserSnapshot'
+    'BillingPeriod','BillingUserSnapshot',
+    'SignOffQuestion'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

@@ -1,4 +1,4 @@
-import { redirect, notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/tenant";
 import { hasPermission } from "@/lib/rbac";
@@ -7,27 +7,26 @@ import {
   getSignOffQuestions,
   reopenQuestion,
   updateQuestion,
-  STATUS_OPTIONS,
 } from "@/lib/signoff";
 import type { SignOffStatus } from "@prisma/client";
 
 /**
- * PRD §18 — Open Questions for Sign-Off. Internal Acumon governance only:
- * unlike Roadmap (§16) and Risks (§17), this surface is NOT published to
- * Client tenants. Both reads and writes require:
- *   1. an authenticated session with an ACTIVE membership in the "acumon" tenant; and
- *   2. the `signoff:read` / `signoff:manage` permission for the user's role.
+ * PRD §18 — Open Questions for Sign-Off. Per-tenant: each Client has their
+ * own copy of the ten enumerated questions and answers them for themselves.
  *
- * Any other tenant slug returns 404 — we don't even confirm the route exists,
- * so a Client-tenant operator scanning URLs can't fingerprint the feature.
- *
- * The server actions below re-resolve the tenant context inside the action
- * (don't trust the closure-captured `ctx`) and re-check the gate. The lib
- * helpers additionally re-read the actor's membership and verify the
- * tenant slug — defence in depth, in case a future change loosens this
- * page's gate by accident.
+ * Security stack (defence in depth):
+ *   1. NextAuth session must resolve to an ACTIVE membership in this tenant
+ *      (`getTenantContext`). Cross-tenant access stops here.
+ *   2. RBAC — `signoff:read` (FIRM_ADMIN, FCT_MEMBER) gates the page;
+ *      `signoff:manage` (FIRM_ADMIN) gates each mutation.
+ *   3. Server actions re-resolve the tenant context inside the action and
+ *      re-check the role — never trust closure-captured `ctx` for auth.
+ *   4. The lib helpers re-read the actor's membership and refuse if it's
+ *      not on the claimed tenant.
+ *   5. Postgres RLS on `SignOffQuestion` (see `prisma/rls.sql`) enforces
+ *      row-level isolation independently of the WHERE clauses.
+ *   6. Audit events are written into THIS tenant's chain.
  */
-const ACUMON_TENANT_SLUG = "acumon";
 
 const STATUS_BADGE: Record<SignOffStatus, string> = {
   OPEN: "bg-amber-100 text-amber-900",
@@ -41,29 +40,20 @@ export default async function SignOffPage({
   params: Promise<{ tenantSlug: string }>;
 }) {
   const { tenantSlug } = await params;
-
-  // Tenant-slug gate first — return 404 (not 403) so non-Acumon operators
-  // can't tell whether this route exists.
-  if (tenantSlug !== ACUMON_TENANT_SLUG) notFound();
-
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
-
   if (!hasPermission(ctx.membership.role, "signoff:read")) {
-    notFound();
+    redirect(`/${tenantSlug}/dashboard`);
   }
 
-  const view = await getSignOffQuestions();
+  const view = await getSignOffQuestions(ctx.tenant.id);
   const canManage = hasPermission(ctx.membership.role, "signoff:manage");
 
   async function decideAction(formData: FormData) {
     "use server";
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
-    if (
-      inner.tenant.slug !== ACUMON_TENANT_SLUG ||
-      !hasPermission(inner.membership.role, "signoff:manage")
-    ) {
+    if (!hasPermission(inner.membership.role, "signoff:manage")) {
       throw new Error("forbidden");
     }
 
@@ -76,11 +66,11 @@ export default async function SignOffPage({
     if (!decision.trim()) throw new Error("decision text is required");
 
     await decideQuestion({
+      tenantId: inner.tenant.id,
       code,
       decision,
       decidedByName,
       notes,
-      actorTenantId: inner.tenant.id,
       actorMembershipId: inner.membership.id,
       actorName: inner.user.name ?? inner.user.email,
     });
@@ -91,10 +81,7 @@ export default async function SignOffPage({
     "use server";
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
-    if (
-      inner.tenant.slug !== ACUMON_TENANT_SLUG ||
-      !hasPermission(inner.membership.role, "signoff:manage")
-    ) {
+    if (!hasPermission(inner.membership.role, "signoff:manage")) {
       throw new Error("forbidden");
     }
 
@@ -102,8 +89,8 @@ export default async function SignOffPage({
     if (!/^Q-\d{2}$/.test(code)) throw new Error("invalid code");
 
     await reopenQuestion({
+      tenantId: inner.tenant.id,
       code,
-      actorTenantId: inner.tenant.id,
       actorMembershipId: inner.membership.id,
     });
     revalidatePath(`/${tenantSlug}/sign-off`);
@@ -113,10 +100,7 @@ export default async function SignOffPage({
     "use server";
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
-    if (
-      inner.tenant.slug !== ACUMON_TENANT_SLUG ||
-      !hasPermission(inner.membership.role, "signoff:manage")
-    ) {
+    if (!hasPermission(inner.membership.role, "signoff:manage")) {
       throw new Error("forbidden");
     }
 
@@ -125,10 +109,10 @@ export default async function SignOffPage({
     if (!/^Q-\d{2}$/.test(code)) throw new Error("invalid code");
 
     await updateQuestion({
+      tenantId: inner.tenant.id,
       code,
       status: "DEFERRED",
       notes,
-      actorTenantId: inner.tenant.id,
       actorMembershipId: inner.membership.id,
     });
     revalidatePath(`/${tenantSlug}/sign-off`);
@@ -141,9 +125,9 @@ export default async function SignOffPage({
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Open Questions for Sign-Off</h1>
         <p className="mt-1 text-sm text-ink/70">
-          PRD §18 — the {view.summary.total} questions that need explicit decisions before
-          GA. Unlike the Roadmap and Risks registers, this view is internal: only Acumon
-          operators can see it. Decisions logged here are written to the audit chain.
+          PRD §18 — the {view.summary.total} questions {ctx.tenant.name} needs to answer
+          before going live. Each tenant maintains their own answers privately; decisions
+          recorded here are written to this tenant&apos;s audit chain.
         </p>
       </div>
 
@@ -154,9 +138,16 @@ export default async function SignOffPage({
         <Stat label="Deferred" value={String(view.summary.byStatus.DEFERRED)} />
       </div>
 
+      {!canManage && (
+        <div className="card text-xs text-ink/60">
+          Read-only view. Recording or reopening decisions is restricted to the Firm
+          Administrator.
+        </div>
+      )}
+
       {remaining === 0 && view.summary.byStatus.DEFERRED === 0 && (
         <div className="card border-emerald-300 bg-emerald-50/60 text-sm text-emerald-900">
-          All sign-off questions have an explicit decision recorded. The audit chain captures who decided what and when.
+          All sign-off questions have an explicit decision recorded for {ctx.tenant.name}. The audit chain captures who decided what and when.
         </div>
       )}
 
@@ -259,7 +250,7 @@ function QuestionCard({
                     name="decidedByName"
                     maxLength={200}
                     className="input"
-                    placeholder="e.g. Acumon Board, DPO, Legal"
+                    placeholder="e.g. Board, DPO, Legal"
                   />
                 </label>
                 <label className="block text-sm">
