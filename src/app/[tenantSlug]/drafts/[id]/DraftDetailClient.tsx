@@ -4,6 +4,35 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
+export type AdherenceDimensionKey =
+  | "responseTime"
+  | "tone"
+  | "mandatoryPhrase"
+  | "prohibitedPhrase"
+  | "escalation";
+
+export type AdherenceDimension = {
+  score: number | null;
+  verdict: "pass" | "partial" | "fail" | "not_applicable";
+  evidence?: string;
+};
+
+export type AdherenceRuleFinding = {
+  ruleExternalId: string;
+  source: "fcg" | "ucg";
+  verdict: "pass" | "fail";
+  explanation: string;
+};
+
+export type AdherenceDetail = {
+  overall: number;
+  perDimension: Record<AdherenceDimensionKey, AdherenceDimension>;
+  perRule: AdherenceRuleFinding[];
+  fcgVersionUsed: number;
+  ucgVersionUsed: number | null;
+  createdAt: string;
+};
+
 export type DraftDetail = {
   id: string;
   kind: string;
@@ -26,6 +55,9 @@ export type DraftDetail = {
   inboundBody: string | null;
   createdAt: string;
   sentMarkedAt: string | null;
+  sentText: string | null;
+  sentResponseLatencyMin: number | null;
+  adherence: AdherenceDetail | null;
   actions: {
     id: string;
     title: string;
@@ -36,6 +68,21 @@ export type DraftDetail = {
   }[];
   parent: { id: string; status: string; createdAt: string } | null;
   children: { id: string; status: string; createdAt: string }[];
+};
+
+const DIMENSION_LABELS: Record<AdherenceDimensionKey, string> = {
+  responseTime: "Response time",
+  tone: "Tone",
+  mandatoryPhrase: "Mandatory phrases",
+  prohibitedPhrase: "Prohibited phrases",
+  escalation: "Escalation handling",
+};
+
+const VERDICT_BG: Record<AdherenceDimension["verdict"], string> = {
+  pass: "bg-emerald-100 text-emerald-800",
+  partial: "bg-amber-100 text-amber-800",
+  fail: "bg-red-100 text-red-700",
+  not_applicable: "bg-ink/10 text-ink/60",
 };
 
 export default function DraftDetailClient({
@@ -51,6 +98,9 @@ export default function DraftDetailClient({
   const [editing, setEditing] = useState(false);
   const [subject, setSubject] = useState(draft.subject ?? "");
   const [body, setBody] = useState(draft.body);
+  const [confirmingSent, setConfirmingSent] = useState(false);
+  const [sentSubject, setSentSubject] = useState(draft.subject ?? "");
+  const [sentBodyText, setSentBodyText] = useState(draft.body);
 
   const isSent = draft.status === "SENT";
   const isDiscarded = draft.status === "DISCARDED";
@@ -99,19 +149,30 @@ export default function DraftDetailClient({
     });
   }
 
-  function markSent() {
+  function openSentDialog() {
+    setSentSubject(draft.subject ?? "");
+    setSentBodyText(draft.body);
+    setConfirmingSent(true);
+  }
+
+  function confirmSent() {
     setError(null);
     startTransition(async () => {
       const res = await fetch(`/api/drafts/${draft.id}/sent`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tenantSlug }),
+        body: JSON.stringify({
+          tenantSlug,
+          sentSubject: sentSubject.trim() ? sentSubject : null,
+          sentText: sentBodyText,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(`Could not mark sent: ${data.error ?? res.statusText}`);
         return;
       }
+      setConfirmingSent(false);
       router.refresh();
     });
   }
@@ -183,7 +244,7 @@ export default function DraftDetailClient({
             </button>
           )}
           {draft.status === "ACCEPTED" && !isSent && (
-            <button className="btn btn-primary" onClick={markSent} disabled={pending}>
+            <button className="btn btn-primary" onClick={openSentDialog} disabled={pending}>
               Mark sent
             </button>
           )}
@@ -200,6 +261,49 @@ export default function DraftDetailClient({
           <p className="text-sm text-red-600">{error}</p>
         </div>
       )}
+
+      {confirmingSent && (
+        <div className="card border-emerald-300 space-y-3">
+          <div>
+            <h2 className="text-base font-medium">Confirm what you actually sent</h2>
+            <p className="mt-1 text-xs text-ink/60">
+              Adherence is scored against the text you actually sent (PRD §9.1), not the system&rsquo;s
+              draft. Paste over the body if you edited it in your email client.
+            </p>
+          </div>
+          <div>
+            <label className="label">Subject</label>
+            <input
+              className="input"
+              value={sentSubject}
+              onChange={(e) => setSentSubject(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Body</label>
+            <textarea
+              className="input font-mono"
+              rows={14}
+              value={sentBodyText}
+              onChange={(e) => setSentBodyText(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2">
+            <button className="btn btn-primary" onClick={confirmSent} disabled={pending}>
+              {pending ? "Scoring…" : "Mark sent &amp; score"}
+            </button>
+            <button
+              className="btn"
+              onClick={() => setConfirmingSent(false)}
+              disabled={pending}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {draft.adherence && <AdherencePanel adherence={draft.adherence} />}
 
       {(draft.parent || draft.children.length > 0) && (
         <div className="card text-xs text-ink/60">
@@ -383,6 +487,70 @@ export default function DraftDetailClient({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AdherencePanel({ adherence }: { adherence: AdherenceDetail }) {
+  const overallPct = Math.round(adherence.overall * 100);
+  const dimKeys = Object.keys(adherence.perDimension) as AdherenceDimensionKey[];
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-medium">Adherence (sent text)</h2>
+          <p className="text-xs text-ink/60">
+            FCG v{adherence.fcgVersionUsed}
+            {adherence.ucgVersionUsed != null && ` · UCG v${adherence.ucgVersionUsed}`} ·
+            scored {adherence.createdAt.slice(0, 16).replace("T", " ")}
+          </p>
+        </div>
+        <div className="text-right">
+          <div className="text-2xl font-semibold tabular-nums">{overallPct}%</div>
+          <div className="text-xs text-ink/50">overall</div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        {dimKeys.map((k) => {
+          const d = adherence.perDimension[k];
+          const pct = d.score == null ? null : Math.round(d.score * 100);
+          return (
+            <div key={k} className="rounded border border-ink/10 p-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium">{DIMENSION_LABELS[k]}</span>
+                <span className={`tag ${VERDICT_BG[d.verdict]}`}>{d.verdict}</span>
+              </div>
+              <div className="mt-1 text-lg tabular-nums">
+                {pct == null ? <span className="text-ink/40">—</span> : `${pct}%`}
+              </div>
+              {d.evidence && (
+                <p className="mt-1 text-xs text-ink/60">{d.evidence}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {adherence.perRule.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-ink/60">
+            Rule-level findings ({adherence.perRule.length})
+          </summary>
+          <ul className="mt-2 space-y-1">
+            {adherence.perRule.map((r, i) => (
+              <li key={i} className="rounded bg-ink/5 p-2">
+                <div className="flex items-center gap-2">
+                  <span className={`tag ${VERDICT_BG[r.verdict]}`}>{r.verdict}</span>
+                  <span className="font-mono">{r.source}:{r.ruleExternalId}</span>
+                </div>
+                <div className="mt-1 text-ink/70">{r.explanation}</div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

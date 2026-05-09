@@ -122,12 +122,33 @@ export const sentiment = z.object({
 });
 export type Sentiment = z.infer<typeof sentiment>;
 
+export const ADHERENCE_DIMENSIONS = [
+  "responseTime","tone","mandatoryPhrase","prohibitedPhrase","escalation",
+] as const;
+export type AdherenceDimension = (typeof ADHERENCE_DIMENSIONS)[number];
+
+export const adherenceDimensionScore = z.object({
+  score: z.number().min(0).max(1).nullable(),
+  verdict: z.enum(["pass", "partial", "fail", "not_applicable"]),
+  evidence: z.string().max(400).optional(),
+});
+
+export const adherenceRuleFinding = z.object({
+  ruleExternalId: z.string(),
+  source: z.enum(["fcg", "ucg"]),
+  verdict: z.enum(["pass", "fail"]),
+  explanation: z.string().max(400),
+});
+
 export const adherence = z.object({
-  scoresByDimension: z.record(z.object({
-    score: z.number().min(0).max(1).nullable(),
-    evidence: z.string().optional(),
-    fcgClause: z.string().nullable().optional(),
-  })),
+  perDimension: z.object({
+    responseTime: adherenceDimensionScore,
+    tone: adherenceDimensionScore,
+    mandatoryPhrase: adherenceDimensionScore,
+    prohibitedPhrase: adherenceDimensionScore,
+    escalation: adherenceDimensionScore,
+  }),
+  perRule: z.array(adherenceRuleFinding).default([]),
   overall: z.number().min(0).max(1),
 });
 export type Adherence = z.infer<typeof adherence>;

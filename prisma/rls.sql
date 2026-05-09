@@ -27,7 +27,7 @@ DECLARE
     'UserCultureGuide','UCGRule','UCGChatTurn','ComplianceRuling',
     'Draft','Action','AuditEvent',
     'Channel','ChannelAuth','IngestedMessage','Meeting',
-    'OpportunityCandidate','SentimentSignal','AdherenceScore',
+    'OpportunityCandidate','SentimentSignal','AdherenceScore','CommunicationAdherence',
     'DPIAAttestation','DSARequest','NoGoSubject'
   ];
 BEGIN

@@ -152,6 +152,7 @@ enum AuditEventType {
   ACTION_COMPLETED
   ACTION_DISMISSED
   ACTION_REOPENED
+  ADHERENCE_SCORED
   DPIA_ATTESTED
   DSAR_OPENED
   DSAR_FULFILLED
@@ -225,6 +226,7 @@ model Tenant {
   opportunityCandidates OpportunityCandidate[]
   sentimentSignals     SentimentSignal[]
   adherenceScores      AdherenceScore[]
+  commAdherence        CommunicationAdherence[]
   dpiaAttestations     DPIAAttestation[]
   dsarRequests         DSARequest[]
   noGoSubjects         NoGoSubject[]
@@ -270,6 +272,7 @@ model Membership {
   meetingsAsPaperAuthor Meeting[]
   opportunitiesAssigned OpportunityCandidate[]
   adherenceScores       AdherenceScore[]
+  commAdherence         CommunicationAdherence[]
   auditEventsActor      AuditEvent[]       @relation("AuditActor")
 
   @@unique([tenantId, userId])
@@ -515,11 +518,17 @@ model Draft {
   children           Draft[]     @relation("DraftLineage")
   createdAt          DateTime    @default(now())
   sentMarkedAt       DateTime?
+  // PRD §9.1 — adherence is measured against what was actually sent, not
+  // the system's draft. Captured at mark-sent: the user's final text and
+  // (if a holding deadline applied) how late they sent relative to it.
+  sentText                  String?  @db.Text
+  sentResponseLatencyMin    Int?
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  membership       Membership        @relation(fields: [membershipId], references: [id])
-  ingestedMessage  IngestedMessage?  @relation(fields: [ingestedMessageId], references: [id])
-  actions          Action[]
+  tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership        Membership             @relation(fields: [membershipId], references: [id])
+  ingestedMessage   IngestedMessage?       @relation(fields: [ingestedMessageId], references: [id])
+  actions           Action[]
+  adherence         CommunicationAdherence?
 
   @@index([tenantId, membershipId, status])
 }
@@ -693,6 +702,28 @@ model AdherenceScore {
 
   @@unique([membershipId, period])
   @@index([tenantId, period])
+}
+
+/// Per-communication adherence score (PRD §9.1). One row per sent draft.
+/// Aggregated up into AdherenceScore monthly for the FCT-facing dashboard.
+model CommunicationAdherence {
+  id              String   @id @default(cuid())
+  tenantId        String
+  draftId         String   @unique
+  membershipId    String
+  fcgVersionUsed  Int
+  ucgVersionUsed  Int?
+  overall         Float    // 0..1
+  perDimension    Json     // { responseTime, tone, mandatoryPhrase, prohibitedPhrase, escalation } -> {score, verdict, evidence}
+  perRule         Json     // [{ ruleExternalId, source: "fcg"|"ucg", verdict, explanation }]
+  modelRunId      String?
+  createdAt       DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  draft      Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id])
+
+  @@index([tenantId, membershipId, createdAt])
 }
 
 model DPIAAttestation {

@@ -1,7 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
-import DraftDetailClient, { type DraftDetail } from "./DraftDetailClient";
+import DraftDetailClient, {
+  type DraftDetail,
+  type AdherenceDetail,
+} from "./DraftDetailClient";
 
 export default async function DraftDetailPage({
   params,
@@ -16,6 +19,7 @@ export default async function DraftDetailPage({
     where: { id, tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
     include: {
       actions: { orderBy: { createdAt: "asc" } },
+      adherence: true,
       parent: { select: { id: true, status: true, createdAt: true } },
       children: {
         select: { id: true, status: true, createdAt: true },
@@ -47,6 +51,18 @@ export default async function DraftDetailPage({
     inboundBody: draft.inboundBody,
     createdAt: draft.createdAt.toISOString(),
     sentMarkedAt: draft.sentMarkedAt?.toISOString() ?? null,
+    sentText: draft.sentText,
+    sentResponseLatencyMin: draft.sentResponseLatencyMin,
+    adherence: draft.adherence
+      ? ({
+          overall: draft.adherence.overall,
+          perDimension: draft.adherence.perDimension,
+          perRule: draft.adherence.perRule,
+          fcgVersionUsed: draft.adherence.fcgVersionUsed,
+          ucgVersionUsed: draft.adherence.ucgVersionUsed,
+          createdAt: draft.adherence.createdAt.toISOString(),
+        } as AdherenceDetail)
+      : null,
     actions: draft.actions.map((a) => ({
       id: a.id,
       title: a.title,

@@ -87,6 +87,29 @@ export async function judgeSystem(ctx: { fcg: unknown }): Promise<SystemBlock[]>
   ]);
 }
 
+export async function adherenceSystem(ctx: { fcg: unknown; ucg: unknown }): Promise<SystemBlock[]> {
+  const sys = await loadPrompt("adherence");
+  return buildSystem([
+    { text: sys, cache: true },
+    {
+      text:
+        "# Authoritative Firm Culture Guide\n\n" +
+        "```json\n" +
+        JSON.stringify(ctx.fcg, null, 2) +
+        "\n```",
+      cache: true,
+    },
+    {
+      text:
+        "# User Culture Guide (this user, suspended rules excluded)\n\n" +
+        "```json\n" +
+        JSON.stringify(ctx.ucg, null, 2) +
+        "\n```",
+      cache: true,
+    },
+  ]);
+}
+
 export async function draftSystem(ctx: { fcg: unknown; ucg: unknown; kb?: unknown[] }): Promise<SystemBlock[]> {
   const sys = await loadPrompt("draft");
   return buildSystem([

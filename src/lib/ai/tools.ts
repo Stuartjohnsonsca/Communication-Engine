@@ -162,6 +162,54 @@ export const judgeTool: ToolDef = {
   },
 };
 
+const adherenceDimSchema = {
+  type: "object",
+  properties: {
+    score: { type: ["number", "null"], minimum: 0, maximum: 1 },
+    verdict: { type: "string", enum: ["pass", "partial", "fail", "not_applicable"] },
+    evidence: { type: "string", maxLength: 400 },
+  },
+  required: ["score", "verdict"],
+} as const;
+
+export const adherenceTool: ToolDef = {
+  name: "respond_with_adherence",
+  description:
+    "Return the structured adherence score for a single sent communication, scored against the FCG and UCG provided in the system prompt.",
+  schema: {
+    type: "object",
+    properties: {
+      perDimension: {
+        type: "object",
+        properties: {
+          responseTime: adherenceDimSchema,
+          tone: adherenceDimSchema,
+          mandatoryPhrase: adherenceDimSchema,
+          prohibitedPhrase: adherenceDimSchema,
+          escalation: adherenceDimSchema,
+        },
+        required: ["responseTime", "tone", "mandatoryPhrase", "prohibitedPhrase", "escalation"],
+      },
+      perRule: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            ruleExternalId: { type: "string" },
+            source: { type: "string", enum: ["fcg", "ucg"] },
+            verdict: { type: "string", enum: ["pass", "fail"] },
+            explanation: { type: "string", maxLength: 400 },
+          },
+          required: ["ruleExternalId", "source", "verdict", "explanation"],
+        },
+        default: [],
+      },
+      overall: { type: "number", minimum: 0, maximum: 1 },
+    },
+    required: ["perDimension", "overall"],
+  },
+};
+
 export const draftTool: ToolDef = {
   name: "respond_with_draft",
   description: "Return the final draft. Terminates the turn. Must be called exactly once and last.",
