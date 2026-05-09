@@ -26,6 +26,7 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/dashboards`, label: "Adherence" },
     { href: `/${tenantSlug}/dpia`, label: "DPIA" },
     { href: `/${tenantSlug}/dsar`, label: "DSAR" },
+    { href: `/${tenantSlug}/admin/adherence`, label: "Firm adherence" },
     { href: `/${tenantSlug}/admin/audit`, label: "Audit log" },
     { href: `/${tenantSlug}/admin/members`, label: "Members" },
     { href: `/${tenantSlug}/admin/channels`, label: "Channels" },

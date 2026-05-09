@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
+import PerfOptInToggle from "./PerfOptInToggle";
 
 type DimensionKey =
   | "responseTime"
@@ -163,6 +164,8 @@ export default async function PersonalDashboardPage({
           })}
         </div>
       </div>
+
+      <PerfOptInToggle tenantSlug={tenantSlug} initial={ctx.membership.perfDashOptIn} />
 
       <div className="card space-y-2">
         <h2 className="text-base font-medium">Recent scored communications</h2>
