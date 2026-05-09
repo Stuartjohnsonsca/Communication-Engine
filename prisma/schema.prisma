@@ -191,6 +191,9 @@ enum AuditEventType {
   ROADMAP_EXIT_CRITERION_UNMET
   RISK_UPDATED
   RISK_REVIEWED
+  SIGNOFF_QUESTION_UPDATED
+  SIGNOFF_QUESTION_DECIDED
+  SIGNOFF_QUESTION_REOPENED
 }
 
 enum BillingPeriodStatus {
@@ -226,6 +229,15 @@ enum RoadmapPhaseStatus {
   PLANNED
   ACTIVE
   COMPLETE
+}
+
+enum SignOffStatus {
+  /// Awaiting decision; the working PRD assumption stands provisionally.
+  OPEN
+  /// An explicit decision has been recorded — `decision` carries the text.
+  DECIDED
+  /// Consciously punted out of the current sign-off window.
+  DEFERRED
 }
 
 // ─── NextAuth ──────────────────────────────────────────────────────────────
@@ -1201,4 +1213,36 @@ model Risk {
 
   @@index([ordinal])
   @@index([severity, status])
+}
+
+/// Open Question for Sign-Off (PRD §18). Ten enumerated product / legal /
+/// commercial decisions that need explicit answers before GA. Unlike the
+/// Roadmap (§16) and Risks (§17) registers — which are published to every
+/// Client per §15.3 transparency — these are NOT a transparency surface;
+/// they're internal Acumon governance still under deliberation. Both reads
+/// and writes are gated to the "acumon" tenant in the page handler.
+///
+/// Not under RLS — see `prisma/rls.sql`. The model is global (no tenantId);
+/// audit events for decisions are written against the operator's tenant chain.
+model SignOffQuestion {
+  id             String        @id @default(cuid())
+  /// Stable short code Q-01, Q-02, … — used in URLs and audit payloads.
+  code           String        @unique
+  ordinal        Int
+  question       String        @db.Text
+  /// PRD-side hint baked in (e.g. "default 30 days, anonymise or delete").
+  /// Held separately from the question itself so a recorded decision can be
+  /// shown alongside what the working assumption was when the question was raised.
+  prdAssumption  String?       @db.Text
+  status         SignOffStatus @default(OPEN)
+  /// Captured decision text — required when status moves to DECIDED.
+  decision       String?       @db.Text
+  decidedAt      DateTime?
+  decidedByName  String?
+  notes          String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([ordinal])
+  @@index([status])
 }

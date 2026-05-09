@@ -44,6 +44,16 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "billing:read")) {
     nav.push({ href: `/${tenantSlug}/admin/billing`, label: "Billing" });
   }
+  // PRD §18 sign-off questions are Acumon-internal — only surface the link
+  // when the user is operating from the Acumon tenant. The page handler
+  // enforces the same gate; this just keeps Client tenants from seeing it
+  // in the sidebar.
+  if (
+    ctx.tenant.slug === "acumon" &&
+    hasPermission(ctx.membership.role, "signoff:read")
+  ) {
+    nav.push({ href: `/${tenantSlug}/sign-off`, label: "Sign-off questions" });
+  }
 
   return (
     <div className="min-h-screen flex">

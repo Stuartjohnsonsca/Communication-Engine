@@ -80,6 +80,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "risks:read":          ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "risks:manage":        ["FIRM_ADMIN", "ACUMON_ADMIN"],
 
+  // Open Questions for Sign-Off (PRD §18). Unlike the Roadmap and Risks
+  // registers, these are NOT a §15.3 transparency surface — they're product /
+  // legal / commercial questions still under deliberation. Read AND write are
+  // operator-only (FIRM_ADMIN of the Acumon tenant or ACUMON_ADMIN), and the
+  // page handler additionally enforces `tenant.slug === "acumon"` on every
+  // hit so a stray membership grant on a Client tenant cannot expose them.
+  "signoff:read":        ["FIRM_ADMIN", "ACUMON_ADMIN"],
+  "signoff:manage":      ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
   // Acumon side
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],
