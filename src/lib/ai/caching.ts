@@ -110,6 +110,11 @@ export async function adherenceSystem(ctx: { fcg: unknown; ucg: unknown }): Prom
   ]);
 }
 
+export async function sentimentSystem(): Promise<SystemBlock[]> {
+  const sys = await loadPrompt("sentiment");
+  return buildSystem([{ text: sys, cache: true }]);
+}
+
 export async function draftSystem(ctx: { fcg: unknown; ucg: unknown; kb?: unknown[] }): Promise<SystemBlock[]> {
   const sys = await loadPrompt("draft");
   return buildSystem([

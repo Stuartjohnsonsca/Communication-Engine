@@ -4,6 +4,7 @@ import { superDb } from "@/lib/db";
 import DraftDetailClient, {
   type DraftDetail,
   type AdherenceDetail,
+  type SentimentDetail,
 } from "./DraftDetailClient";
 
 export default async function DraftDetailPage({
@@ -28,6 +29,13 @@ export default async function DraftDetailPage({
     },
   });
   if (!draft) notFound();
+
+  const sentiment = draft.ingestedMessageId
+    ? await superDb.sentimentSignal.findFirst({
+        where: { tenantId: ctx.tenant.id, ingestedMessageId: draft.ingestedMessageId },
+        orderBy: { createdAt: "desc" },
+      })
+    : null;
 
   const detail: DraftDetail = {
     id: draft.id,
@@ -83,6 +91,19 @@ export default async function DraftDetailPage({
       status: c.status,
       createdAt: c.createdAt.toISOString(),
     })),
+    sentiment: sentiment
+      ? ({
+          id: sentiment.id,
+          classification: sentiment.classification,
+          confidence: sentiment.confidence,
+          isAboutFirmHandling: sentiment.isAboutFirmHandling,
+          trigger: sentiment.trigger,
+          escalatedAt: sentiment.escalatedAt?.toISOString() ?? null,
+          acknowledgedAt: sentiment.acknowledgedAt?.toISOString() ?? null,
+          evidenceSpans:
+            (sentiment.evidence as { spans?: { text: string }[] } | null)?.spans ?? [],
+        } as SentimentDetail)
+      : null,
   };
 
   return <DraftDetailClient tenantSlug={tenantSlug} draft={detail} />;

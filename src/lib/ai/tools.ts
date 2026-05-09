@@ -210,6 +210,39 @@ export const adherenceTool: ToolDef = {
   },
 };
 
+export const sentimentTool: ToolDef = {
+  name: "respond_with_sentiment",
+  description:
+    "Return the structured sentiment classification for a single inbound external communication, scoped to PRD §9.3 (counterparty dissatisfaction with firm handling).",
+  schema: {
+    type: "object",
+    properties: {
+      classification: {
+        type: "string",
+        enum: ["extreme_negative", "extreme_positive", "neutral"],
+      },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      isAboutFirmHandling: { type: "boolean" },
+      evidenceSpans: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            text: { type: "string", maxLength: 200 },
+            start: { type: "integer" },
+            end: { type: "integer" },
+          },
+          required: ["text"],
+        },
+        default: [],
+      },
+      trigger: { type: ["string", "null"] },
+      shouldEscalate: { type: "boolean" },
+    },
+    required: ["classification", "confidence", "isAboutFirmHandling", "shouldEscalate"],
+  },
+};
+
 export const draftTool: ToolDef = {
   name: "respond_with_draft",
   description: "Return the final draft. Terminates the turn. Must be called exactly once and last.",

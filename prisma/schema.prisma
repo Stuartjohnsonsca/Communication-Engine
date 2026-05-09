@@ -153,6 +153,9 @@ enum AuditEventType {
   ACTION_DISMISSED
   ACTION_REOPENED
   ADHERENCE_SCORED
+  SENTIMENT_CLASSIFIED
+  SENTIMENT_ESCALATED
+  SENTIMENT_ACKNOWLEDGED
   DPIA_ATTESTED
   DSAR_OPENED
   DSAR_FULFILLED
@@ -273,6 +276,8 @@ model Membership {
   opportunitiesAssigned OpportunityCandidate[]
   adherenceScores       AdherenceScore[]
   commAdherence         CommunicationAdherence[]
+  sentimentAssigned     SentimentSignal[]  @relation("SentimentAssignee")
+  sentimentAcknowledged SentimentSignal[]  @relation("SentimentAcknowledger")
   auditEventsActor      AuditEvent[]       @relation("AuditActor")
 
   @@unique([tenantId, userId])
@@ -628,9 +633,10 @@ model IngestedMessage {
   redactFlags Json?
   createdAt   DateTime @default(now())
 
-  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  channel Channel? @relation(fields: [channelId], references: [id])
-  drafts  Draft[]
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel    Channel?          @relation(fields: [channelId], references: [id])
+  drafts     Draft[]
+  sentiments SentimentSignal[]
 
   @@index([tenantId, threadId])
 }
@@ -671,20 +677,43 @@ model OpportunityCandidate {
   @@index([tenantId, status])
 }
 
+/// Sentiment classification of a single inbound (PRD §9.3). Boundary detector
+/// for counterparty dissatisfaction or unusual praise *with respect to firm
+/// handling*. Most rows are NEUTRAL; only EXTREME_NEG against firm handling
+/// triggers escalation routing to the assigned User and the FCT.
 model SentimentSignal {
-  id            String   @id @default(cuid())
-  tenantId      String
+  id                String   @id @default(cuid())
+  tenantId          String
   ingestedMessageId String?
-  classification String  // EXTREME_NEG | EXTREME_POS | NEUTRAL
-  confidence    Float?
-  trigger       String?
-  evidence      Json?
-  shouldEscalate Boolean @default(false)
-  createdAt     DateTime @default(now())
+  /// EXTREME_NEG | EXTREME_POS | NEUTRAL
+  classification    String
+  confidence        Float?
+  /// Whether the signal is about the firm's handling of the matter (PRD §9.3).
+  /// Counterparty unhappiness about their own outcomes is `false` and never
+  /// escalates.
+  isAboutFirmHandling Boolean @default(false)
+  trigger           String?
+  evidence          Json?
+  shouldEscalate    Boolean  @default(false)
+  /// Set when the signal is routed to the user/FCT inbox. Distinct from
+  /// `shouldEscalate` (which is the model's recommendation) so we can audit
+  /// the actual escalation event.
+  escalatedAt       DateTime?
+  acknowledgedAt    DateTime?
+  acknowledgedById  String?
+  /// Membership (draft owner) the escalation is routed to. The FCT also sees
+  /// it via the firm-wide list.
+  assignedToMembershipId String?
+  modelRunId        String?
+  createdAt         DateTime @default(now())
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ingestedMessage IngestedMessage? @relation(fields: [ingestedMessageId], references: [id])
+  assignedTo      Membership?      @relation("SentimentAssignee", fields: [assignedToMembershipId], references: [id])
+  acknowledgedBy  Membership?      @relation("SentimentAcknowledger", fields: [acknowledgedById], references: [id])
 
-  @@index([tenantId, classification])
+  @@index([tenantId, classification, createdAt])
+  @@index([tenantId, escalatedAt])
 }
 
 model AdherenceScore {

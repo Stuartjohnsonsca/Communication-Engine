@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { produceDraft } from "@/lib/ai/agents/draftAgent";
+import { classifyAndRecordInbound } from "@/lib/sentiment/record";
 import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
 
@@ -82,13 +83,40 @@ export async function POST(req: Request) {
 
   const noGo = await superDb.noGoSubject.findMany({ where: { tenantId: ctx.tenant.id } });
 
-  const draft = await produceDraft({
-    tenantId: ctx.tenant.id,
-    fcg: fcgJson,
-    ucg: ucgJson,
-    inbound: parsed.data.inbound,
-    noGoSubjects: noGo.map((n) => n.label),
+  // Persist the inbound as an IngestedMessage so the Draft, the sentiment
+  // signal and any future thread-aware features share one canonical row.
+  const ingested = await superDb.ingestedMessage.create({
+    data: {
+      tenantId: ctx.tenant.id,
+      direction: "IN",
+      sender: parsed.data.inbound.sender ?? null,
+      subject: parsed.data.inbound.subject ?? null,
+      body: parsed.data.inbound.body,
+      sentAt: parsed.data.inbound.receivedAt ? new Date(parsed.data.inbound.receivedAt) : null,
+    },
   });
+
+  // Drafting and sentiment classification are independent — run in parallel.
+  // Sentiment failures must not block the draft (PRD §9.3 is a monitoring
+  // feature, not a gate), so failures are swallowed and the signal omitted.
+  const [draft] = await Promise.all([
+    produceDraft({
+      tenantId: ctx.tenant.id,
+      fcg: fcgJson,
+      ucg: ucgJson,
+      inbound: parsed.data.inbound,
+      noGoSubjects: noGo.map((n) => n.label),
+    }),
+    classifyAndRecordInbound({
+      tenantId: ctx.tenant.id,
+      assignedToMembershipId: ctx.membership.id,
+      ingestedMessageId: ingested.id,
+      inbound: parsed.data.inbound,
+    }).catch((err) => {
+      console.error("[sentiment] classify failed", err);
+      return null;
+    }),
+  ]);
 
   type ActionCreate = {
     tenantId: string;
@@ -141,6 +169,7 @@ export async function POST(req: Request) {
     data: {
       tenantId: ctx.tenant.id,
       membershipId: ctx.membership.id,
+      ingestedMessageId: ingested.id,
       kind: draftKindMap[draft.type] ?? "EMAIL",
       channel: channelEnum[draft.channel] ?? "EMAIL",
       language: draft.language,

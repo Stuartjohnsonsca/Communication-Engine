@@ -33,6 +33,17 @@ export type AdherenceDetail = {
   createdAt: string;
 };
 
+export type SentimentDetail = {
+  id: string;
+  classification: string;
+  confidence: number | null;
+  isAboutFirmHandling: boolean;
+  trigger: string | null;
+  escalatedAt: string | null;
+  acknowledgedAt: string | null;
+  evidenceSpans: { text: string }[];
+};
+
 export type DraftDetail = {
   id: string;
   kind: string;
@@ -68,6 +79,7 @@ export type DraftDetail = {
   }[];
   parent: { id: string; status: string; createdAt: string } | null;
   children: { id: string; status: string; createdAt: string }[];
+  sentiment: SentimentDetail | null;
 };
 
 const DIMENSION_LABELS: Record<AdherenceDimensionKey, string> = {
@@ -260,6 +272,13 @@ export default function DraftDetailClient({
         <div className="card border-red-300">
           <p className="text-sm text-red-600">{error}</p>
         </div>
+      )}
+
+      {draft.sentiment && draft.sentiment.escalatedAt && !draft.sentiment.acknowledgedAt && (
+        <SentimentEscalationBanner
+          tenantSlug={tenantSlug}
+          sentiment={draft.sentiment}
+        />
       )}
 
       {confirmingSent && (
@@ -551,6 +570,71 @@ function AdherencePanel({ adherence }: { adherence: AdherenceDetail }) {
           </ul>
         </details>
       )}
+    </div>
+  );
+}
+
+function SentimentEscalationBanner({
+  tenantSlug,
+  sentiment,
+}: {
+  tenantSlug: string;
+  sentiment: SentimentDetail;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const conf = sentiment.confidence == null ? null : Math.round(sentiment.confidence * 100);
+
+  function acknowledge() {
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/sentiment/${sentiment.id}/acknowledge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tenantSlug }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? res.statusText);
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="card border-red-400 bg-red-50/60 space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-base font-medium text-red-800">
+            Sentiment escalation — counterparty unhappy with firm handling
+          </h2>
+          <p className="mt-1 text-xs text-red-900/70">
+            PRD §9.3 escalation. The Firm Culture Team has also been notified via the Sentiment
+            queue. Acknowledge once you have the matter in hand — this records who took ownership.
+          </p>
+        </div>
+        <div className="text-right text-xs text-red-900/70">
+          {conf != null && <div className="tabular-nums">{conf}% confidence</div>}
+          {sentiment.trigger && <div>trigger: {sentiment.trigger}</div>}
+        </div>
+      </div>
+      {sentiment.evidenceSpans.length > 0 && (
+        <ul className="space-y-1 text-xs">
+          {sentiment.evidenceSpans.slice(0, 3).map((sp, i) => (
+            <li key={i} className="rounded bg-white/70 p-2 italic text-red-900">
+              &ldquo;{sp.text}&rdquo;
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-center gap-3">
+        <button className="btn btn-primary text-xs" onClick={acknowledge} disabled={pending}>
+          {pending ? "…" : "Acknowledge escalation"}
+        </button>
+        {error && <span className="text-xs text-red-700">{error}</span>}
+      </div>
     </div>
   );
 }
