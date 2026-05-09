@@ -11,6 +11,13 @@ export const PROVIDERS: Record<string, LLMProvider> = {
 
 export type ProviderName = keyof typeof PROVIDERS;
 
+/** Default model per provider used when a role falls back to a different provider. */
+export const PROVIDER_DEFAULT_MODEL: Record<string, string> = {
+  anthropic: "claude-haiku-4-5-20251001",
+  together: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+  mock: "mock",
+};
+
 export function getProvider(name: string): LLMProvider {
   const p = PROVIDERS[name];
   if (!p) throw new Error(`Unknown LLM provider: ${name}`);

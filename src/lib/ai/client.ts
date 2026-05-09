@@ -1,5 +1,5 @@
 import { bindingFor } from "@/lib/ai/models";
-import { effectiveProvider } from "@/lib/ai/providers";
+import { effectiveProvider, PROVIDER_DEFAULT_MODEL } from "@/lib/ai/providers";
 import type {
   AgentRole,
   CallToolOpts,
@@ -18,26 +18,30 @@ import type {
  * Each call dispatches to the provider bound to the agent role.
  */
 
-export async function chat(opts: ChatOpts): Promise<ChatResult> {
-  const binding = bindingFor(opts.role);
+/** Resolve binding → effective provider, swapping the model when the
+ *  effective provider differs (e.g. Anthropic role falling back to Together
+ *  because no ANTHROPIC_API_KEY is set). */
+function resolve(role: AgentRole, override?: { model?: string; maxTokens?: number; temperature?: number }) {
+  const binding = bindingFor(role);
   const provider = effectiveProvider(binding.provider);
-  return provider.chat({
-    ...opts,
-    model: opts.model ?? binding.model,
-    maxTokens: opts.maxTokens ?? binding.maxTokens,
-    temperature: opts.temperature ?? binding.temperature,
-  });
+  const fellBack = provider.name !== binding.provider;
+  const model = override?.model ?? (fellBack ? PROVIDER_DEFAULT_MODEL[provider.name] ?? binding.model : binding.model);
+  return {
+    provider,
+    model,
+    maxTokens: override?.maxTokens ?? binding.maxTokens,
+    temperature: override?.temperature ?? binding.temperature,
+  };
+}
+
+export async function chat(opts: ChatOpts): Promise<ChatResult> {
+  const r = resolve(opts.role, opts);
+  return r.provider.chat({ ...opts, model: r.model, maxTokens: r.maxTokens, temperature: r.temperature });
 }
 
 export async function callTool<T>(opts: CallToolOpts): Promise<ToolResult<T>> {
-  const binding = bindingFor(opts.role);
-  const provider = effectiveProvider(binding.provider);
-  return provider.callTool<T>({
-    ...opts,
-    model: opts.model ?? binding.model,
-    maxTokens: opts.maxTokens ?? binding.maxTokens,
-    temperature: opts.temperature ?? binding.temperature,
-  });
+  const r = resolve(opts.role, opts);
+  return r.provider.callTool<T>({ ...opts, model: r.model, maxTokens: r.maxTokens, temperature: r.temperature });
 }
 
 /** Helper for agents to declare a tool with a JSON-Schema input. */
