@@ -34,9 +34,21 @@ async function main() {
     console.log(`  cleaned ${purgedMemberships.count} memberships, ${purgedUsers.count} users`);
   }
 
-  // The previous Stuart record on @johnsonsca.com is left in place — no harm,
-  // and removing it would orphan any audit events authored under that
-  // membership.
+  // The previous Stuart record on @johnsonsca.com is preserved (avoids
+  // orphaning audit events) but its membership is suspended so it doesn't
+  // inflate the quorum count: with stuart@acumon.com as the sole active
+  // member, a single APPROVE vote crosses the simple-majority threshold.
+  const suspended = await prisma.membership.updateMany({
+    where: {
+      tenantId: tenant.id,
+      user: { email: "stuart@johnsonsca.com" },
+      status: "ACTIVE",
+    },
+    data: { status: "SUSPENDED" },
+  });
+  if (suspended.count) {
+    console.log(`  suspended ${suspended.count} legacy stuart@johnsonsca.com membership`);
+  }
 
   // ─── Seed only the real principal: stuart@acumon.com as FIRM_ADMIN ──────
   const realSeeds = [

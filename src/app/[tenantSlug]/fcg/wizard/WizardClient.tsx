@@ -21,10 +21,8 @@ const STEPS: Step[] = [
     id: "intro",
     title: "Channels & language",
     subtitle:
-      "What does the FCG cover? Pick channels and the working language(s). You can change these later.",
+      "What does the FCG cover? Pick channels and the working language. These bias the chat agent's defaults at every later step; individual rules can still override.",
     chat: false,
-    helper:
-      "Per PRD §13.5 each rule can carry channel-specific overrides — these are set later in each step.",
   },
   {
     id: "tone",
@@ -131,6 +129,16 @@ export default function WizardClient({
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
 
+  // Step 1 selections — channels + working language. Sent to Claude as part
+  // of the focus prefix in every later chat call so rules default sensibly.
+  const ALL_CHANNELS = ["email", "slack", "teams", "letter", "report", "whatsapp_business"] as const;
+  const [channels, setChannels] = useState<string[]>(["email", "slack", "teams", "letter"]);
+  const [language, setLanguage] = useState("en-GB");
+
+  function toggleChannel(c: string) {
+    setChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+  }
+
   const step = STEPS[stepIndex];
   const turns = turnsByStep[step.id] ?? [];
 
@@ -153,11 +161,16 @@ export default function WizardClient({
     setError(null);
     setTurns(step.id, (t) => [...t, { role: "user", content: message }]);
 
-    // Prefix the message with the wizard's category focus so Claude scopes
+    // Prefix the message with the wizard's focus so Claude scopes
     // its tool calls correctly and ignores off-topic asks for this step.
-    const focused = step.categories
-      ? `[Wizard focus: ${step.categories.join(", ")}] ${message}`
-      : message;
+    const focusBits = [
+      step.categories ? `categories=${step.categories.join(",")}` : null,
+      channels.length ? `channels=${channels.join(",")}` : null,
+      `language=${language}`,
+    ]
+      .filter(Boolean)
+      .join("; ");
+    const focused = `[Wizard focus: ${focusBits}] ${message}`;
 
     startTransition(async () => {
       try {
@@ -177,6 +190,13 @@ export default function WizardClient({
     });
   }
 
+  /**
+   * Submit-and-adopt: open the proposal for vote, then immediately cast the
+   * current user's APPROVE. With a single eligible voter that crosses the
+   * simple-majority threshold and the proposal commits in the same flow.
+   * With multiple voters, this just records this user's vote and the others
+   * can still vote independently from the proposal page.
+   */
   async function submitForVote() {
     if (!proposalId) {
       setError("Nothing staged to submit yet — work through the chat steps first.");
@@ -185,10 +205,22 @@ export default function WizardClient({
     setOpening(true);
     setError(null);
     try {
-      const res = await fetch(`/api/fcg/proposals/${proposalId}/open?tenant=${tenantSlug}`, {
+      const openRes = await fetch(
+        `/api/fcg/proposals/${proposalId}/open?tenant=${tenantSlug}`,
+        { method: "POST" },
+      );
+      if (!openRes.ok) throw new Error(await openRes.text());
+
+      const voteRes = await fetch(`/api/fcg/proposals/${proposalId}/vote`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tenantSlug, decision: "APPROVE" }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      const voteData = await voteRes.json().catch(() => ({}));
+      if (!voteRes.ok) throw new Error(voteData.error ?? "vote failed");
+
+      // Whether or not the proposal passed (depends on quorum), navigate to
+      // the proposal page so the user can see the outcome.
       window.location.href = `/${tenantSlug}/fcg/proposals/${proposalId}`;
     } catch (e) {
       setError(e instanceof Error ? e.message : "submit failed");
@@ -252,17 +284,62 @@ export default function WizardClient({
         </div>
 
         {step.id === "intro" && (
-          <div className="rounded border border-ink/10 bg-paper p-4 text-sm">
-            <p>
-              Each step focuses on one type of culture rule. The wizard&apos;s chat helper drafts
-              rules in that category and stages them on a single proposal. Channels you mention
-              (email, Slack, Teams, letters, reports) are captured per-rule via the chat — no
-              separate &quot;channel selection&quot; up front.
-            </p>
-            <p className="mt-3">
-              When all categories feel right, the final step submits the proposal to the Firm
-              Culture Team for a quorum vote.
-            </p>
+          <div className="space-y-4">
+            <div>
+              <div className="label">Channels covered</div>
+              <p className="mb-2 text-xs text-ink/60">
+                Tick the channels the FCG governs. The chat helper biases towards these in every
+                later step; individual rules can still apply to other channels via overrides.
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {ALL_CHANNELS.map((c) => (
+                  <label
+                    key={c}
+                    className={`flex cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm ${
+                      channels.includes(c) ? "border-accent bg-accent/5" : "border-ink/10"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={channels.includes(c)}
+                      onChange={() => toggleChannel(c)}
+                    />
+                    <span>{c.replace("_", " ")}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="label">Working language</div>
+              <p className="mb-2 text-xs text-ink/60">
+                One FCG covers one language. For multilingual firms, run the wizard once per
+                language to produce per-language variants (PRD §13.5).
+              </p>
+              <select
+                className="input max-w-xs"
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+              >
+                <option value="en-GB">English (UK)</option>
+                <option value="en-US">English (US)</option>
+                <option value="fr-FR">Français</option>
+                <option value="de-DE">Deutsch</option>
+                <option value="es-ES">Español</option>
+                <option value="it-IT">Italiano</option>
+                <option value="nl-NL">Nederlands</option>
+                <option value="pt-PT">Português</option>
+                <option value="pl-PL">Polski</option>
+              </select>
+            </div>
+
+            <div className="rounded border border-ink/10 bg-paper p-4 text-xs text-ink/70">
+              These selections aren&apos;t saved as separate rules — they&apos;re passed to the
+              chat agent as defaults so, for example, when you ask &quot;set 24h acknowledgement
+              window&quot; the agent knows to apply it across {channels.length === 0 ? "no" : channels.join(", ")} unless
+              you say otherwise.
+            </div>
           </div>
         )}
 
@@ -352,9 +429,10 @@ export default function WizardClient({
                 across all categories.
               </p>
               <p className="mt-2 text-ink/70">
-                Submitting opens the proposal for a Firm Culture Team vote. With a single FCT
-                member, your own vote is sufficient to commit. Once committed, the FCG becomes the
-                authority for User Culture Guides and drafting.
+                Clicking submit opens the proposal for a Firm Culture Team vote AND records your
+                APPROVE vote in the same step. If you&apos;re the only eligible voter, the proposal
+                commits immediately and becomes the authoritative FCG. With multiple voters, the
+                others can still vote independently from the proposal page.
               </p>
             </div>
             {ops.length === 0 ? (
@@ -395,7 +473,7 @@ export default function WizardClient({
               disabled={ops.length === 0 || opening}
               onClick={submitForVote}
             >
-              {opening ? "Submitting…" : "Submit for Firm Culture Team vote"}
+              {opening ? "Submitting & voting…" : "Submit & approve"}
             </button>
           </div>
         )}
