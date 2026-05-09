@@ -91,6 +91,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "signoff:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "signoff:manage":      ["FIRM_ADMIN"],
 
+  // Sandbox / Dry-Run (PRD §14.2). Provisioning and outcome recording are
+  // operator decisions — restricted to the FIRM_ADMIN of the parent tenant.
+  // FCT reads the sandbox status (cohort, candidate FCGs) for governance
+  // oversight but does not provision or conclude.
+  "sandbox:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
+  "sandbox:manage":      ["FIRM_ADMIN"],
+
   // Cross-Client Learning (PRD §11). Three permissions:
   //   xcl:opt-in   — flip the per-tenant lawful-basis gate. Restricted to the
   //                  Firm Administrator (controllership decision per §11.2).

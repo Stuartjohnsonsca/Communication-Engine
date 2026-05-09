@@ -210,6 +210,10 @@ enum AuditEventType {
   XCL_CANDIDATE_REJECTED
   XCL_CANDIDATE_COMMITTED
   XCL_REID_TEST_RECORDED
+  SANDBOX_PROVISIONED
+  SANDBOX_MEMBER_ADDED
+  SANDBOX_FCG_PROMOTED
+  SANDBOX_OUTCOME_RECORDED
 }
 
 enum BillingPeriodStatus {
@@ -280,6 +284,18 @@ enum SignOffStatus {
   DECIDED
   /// Consciously punted out of the current sign-off window.
   DEFERRED
+}
+
+/// PRD §14.2 Sandbox lifecycle. PENDING is the default for an open sandbox;
+/// the three terminal outcomes match the PRD ("promote the candidate FCG to
+/// production, iterate, or decline and exit"). ITERATING is also terminal in
+/// the sense that it concludes the *current* sandbox window — the Client
+/// then opens a new window if they want to keep iterating.
+enum SandboxOutcome {
+  PENDING
+  PROMOTED
+  ITERATING
+  DECLINED
 }
 
 /// PRD §11 Cross-Client Learning. Categories of insight the curator pipeline
@@ -353,6 +369,24 @@ model Tenant {
   parentTenantId                       String?
   parentTenant                         Tenant?      @relation("SandboxOf", fields: [parentTenantId], references: [id])
   sandboxes                            Tenant[]     @relation("SandboxOf")
+  /// PRD §14.2 sandbox lifecycle. Only meaningful when `isSandbox = true`.
+  /// The window is provisioned for `sandboxCohortLimit` users (default 10)
+  /// over `sandboxClosesAt - sandboxOpenedAt` days (default 30). On
+  /// conclusion the operator records the outcome (PROMOTED / ITERATING /
+  /// DECLINED) and, when promoted, the FCG that was lifted into the parent.
+  sandboxOpenedAt                      DateTime?
+  sandboxClosesAt                      DateTime?
+  sandboxCohortLimit                   Int          @default(10)
+  sandboxOutcome                       SandboxOutcome @default(PENDING)
+  sandboxOutcomeAt                     DateTime?
+  sandboxOutcomeByName                 String?
+  sandboxOutcomeNotes                  String?      @db.Text
+  /// FCG (in this sandbox tenant) chosen as the candidate for promotion.
+  sandboxPromotedFcgId                 String?
+  /// FCGProposal id created on the parent tenant when promoting — the
+  /// candidate is staged via the parent's normal §6 governance, not
+  /// committed silently.
+  sandboxPromotedProposalId            String?
   retentionDays                        Int          @default(2555)
   quorumPct                            Int          @default(50) // simple majority of total membership
   votingWindowDays                     Int          @default(5)

@@ -44,6 +44,14 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "billing:read")) {
     nav.push({ href: `/${tenantSlug}/admin/billing`, label: "Billing" });
   }
+  // PRD §14.2 Sandbox — only meaningful in production tenants. The page
+  // itself short-circuits when accessed from inside a sandbox tenant.
+  if (
+    hasPermission(ctx.membership.role, "sandbox:read") &&
+    !ctx.tenant.isSandbox
+  ) {
+    nav.push({ href: `/${tenantSlug}/admin/sandbox`, label: "Sandbox" });
+  }
   // PRD §11 Cross-Client Learning. Visible to anyone with xcl:read in this
   // tenant (the page itself decides whether to render the curator console
   // based on the Acumon-tenant gate).
