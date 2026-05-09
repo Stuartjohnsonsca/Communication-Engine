@@ -99,6 +99,7 @@ enum UCGStatus {
   CONFLICTED
   SUPERSEDED
   FROZEN
+  ANONYMISED
 }
 
 enum Verdict {
@@ -174,6 +175,14 @@ enum AuditEventType {
   OPPORTUNITY_REJECTED
   OPPORTUNITY_ROUTED_TO_PARTNER
   OPPORTUNITY_COMMENTED
+  USER_ACCESS_REVOKED
+  USER_REAUTHORISED
+  USER_MARKED_LEAVER
+  USER_LEAVER_REVERSED
+  MEMBERSHIP_SUSPENDED_AFTER_GRACE
+  MEMBERSHIP_ANONYMISED
+  UCG_FROZEN
+  UCG_ANONYMISED
 }
 
 enum MeetingPaperStatus {
@@ -293,6 +302,22 @@ model Membership {
   perfDashOptIn     Boolean          @default(false)
   sentimentOutOptIn Boolean          @default(false)
   alternateForId    String?
+  // PRD §14.3 user lifecycle. The user-revocation flow keeps Membership.status
+  // = ACTIVE during the 30-day grace window so the user can still hit
+  // /account to re-authorise, but `accessRevokedAt` is what the drafting gate
+  // and lifecycle UI consult. `reauthDeadlineAt` = accessRevokedAt + 30d; the
+  // sweep flips status → SUSPENDED and anonymises the UCG when the deadline
+  // passes without re-authorisation.
+  //
+  // The leaver flow flips status → LEAVER_FROZEN immediately and stamps
+  // `leaverMarkedAt` + `anonymiseDueAt` = +30d. The sweep flips status →
+  // ANONYMISED and anonymises the UCG at the due date.
+  accessRevokedAt   DateTime?
+  reauthDeadlineAt  DateTime?
+  leaverMarkedAt    DateTime?
+  anonymiseDueAt    DateTime?
+  anonymisedAt      DateTime?
+  lifecycleNotes    String?          @db.Text
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -446,6 +471,14 @@ model UserCultureGuide {
   conflictFlaggedAt       DateTime?
   gracePeriodEndsAt       DateTime?
   conflictAutoSuspendedAt DateTime?
+  // PRD §14.3 lifecycle markers. `frozenAt` is set when the owning
+  // Membership transitions out of ACTIVE (revocation grace, leaver-marked).
+  // While frozen the UCG is preserved (rules + signature intact) but
+  // excluded from drafting. `anonymisedAt` is set by the sweep at the end
+  // of the 30-day window — at that point UCGRules are dropped and
+  // signatureBlock is cleared. The row itself is retained for audit.
+  frozenAt                DateTime?
+  anonymisedAt            DateTime?
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt
 

@@ -6,6 +6,7 @@ import { produceDraft } from "@/lib/ai/agents/draftAgent";
 import { classifyAndRecordInbound } from "@/lib/sentiment/record";
 import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
+import { getMemberLifecycleState, isDraftingPermitted } from "@/lib/lifecycle";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -33,6 +34,16 @@ export async function POST(req: Request) {
   const ctx = await getTenantContext(parsed.data.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   requirePermission(ctx.membership.role, "draft:create");
+
+  // PRD §14.3: drafting halts on revocation or while leaver-frozen. The
+  // member can still hit /account to re-authorise during the 30-day grace.
+  const lifecycle = getMemberLifecycleState(ctx.membership);
+  if (!isDraftingPermitted(lifecycle)) {
+    return NextResponse.json(
+      { error: "drafting_halted", lifecycle: lifecycle.kind },
+      { status: 409 },
+    );
+  }
 
   const fcg = await superDb.firmCultureGuide.findFirst({
     where: { tenantId: ctx.tenant.id, status: "COMMITTED" },

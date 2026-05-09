@@ -52,6 +52,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // Sales Identifier
   "opportunity:review":  ["SALES_REVIEWER", "FIRM_ADMIN"],
 
+  // User Lifecycle (PRD §14.3). FCT can see the lifecycle console (the FCT
+  // is notified on revocation and tracks anonymisation timing); only the
+  // Firm Administrator can mark a member as leaver or reverse it. Self-serve
+  // revocation lives outside the role gate — any member can revoke their
+  // own access from /account.
+  "lifecycle:read":      ["FIRM_ADMIN", "FCT_MEMBER"],
+  "lifecycle:write":     ["FIRM_ADMIN"],
+
   // Acumon side
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],
