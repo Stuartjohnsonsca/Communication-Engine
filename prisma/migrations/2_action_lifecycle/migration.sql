@@ -1,0 +1,6 @@
+-- Action lifecycle audit events: status changes and manual creation flow.
+
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'ACTION_CREATED';
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'ACTION_COMPLETED';
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'ACTION_DISMISSED';
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'ACTION_REOPENED';

@@ -12,36 +12,51 @@ export default async function Dashboard({
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
 
-  const [committedFcg, openProposals, myUcg, recentDrafts, recentEvents] = await Promise.all([
-    superDb.firmCultureGuide.findFirst({
-      where: { tenantId: ctx.tenant.id, status: "COMMITTED" },
-      orderBy: { version: "desc" },
-      include: { _count: { select: { rules: true } } },
-    }),
-    superDb.fCGProposal.count({
-      where: { tenantId: ctx.tenant.id, state: "OPEN_FOR_VOTE" },
-    }),
-    superDb.userCultureGuide.findFirst({
-      where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
-      orderBy: { version: "desc" },
-    }),
-    superDb.draft.findMany({
-      where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    }),
-    superDb.auditEvent.findMany({
-      where: { tenantId: ctx.tenant.id },
-      orderBy: { seq: "desc" },
-      take: 10,
-    }),
-  ]);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const [committedFcg, openProposals, myUcg, openActions, overdueActions, recentDrafts, recentEvents] =
+    await Promise.all([
+      superDb.firmCultureGuide.findFirst({
+        where: { tenantId: ctx.tenant.id, status: "COMMITTED" },
+        orderBy: { version: "desc" },
+        include: { _count: { select: { rules: true } } },
+      }),
+      superDb.fCGProposal.count({
+        where: { tenantId: ctx.tenant.id, state: "OPEN_FOR_VOTE" },
+      }),
+      superDb.userCultureGuide.findFirst({
+        where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
+        orderBy: { version: "desc" },
+      }),
+      superDb.action.count({
+        where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id, status: "OPEN" },
+      }),
+      superDb.action.count({
+        where: {
+          tenantId: ctx.tenant.id,
+          membershipId: ctx.membership.id,
+          status: "OPEN",
+          dueAt: { lt: todayStart },
+        },
+      }),
+      superDb.draft.findMany({
+        where: { tenantId: ctx.tenant.id, membershipId: ctx.membership.id },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+      superDb.auditEvent.findMany({
+        where: { tenantId: ctx.tenant.id },
+        orderBy: { seq: "desc" },
+        take: 10,
+      }),
+    ]);
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <div className="card">
           <div className="text-xs uppercase tracking-wider text-ink/50">Committed FCG</div>
           <div className="mt-1 text-2xl font-medium">
@@ -68,6 +83,20 @@ export default async function Dashboard({
           </div>
           <Link href={`/${tenantSlug}/ucg`} className="btn mt-3 inline-flex">
             Open UCG
+          </Link>
+        </div>
+        <div className="card">
+          <div className="text-xs uppercase tracking-wider text-ink/50">Open actions</div>
+          <div className="mt-1 text-2xl font-medium">{openActions}</div>
+          <div className="text-xs text-ink/60">
+            {overdueActions > 0 ? (
+              <span className="text-red-600">{overdueActions} overdue</span>
+            ) : (
+              "all on track"
+            )}
+          </div>
+          <Link href={`/${tenantSlug}/actions`} className="btn mt-3 inline-flex">
+            Open actions
           </Link>
         </div>
       </div>
