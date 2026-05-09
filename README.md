@@ -30,7 +30,7 @@ npm run seed                  # creates Acumon Intelligence tenant with FCT + us
 npm run dev
 ```
 
-Open http://localhost:3000, log in as `stuart@johnsonsca.com` (or any seeded user) via magic link, then visit `/acumon/fcg/chat`.
+Open http://localhost:3000, log in as `stuart@acumon.com` (or any seeded user) via magic link, then visit `/acumon/fcg/chat`.
 
 ## Railway deployment
 

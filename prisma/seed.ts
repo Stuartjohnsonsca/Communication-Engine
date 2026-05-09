@@ -21,7 +21,7 @@ async function main() {
   console.log(`Tenant: ${tenant.name} (${tenant.id})`);
 
   const userSeeds = [
-    { email: "stuart@johnsonsca.com", name: "Stuart Johnson", role: "FIRM_ADMIN" as const },
+    { email: "stuart@acumon.com", name: "Stuart Johnson", role: "FIRM_ADMIN" as const },
     { email: "alice.fct@acumon.example", name: "Alice Singh", role: "FCT_MEMBER" as const },
     { email: "bob.fct@acumon.example", name: "Bob Mensah", role: "FCT_MEMBER" as const },
     { email: "carol.fct@acumon.example", name: "Carol Reyes", role: "FCT_MEMBER" as const },
