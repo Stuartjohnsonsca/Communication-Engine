@@ -1,0 +1,722 @@
+// Acumon Communications — Prisma schema
+// Phase 1 entities have full field detail; Phase 2+ entities have minimal fields
+// so future migrations don't churn the schema.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum Jurisdiction {
+  UK
+  EU_IE
+  EU_DE
+  EU_FR
+}
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SANDBOX
+  SUSPENDED
+  TERMINATED
+}
+
+enum Role {
+  FIRM_ADMIN
+  FCT_MEMBER
+  USER
+  SALES_REVIEWER
+  CURATOR
+  ACUMON_ADMIN
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  LEAVER_FROZEN
+  ANONYMISED
+}
+
+enum FCGStatus {
+  DRAFT
+  PROPOSED
+  COMMITTED
+  SUPERSEDED
+}
+
+enum FCGCategory {
+  TONE
+  RESPONSE_TIME
+  SALUTATION
+  SIGNOFF
+  SIGNATURE
+  MANDATORY_PHRASE
+  PROHIBITED_PHRASE
+  ESCALATION
+  REGULATORY
+  LANGUAGE
+}
+
+enum CommChannel {
+  EMAIL
+  SLACK
+  TEAMS
+  LETTER
+  REPORT
+  WHATSAPP_BUSINESS
+  ANY
+}
+
+enum ProposalState {
+  DRAFTING
+  OPEN_FOR_VOTE
+  PASSED
+  FAILED
+  EXPIRED
+  WITHDRAWN
+}
+
+enum VoteDecision {
+  APPROVE
+  REJECT
+  ABSTAIN
+}
+
+enum UCGStatus {
+  DRAFT
+  JUDGED_PASS
+  JUDGED_FAIL
+  COMMITTED
+  SUPERSEDED
+  FROZEN
+}
+
+enum Verdict {
+  PASS
+  FAIL
+  NOT_APPLICABLE
+}
+
+enum DraftKind {
+  EMAIL
+  HOLDING
+  TECHNICAL
+  ACTION_ONLY
+}
+
+enum DraftStatus {
+  PROPOSED
+  EDITED
+  ACCEPTED
+  DISCARDED
+  SENT
+}
+
+enum AuditEventType {
+  TENANT_PROVISIONED
+  USER_INVITED
+  USER_JOINED
+  USER_LEFT
+  MEMBERSHIP_CHANGED
+  CHANNEL_AUTHORISED
+  CHANNEL_REVOKED
+  FCG_DRAFT_CREATED
+  FCG_PROPOSED
+  FCG_VOTE_CAST
+  FCG_COMMITTED
+  FCG_PROPOSAL_FAILED
+  FCG_PROPOSAL_EXPIRED
+  UCG_DRAFTED
+  UCG_JUDGED
+  UCG_COMMITTED
+  UCG_AMENDED
+  COMPLIANCE_RULING
+  COMPLIANCE_OVERRIDE
+  DRAFT_PRODUCED
+  DRAFT_SENT_MARKED
+  DPIA_ATTESTED
+  DSAR_OPENED
+  DSAR_FULFILLED
+  AUDIT_EXPORTED
+}
+
+// ─── NextAuth ──────────────────────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Core ──────────────────────────────────────────────────────────────────
+
+model Tenant {
+  id              String       @id @default(cuid())
+  slug            String       @unique
+  name            String
+  jurisdiction    Jurisdiction @default(UK)
+  status          TenantStatus @default(ACTIVE)
+  isSandbox       Boolean      @default(false)
+  parentTenantId  String?
+  parentTenant    Tenant?      @relation("SandboxOf", fields: [parentTenantId], references: [id])
+  sandboxes       Tenant[]     @relation("SandboxOf")
+  retentionDays   Int          @default(2555)
+  quorumPct       Int          @default(50) // simple majority of total membership
+  votingWindowDays Int         @default(5)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  memberships          Membership[]
+  fcgs                 FirmCultureGuide[]
+  fcgProposals         FCGProposal[]
+  ucgs                 UserCultureGuide[]
+  drafts               Draft[]
+  actions              Action[]
+  auditEvents          AuditEvent[]
+  channels             Channel[]
+  ingestedMessages     IngestedMessage[]
+  meetings             Meeting[]
+  opportunityCandidates OpportunityCandidate[]
+  sentimentSignals     SentimentSignal[]
+  adherenceScores      AdherenceScore[]
+  dpiaAttestations     DPIAAttestation[]
+  dsarRequests         DSARequest[]
+  noGoSubjects         NoGoSubject[]
+
+  @@index([status])
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+
+  accounts    Account[]
+  sessions    Session[]
+  memberships Membership[]
+}
+
+model Membership {
+  id                String           @id @default(cuid())
+  tenantId          String
+  userId            String
+  role              Role             @default(USER)
+  status            MembershipStatus @default(ACTIVE)
+  joinedAt          DateTime         @default(now())
+  leftAt            DateTime?
+  perfDashOptIn     Boolean          @default(false)
+  sentimentOutOptIn Boolean          @default(false)
+  alternateForId    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ucgs                  UserCultureGuide[]
+  proposalsAuthored     FCGProposal[]      @relation("ProposalAuthor")
+  votesCast             FCGVote[]          @relation("Voter")
+  votesCastAlternate    FCGVote[]          @relation("Alternate")
+  drafts                Draft[]
+  actions               Action[]
+  channelAuths          ChannelAuth[]
+  meetingsAsPaperAuthor Meeting[]
+  opportunitiesAssigned OpportunityCandidate[]
+  adherenceScores       AdherenceScore[]
+  auditEventsActor      AuditEvent[]       @relation("AuditActor")
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, role])
+}
+
+// ─── Culture Guides ────────────────────────────────────────────────────────
+
+model FirmCultureGuide {
+  id            String    @id @default(cuid())
+  tenantId      String
+  version       Int
+  status        FCGStatus @default(DRAFT)
+  language      String    @default("en-GB")
+  effectiveAt   DateTime?
+  supersededAt  DateTime?
+  parentId      String?
+  parent        FirmCultureGuide?  @relation("FCGVersionLineage", fields: [parentId], references: [id])
+  children      FirmCultureGuide[] @relation("FCGVersionLineage")
+  committedById String?
+  signatureBlock Json?
+  createdAt     DateTime  @default(now())
+
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rules     FCGRule[]
+  ucgsBased UserCultureGuide[]
+
+  @@unique([tenantId, version])
+  @@index([tenantId, status])
+}
+
+model FCGRule {
+  id              String      @id @default(cuid())
+  tenantId        String
+  fcgId           String
+  externalId      String      // stable id like "rule_xxx" used for citations
+  category        FCGCategory
+  channel         CommChannel @default(ANY)
+  statement       String      @db.Text
+  payload         Json        // structured value e.g. {windowHours:24}
+  rationale       String?     @db.Text
+  mandatory       Boolean     @default(false)
+  priority        Int         @default(100)
+  evidenceRefs    Json?       // array of scan references
+  channelOverrides Json?      // per-channel overrides
+
+  fcg FirmCultureGuide @relation(fields: [fcgId], references: [id], onDelete: Cascade)
+
+  @@unique([fcgId, externalId])
+  @@index([tenantId, fcgId])
+}
+
+model FCGProposal {
+  id             String        @id @default(cuid())
+  tenantId       String
+  parentFcgId    String?
+  title          String
+  body           String        @db.Text
+  diff           Json          // staged add/modify/remove operations
+  proposedById   String
+  isEmergency    Boolean       @default(false)
+  state          ProposalState @default(DRAFTING)
+  votingOpenedAt DateTime?
+  votingClosesAt DateTime?
+  decidedAt      DateTime?
+  newFcgId       String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proposedBy Membership @relation("ProposalAuthor", fields: [proposedById], references: [id])
+  votes      FCGVote[]
+  chatTurns  FCGChatTurn[]
+
+  @@index([tenantId, state])
+}
+
+model FCGChatTurn {
+  id           String   @id @default(cuid())
+  tenantId     String
+  proposalId   String
+  membershipId String?
+  role         String   // "user" | "assistant" | "tool"
+  content      String   @db.Text
+  toolCalls    Json?
+  modelRunId   String?
+  createdAt    DateTime @default(now())
+
+  proposal FCGProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, proposalId])
+}
+
+model FCGVote {
+  id                 String       @id @default(cuid())
+  tenantId           String
+  proposalId         String
+  membershipId       String
+  castByMembershipId String?
+  decision           VoteDecision
+  comment            String?
+  castAt             DateTime     @default(now())
+
+  proposal       FCGProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  voter          Membership  @relation("Voter", fields: [membershipId], references: [id])
+  castByAlternate Membership? @relation("Alternate", fields: [castByMembershipId], references: [id])
+
+  @@unique([proposalId, membershipId])
+  @@index([tenantId])
+}
+
+model UserCultureGuide {
+  id            String    @id @default(cuid())
+  tenantId      String
+  membershipId  String
+  version       Int
+  status        UCGStatus @default(DRAFT)
+  basedOnFcgId  String
+  parentId      String?
+  parent        UserCultureGuide?  @relation("UCGVersionLineage", fields: [parentId], references: [id])
+  children      UserCultureGuide[] @relation("UCGVersionLineage")
+  language      String    @default("en-GB")
+  signatureBlock Json?
+  judgeStatus   String?   // "pending" | "pass" | "fail" | "partial"
+  committedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership        @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  basedOnFcg FirmCultureGuide  @relation(fields: [basedOnFcgId], references: [id])
+  rules      UCGRule[]
+  rulings    ComplianceRuling[]
+  chatTurns  UCGChatTurn[]
+
+  @@unique([membershipId, version])
+  @@index([tenantId, status])
+}
+
+model UCGRule {
+  id              String      @id @default(cuid())
+  tenantId        String
+  ucgId           String
+  externalId      String
+  category        FCGCategory
+  channel         CommChannel @default(ANY)
+  statement       String      @db.Text
+  payload         Json
+  narrowsFcgRule  String?     // FCGRule.externalId
+  evidenceRefs    Json?
+  channelOverrides Json?
+
+  ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
+
+  @@unique([ucgId, externalId])
+  @@index([tenantId, ucgId])
+}
+
+model UCGChatTurn {
+  id           String   @id @default(cuid())
+  tenantId     String
+  ucgId        String
+  role         String
+  content      String   @db.Text
+  toolCalls    Json?
+  modelRunId   String?
+  createdAt    DateTime @default(now())
+
+  ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, ucgId])
+}
+
+model ComplianceRuling {
+  id            String   @id @default(cuid())
+  tenantId      String
+  ucgId         String
+  ucgRuleId     String?
+  fcgRuleId     String?
+  verdict       Verdict
+  severity      String?  // "blocking" | "advisory"
+  explanation   String   @db.Text
+  suggestedFix  String?  @db.Text
+  judgeModel    String
+  judgeRunId    String?
+  appealedById  String?
+  overrideById  String?
+  createdAt     DateTime @default(now())
+
+  ucg UserCultureGuide @relation(fields: [ucgId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, ucgId])
+}
+
+// ─── Drafting ──────────────────────────────────────────────────────────────
+
+model Draft {
+  id                 String      @id @default(cuid())
+  tenantId           String
+  membershipId       String
+  ingestedMessageId  String?
+  kind               DraftKind   @default(EMAIL)
+  status             DraftStatus @default(PROPOSED)
+  channel            CommChannel @default(EMAIL)
+  language           String      @default("en-GB")
+  subject            String?
+  body               String      @db.Text
+  citations          Json?
+  holdingRequired    Boolean     @default(false)
+  holdingReason      String?
+  fcgWindowDeadline  DateTime?
+  noGoSubjectHit     Boolean     @default(false)
+  researchTaskRequired Boolean   @default(false)
+  modelRunId         String?
+  fcgVersionUsed     Int?
+  ucgVersionUsed     Int?
+  createdAt          DateTime    @default(now())
+  sentMarkedAt       DateTime?
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership       Membership        @relation(fields: [membershipId], references: [id])
+  ingestedMessage  IngestedMessage?  @relation(fields: [ingestedMessageId], references: [id])
+  actions          Action[]
+
+  @@index([tenantId, membershipId, status])
+}
+
+model Action {
+  id            String    @id @default(cuid())
+  tenantId      String
+  membershipId  String
+  draftId       String?
+  title         String
+  detail        String?   @db.Text
+  type          String    @default("task") // task | calendar | followup | research
+  dueAt         DateTime?
+  status        String    @default("OPEN")
+  externalSystem String?
+  externalId    String?
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership  @relation(fields: [membershipId], references: [id])
+  draft      Draft?      @relation(fields: [draftId], references: [id])
+
+  @@index([tenantId, membershipId, status])
+}
+
+// ─── Audit ─────────────────────────────────────────────────────────────────
+
+model AuditEvent {
+  id                String         @id @default(cuid())
+  tenantId          String
+  seq               BigInt         // tenant-scoped monotonic sequence
+  eventType         AuditEventType
+  actorMembershipId String?
+  subjectType       String
+  subjectId         String
+  payload           Json
+  prevHash          String
+  hash              String
+  createdAt         DateTime       @default(now())
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  Membership? @relation("AuditActor", fields: [actorMembershipId], references: [id])
+
+  @@unique([tenantId, seq])
+  @@index([tenantId, eventType, createdAt])
+}
+
+// ─── Phase 2+ entities (minimal — schema present so migrations don't churn)
+
+model Channel {
+  id          String   @id @default(cuid())
+  tenantId    String
+  kind        String   // M365 | GOOGLE | SLACK | SHAREPOINT | IMANAGE | TEAMS | ZOOM | WHATSAPP_BUSINESS
+  scope       Json?
+  status      String   @default("INACTIVE")
+  dpiaApproved Boolean @default(false)
+  createdAt   DateTime @default(now())
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auths  ChannelAuth[]
+  messages IngestedMessage[]
+
+  @@index([tenantId, kind])
+}
+
+model ChannelAuth {
+  id              String    @id @default(cuid())
+  tenantId        String
+  channelId       String
+  membershipId    String?
+  encryptedTokens String    @db.Text
+  scope           String?   @db.Text
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  channel    Channel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id])
+
+  @@index([tenantId, channelId])
+}
+
+model IngestedMessage {
+  id          String   @id @default(cuid())
+  tenantId    String
+  channelId   String?
+  externalId  String?
+  threadId    String?
+  direction   String   // IN | OUT
+  sender      String?
+  recipients  Json?
+  subject     String?
+  body        String   @db.Text
+  sentAt      DateTime?
+  hash        String?
+  redactFlags Json?
+  createdAt   DateTime @default(now())
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel Channel? @relation(fields: [channelId], references: [id])
+  drafts  Draft[]
+
+  @@index([tenantId, threadId])
+}
+
+model Meeting {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  externalId            String?
+  title                 String
+  startsAt              DateTime
+  paperAuthorMembershipId String?
+  transcriptOptIns      Json?
+  createdAt             DateTime @default(now())
+
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paperAuthor  Membership? @relation(fields: [paperAuthorMembershipId], references: [id])
+
+  @@index([tenantId, startsAt])
+}
+
+model OpportunityCandidate {
+  id                     String   @id @default(cuid())
+  tenantId               String
+  jurisdiction           String?
+  serviceLine            String?
+  classification         String?
+  confidence             Float?
+  rationale              String?  @db.Text
+  status                 String   @default("NEW")
+  reviewerMembershipId   String?
+  partnerType            String   @default("DEFAULT")
+  payload                Json?
+  createdAt              DateTime @default(now())
+
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reviewer Membership? @relation(fields: [reviewerMembershipId], references: [id])
+
+  @@index([tenantId, status])
+}
+
+model SentimentSignal {
+  id            String   @id @default(cuid())
+  tenantId      String
+  ingestedMessageId String?
+  classification String  // EXTREME_NEG | EXTREME_POS | NEUTRAL
+  confidence    Float?
+  trigger       String?
+  evidence      Json?
+  shouldEscalate Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, classification])
+}
+
+model AdherenceScore {
+  id           String   @id @default(cuid())
+  tenantId     String
+  membershipId String
+  period       String   // YYYY-MM
+  payload      Json     // per-dimension scores
+  overall      Float
+  sampleN      Int
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id])
+
+  @@unique([membershipId, period])
+  @@index([tenantId, period])
+}
+
+model DPIAAttestation {
+  id           String   @id @default(cuid())
+  tenantId     String
+  version      Int
+  scope        Json
+  signedByName String
+  signedByRole String
+  signedAt     DateTime
+  expiresAt    DateTime?
+  documentRef  String?
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model DSARequest {
+  id           String   @id @default(cuid())
+  tenantId     String
+  subjectType  String   // USER | COUNTERPARTY
+  subjectIdent String
+  kind         String   // ACCESS | RECTIFY | ERASE | RESTRICT | PORT | OBJECT
+  status       String   @default("OPEN")
+  openedAt     DateTime @default(now())
+  dueAt        DateTime?
+  fulfilledAt  DateTime?
+  packageRef   String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+}
+
+model NoGoSubject {
+  id        String   @id @default(cuid())
+  tenantId  String
+  label     String
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, label])
+}
+
+model ModelRun {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  purpose   String
+  model     String
+  inputHash String?
+  outputHash String?
+  latencyMs Int?
+  inputTokens Int?
+  outputTokens Int?
+  cacheReadTokens Int?
+  cacheCreationTokens Int?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, purpose, createdAt])
+}
