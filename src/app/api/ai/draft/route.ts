@@ -90,6 +90,53 @@ export async function POST(req: Request) {
     noGoSubjects: noGo.map((n) => n.label),
   });
 
+  type ActionCreate = {
+    tenantId: string;
+    membershipId: string;
+    title: string;
+    detail: string | null;
+    type: "task" | "calendar" | "followup" | "research";
+    dueAt: Date | null;
+  };
+
+  const llmActions: ActionCreate[] = draft.actions.map((a) => ({
+    tenantId: ctx.tenant.id,
+    membershipId: ctx.membership.id,
+    title: a.title,
+    detail: a.detail ?? null,
+    type: a.type,
+    dueAt: a.dueAt ? new Date(a.dueAt) : null,
+  }));
+
+  // Synthesise actions from the structured flags so the new lifecycle
+  // (complete/dismiss/reopen) has something concrete to track. We only add
+  // them when the LLM did not already emit an action of the same type, to
+  // avoid double-counting when the prompt covers both surfaces.
+  const synthesised: ActionCreate[] = [];
+  const subjectLabel = parsed.data.inbound.subject?.trim() || "(no subject)";
+
+  if (draft.holdingRequired && !llmActions.some((a) => a.type === "followup")) {
+    synthesised.push({
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
+      title: `Send substantive follow-up: ${subjectLabel}`,
+      detail: draft.holdingReason ?? null,
+      type: "followup",
+      dueAt: draft.fcgWindowDeadline ? new Date(draft.fcgWindowDeadline) : null,
+    });
+  }
+
+  if (draft.researchTaskRequired && !llmActions.some((a) => a.type === "research")) {
+    synthesised.push({
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
+      title: `Research before responding: ${subjectLabel}`,
+      detail: null,
+      type: "research",
+      dueAt: null,
+    });
+  }
+
   const created = await superDb.draft.create({
     data: {
       tenantId: ctx.tenant.id,
@@ -108,14 +155,7 @@ export async function POST(req: Request) {
       fcgVersionUsed: fcg.version,
       ucgVersionUsed: ucg?.version ?? null,
       actions: {
-        create: draft.actions.map((a) => ({
-          tenantId: ctx.tenant.id,
-          membershipId: ctx.membership.id,
-          title: a.title,
-          detail: a.detail ?? null,
-          type: a.type,
-          dueAt: a.dueAt ? new Date(a.dueAt) : null,
-        })),
+        create: [...llmActions, ...synthesised],
       },
     },
     include: { actions: true },
@@ -127,7 +167,12 @@ export async function POST(req: Request) {
     actorMembershipId: ctx.membership.id,
     subjectType: "Draft",
     subjectId: created.id,
-    payload: { kind: created.kind, holdingRequired: created.holdingRequired, actions: created.actions.length },
+    payload: {
+      kind: created.kind,
+      holdingRequired: created.holdingRequired,
+      actions: created.actions.length,
+      autoSpawnedActions: synthesised.length,
+    },
   });
 
   return NextResponse.json({ draft: created, output: draft });
