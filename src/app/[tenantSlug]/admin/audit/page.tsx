@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
+import VerifyChainButton from "./VerifyChainButton";
 
 export default async function AuditPage({
   params,
@@ -27,15 +28,18 @@ export default async function AuditPage({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Audit log</h1>
-        {hasPermission(ctx.membership.role, "audit:export") && (
-          <Link
-            className="btn btn-primary"
-            href={`/api/audit/export?tenant=${tenantSlug}`}
-            prefetch={false}
-          >
-            Export NDJSON
-          </Link>
-        )}
+        <div className="flex items-start gap-3">
+          <VerifyChainButton tenantSlug={tenantSlug} />
+          {hasPermission(ctx.membership.role, "audit:export") && (
+            <Link
+              className="btn btn-primary"
+              href={`/api/audit/export?tenant=${tenantSlug}`}
+              prefetch={false}
+            >
+              Export NDJSON
+            </Link>
+          )}
+        </div>
       </div>
       <p className="text-xs text-ink/60">
         Append-only. Hash-chained per tenant. Showing the most recent 200 events.
