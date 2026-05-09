@@ -28,6 +28,19 @@ export default async function ProposalPage({
   const myVote = proposal.votes.find((v) => v.membershipId === ctx.membership.id);
   const ops = (proposal.diff as { ops?: { tool: string; input: Record<string, unknown> }[] })?.ops ?? [];
 
+  // PRD §5.2.2 — preview the propagation impact. Every active UCG (not
+  // already pegged to a future FCG) will be flagged with a 10-working-day
+  // grace period if this proposal passes. The judge re-runs against each;
+  // some clear immediately and the rest enter the grace window. We don't
+  // try to predict which clear here — that would mean running the full
+  // judge against every UCG on every page load.
+  const impactedUcgCount =
+    proposal.state === "DRAFTING" || proposal.state === "OPEN_FOR_VOTE"
+      ? await superDb.userCultureGuide.count({
+          where: { tenantId: ctx.tenant.id, status: { in: ["COMMITTED", "CONFLICTED"] } },
+        })
+      : 0;
+
   return (
     <div className="space-y-4">
       <Link href={`/${tenantSlug}/fcg`} className="text-sm">
@@ -69,6 +82,25 @@ export default async function ProposalPage({
           })}
         </ol>
       </div>
+
+      {(proposal.state === "DRAFTING" || proposal.state === "OPEN_FOR_VOTE") && (
+        <div className="card border-amber-200 bg-amber-50/40">
+          <h2 className="text-base font-medium">If this passes</h2>
+          <p className="mt-1 text-xs text-ink/70">
+            {impactedUcgCount === 0 ? (
+              <>No User Culture Guides exist yet — nothing to propagate.</>
+            ) : (
+              <>
+                <strong>{impactedUcgCount}</strong> active User Culture Guide
+                {impactedUcgCount === 1 ? " will be" : "s will be"} re-judged against the
+                amended FCG. Any that don&rsquo;t pass enter a 10 working-day grace period
+                (PRD §5.2.2); after that, conflicting rules auto-suspend until the user
+                recommits a clean version.
+              </>
+            )}
+          </p>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="text-base font-medium">Votes</h2>
