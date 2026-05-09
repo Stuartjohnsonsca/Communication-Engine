@@ -26,6 +26,11 @@ enum TenantStatus {
   ACTIVE
   SANDBOX
   SUSPENDED
+  /// PRD §14.4 — termination has been noticed but the wind-down window is
+  /// still open. The tenant remains operational so the Client can pull their
+  /// export package; hard-deletion runs after `terminationEffectiveAt` (90d
+  /// default). The notice can be reversed during this window.
+  TERMINATING
   TERMINATED
 }
 
@@ -214,6 +219,10 @@ enum AuditEventType {
   SANDBOX_MEMBER_ADDED
   SANDBOX_FCG_PROMOTED
   SANDBOX_OUTCOME_RECORDED
+  TENANT_TERMINATION_NOTICED
+  TENANT_TERMINATION_REVERSED
+  TENANT_TERMINATION_EXPORT_GENERATED
+  TENANT_HARD_DELETED
 }
 
 enum BillingPeriodStatus {
@@ -429,6 +438,24 @@ model Tenant {
   pricingCmkEnabled                    Boolean      @default(false)
   pricingCmkMinor                      Int          @default(50000)
   sandboxBillingFreeUntil              DateTime?
+  /// PRD §14.4 termination lifecycle. `terminationNoticeAt` is when the
+  /// Client (or Acumon, on Client request) noticed termination; status
+  /// transitions ACTIVE → TERMINATING. `terminationEffectiveAt` is the
+  /// hard-delete cut-off (default = noticeAt + 90d per PRD). `terminationCompletedAt`
+  /// is the moment the cron sweep actually ran the deletion and moved status
+  /// to TERMINATED. The notice can be reversed any time before completion.
+  terminationNoticeAt                  DateTime?
+  terminationByName                    String?
+  terminationReason                    String?      @db.Text
+  terminationEffectiveAt               DateTime?
+  terminationCompletedAt               DateTime?
+  /// Reference to the most recent export package generated for the wind-down.
+  /// One per tenant; regenerating overwrites.
+  terminationExportPackageId           String?
+  /// Statutory retention floor — audit logs and DPIA attestations remain
+  /// readable until this date even after `terminationCompletedAt`. Null
+  /// means "use the default §12.5 schedule" applied at delete time.
+  terminationStatutoryRetentionUntil   DateTime?
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 
@@ -452,6 +479,7 @@ model Tenant {
   billingPeriods        BillingPeriod[]
   billingUserSnapshots  BillingUserSnapshot[]
   signOffQuestions      SignOffQuestion[]
+  terminationExports    TenantTerminationExport[]
 
   @@index([status])
 }
@@ -1498,4 +1526,37 @@ model XclReidentificationTest {
   createdAt         DateTime @default(now())
 
   @@index([conductedAt])
+}
+
+
+// ─── Tenant Termination Export (PRD §14.4) ────────────────────────────────
+
+/// Snapshot of the export bundle generated for a terminating tenant
+/// (PRD §14.4). Holds the JSON package alongside the timestamp and the
+/// operator who generated it. The package format is documented per §15.3
+/// (machine-readable JSON; CSV / PDF derivations rendered on demand from
+/// this snapshot in v1).
+///
+/// One row per tenant per generation; the most recent is referenced from
+/// `Tenant.terminationExportPackageId`. Older packages are retained for
+/// the wind-down period and removed by the hard-delete sweep.
+model TenantTerminationExport {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  generatedAt             DateTime @default(now())
+  generatedByMembershipId String?
+  generatedByName         String?
+  /// JSON bundle: tenant settings, FCG versions + rules, UCG versions + rules,
+  /// drafts (with their inbound snapshots), actions, meetings + records,
+  /// channels, audit chain, DPIA attestations, DSAR records, billing periods,
+  /// sign-off questions.
+  payload                 Json
+  /// Compact size in bytes for quick UI display + sanity check.
+  bytes                   Int
+  /// Tally captured at generation for the operator UI.
+  counts                  Json
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, generatedAt])
 }

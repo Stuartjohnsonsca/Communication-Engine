@@ -52,6 +52,11 @@ export default async function TenantLayout({
   ) {
     nav.push({ href: `/${tenantSlug}/admin/sandbox`, label: "Sandbox" });
   }
+  // PRD §14.4 termination + §15.3 on-demand export. Visible to anyone who
+  // can read the lifecycle status; the page gates manage actions separately.
+  if (hasPermission(ctx.membership.role, "termination:read")) {
+    nav.push({ href: `/${tenantSlug}/admin/termination`, label: "Termination" });
+  }
   // PRD §11 Cross-Client Learning. Visible to anyone with xcl:read in this
   // tenant (the page itself decides whether to render the curator console
   // based on the Acumon-tenant gate).

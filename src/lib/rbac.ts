@@ -91,6 +91,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "signoff:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "signoff:manage":      ["FIRM_ADMIN"],
 
+  // Tenant Termination (PRD §14.4). Notice / reverse / export generation are
+  // controllership decisions — restricted to the FIRM_ADMIN. The FCT can read
+  // the lifecycle status for governance oversight (any export pulled is in
+  // their concern) but cannot trigger termination.
+  "termination:read":    ["FIRM_ADMIN", "FCT_MEMBER"],
+  "termination:manage":  ["FIRM_ADMIN"],
+
   // Sandbox / Dry-Run (PRD §14.2). Provisioning and outcome recording are
   // operator decisions — restricted to the FIRM_ADMIN of the parent tenant.
   // FCT reads the sandbox status (cohort, candidate FCGs) for governance

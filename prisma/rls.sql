@@ -31,7 +31,8 @@ DECLARE
     'DPIAAttestation','DSARequest','NoGoSubject',
     'BillingPeriod','BillingUserSnapshot',
     'SignOffQuestion',
-    'MeetingRecord'
+    'MeetingRecord',
+    'TenantTerminationExport'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP
