@@ -65,6 +65,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "billing:read":        ["FIRM_ADMIN"],
   "billing:manage":      ["FIRM_ADMIN"],
 
+  // Roadmap (PRD §16). The product roadmap is published to every Client per
+  // §15.3 switching/lock-in posture, so any signed-in role can read. Mutating
+  // status / exit criteria is operator-only and additionally gated to the
+  // Acumon-internal tenant in the page handler — there's no concept of a
+  // per-Client roadmap, only one product plan.
+  "roadmap:read":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "roadmap:manage":      ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
   // Acumon side
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],

@@ -186,6 +186,9 @@ enum AuditEventType {
   BILLING_PLAN_UPDATED
   BILLING_PERIOD_CLOSED
   BILLING_PERIOD_REOPENED
+  ROADMAP_PHASE_UPDATED
+  ROADMAP_EXIT_CRITERION_MET
+  ROADMAP_EXIT_CRITERION_UNMET
 }
 
 enum BillingPeriodStatus {
@@ -198,6 +201,12 @@ enum MeetingPaperStatus {
   DRAFTED
   EDITED
   ISSUED
+}
+
+enum RoadmapPhaseStatus {
+  PLANNED
+  ACTIVE
+  COMPLETE
 }
 
 // ─── NextAuth ──────────────────────────────────────────────────────────────
@@ -1088,4 +1097,58 @@ model BillingUserSnapshot {
 
   @@index([tenantId, periodId])
   @@index([periodId, isBillable])
+}
+
+// ─── Roadmap (PRD §16) ─────────────────────────────────────────────────────
+
+/// Product roadmap. Global (no tenantId) — same five-phase plan shown to every
+/// Client per PRD §15.3 switching/lock-in posture, so prospective and current
+/// Clients can see when an asked-for feature is expected. Status transitions
+/// (PLANNED → ACTIVE → COMPLETE) and exit-criterion ticks are mutated by an
+/// Acumon operator (FIRM_ADMIN of the "acumon" tenant or ACUMON_ADMIN).
+///
+/// Audit events for roadmap mutations are written against the *operator's*
+/// tenant (the audit chain is per-tenant). The roadmap rows themselves are
+/// not under RLS.
+model RoadmapPhase {
+  id                String             @id @default(cuid())
+  /// Stable short code from the PRD — P0, P1, P2, P3, P4. Used in URLs and audit payloads.
+  code              String             @unique
+  /// Sort order — kept explicit so an inserted "P1.5" stays in place.
+  ordinal           Int
+  name              String
+  /// Window expressed in months from product start (PRD §16). End is inclusive.
+  windowMonthsStart Int
+  windowMonthsEnd   Int
+  status            RoadmapPhaseStatus @default(PLANNED)
+  /// Bullet list of in-scope items copied from the PRD column.
+  scope             String[]
+  /// Free-form operator notes — pinned commentary, links to release notes, etc.
+  notes             String?            @db.Text
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  exitCriteria RoadmapExitCriterion[]
+
+  @@index([ordinal])
+}
+
+/// One row per exit criterion within a phase. Operator can tick each off as it
+/// is met (with timestamp + signer name) so the roadmap reflects real progress.
+model RoadmapExitCriterion {
+  id        String    @id @default(cuid())
+  phaseId   String
+  ordinal   Int
+  text      String    @db.Text
+  metAt     DateTime?
+  metByName String?
+  notes     String?   @db.Text
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  phase RoadmapPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+
+  @@index([phaseId, ordinal])
 }
