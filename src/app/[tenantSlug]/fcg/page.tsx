@@ -35,9 +35,14 @@ export default async function FCGIndex({
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Firm Culture Guide</h1>
-        <Link href={`/${tenantSlug}/fcg/chat`} className="btn btn-primary">
-          New proposal (chat)
-        </Link>
+        <div className="flex gap-2">
+          <Link href={`/${tenantSlug}/fcg/wizard`} className="btn btn-primary">
+            Start wizard
+          </Link>
+          <Link href={`/${tenantSlug}/fcg/chat`} className="btn">
+            Free-form chat
+          </Link>
+        </div>
       </div>
 
       <div className="card">

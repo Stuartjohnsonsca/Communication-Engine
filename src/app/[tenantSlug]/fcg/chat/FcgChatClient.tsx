@@ -93,24 +93,24 @@ export default function FcgChatClient({
           ))}
         </div>
 
-        <div className="mt-3 flex gap-2">
+        <form
+          className="mt-3 flex gap-2 shrink-0"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send();
+          }}
+        >
           <input
             className="input"
-            placeholder="Ask Claude…"
+            placeholder="Type and press Enter…"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            disabled={pending}
+            autoFocus
           />
-          <button className="btn btn-primary" onClick={send} disabled={pending}>
+          <button className="btn btn-primary" type="submit" disabled={pending || !draft.trim()}>
             {pending ? "…" : "Send"}
           </button>
-        </div>
+        </form>
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       </div>
 

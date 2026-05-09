@@ -15,21 +15,11 @@ type DraftOut = {
   noGoSubjectHit: boolean;
 };
 
-const SAMPLE = `From: Anna Patel <anna.patel@bigcorp.example>
-Subject: Q3 advice — when can you reply?
-
-Hi, I sent over the draft engagement letter on Tuesday and haven't heard back.
-Can you confirm receipt and let me know when we'll have a substantive answer?
-Our board meets next Friday.
-
-Thanks,
-Anna`;
-
 export default function NewDraftClient({ tenantSlug }: { tenantSlug: string }) {
   const [channel, setChannel] = useState("email");
-  const [body, setBody] = useState(SAMPLE);
-  const [subject, setSubject] = useState("Re: Q3 advice — when can you reply?");
-  const [sender, setSender] = useState("anna.patel@bigcorp.example");
+  const [body, setBody] = useState("");
+  const [subject, setSubject] = useState("");
+  const [sender, setSender] = useState("");
   const [draft, setDraft] = useState<DraftOut | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
