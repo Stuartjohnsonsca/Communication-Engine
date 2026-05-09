@@ -176,6 +176,49 @@ export async function meetingPaperSystem(ctx: MeetingPaperContext): Promise<Syst
   ]);
 }
 
+export type MeetingRecordContext = {
+  /// "summary" or "minutes" — the agent uses this to pick the document shape
+  /// (PRD §7.5 distinguishes a discursive Summary from formal Minutes).
+  kind: "summary" | "minutes";
+  fcg: unknown;
+  meeting: unknown;
+  participants: unknown[];
+  /// Original meeting paper (agenda, discussion paper, open questions). When
+  /// present the agent writes Minutes that track the agenda items in order so
+  /// the audit reader can match up "what was tabled" with "what was decided".
+  priorPaper?: unknown;
+};
+export async function meetingRecordSystem(ctx: MeetingRecordContext): Promise<SystemBlock[]> {
+  const sys = await loadPrompt("meeting-minutes");
+  return buildSystem([
+    { text: sys, cache: true },
+    {
+      text:
+        "# Authoritative Firm Culture Guide (drives tone, mandatory phrases, signature)\n\n" +
+        "```json\n" +
+        JSON.stringify(ctx.fcg, null, 2) +
+        "\n```",
+      cache: true,
+    },
+    {
+      text: `# Document kind\n\nProduce a **${ctx.kind === "minutes" ? "formal Minutes" : "Summary"}** record. ${ctx.kind === "minutes" ? "Numbered, formal, with explicit Decisions and Actions sections; suitable for the audit record." : "Discursive prose summary; shorter than formal minutes; covers what was discussed and any agreed next steps but does not need numbered items."}`,
+      cache: false,
+    },
+    ...(ctx.priorPaper
+      ? [
+          {
+            text:
+              "# Pre-meeting paper (agenda + discussion paper that was tabled)\n\n" +
+              "```json\n" +
+              JSON.stringify(ctx.priorPaper, null, 2) +
+              "\n```",
+            cache: true,
+          },
+        ]
+      : []),
+  ]);
+}
+
 export async function draftSystem(ctx: { fcg: unknown; ucg: unknown; kb?: unknown[] }): Promise<SystemBlock[]> {
   const sys = await loadPrompt("draft");
   return buildSystem([

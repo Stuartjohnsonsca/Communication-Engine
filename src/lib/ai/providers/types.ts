@@ -19,7 +19,8 @@ export type AgentRole =
   | "adherence"
   | "sentiment"
   | "opportunity"
-  | "meeting-paper";
+  | "meeting-paper"
+  | "meeting-minutes";
 
 export type SystemBlock = {
   text: string;

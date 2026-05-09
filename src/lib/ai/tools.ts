@@ -275,6 +275,39 @@ export const meetingPaperTool: ToolDef = {
   },
 };
 
+export const meetingRecordTool: ToolDef = {
+  name: "respond_with_meeting_record",
+  description:
+    "Return the structured meeting record (Summary or Formal Minutes per PRD §7.5). The body is markdown; `decisions` and `actions` are separate arrays so the Chair can lift them into the Action backlog after approval. Terminates the turn — call exactly once.",
+  schema: {
+    type: "object",
+    properties: {
+      body: { type: "string" },
+      decisions: {
+        type: "array",
+        items: { type: "string", maxLength: 400 },
+        maxItems: 30,
+        default: [],
+      },
+      actions: {
+        type: "array",
+        maxItems: 30,
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string", maxLength: 200 },
+            owner: { type: ["string", "null"], maxLength: 120 },
+            dueAt: { type: ["string", "null"] },
+          },
+          required: ["title"],
+        },
+        default: [],
+      },
+    },
+    required: ["body"],
+  },
+};
+
 export const opportunityTool: ToolDef = {
   name: "respond_with_opportunity",
   description:

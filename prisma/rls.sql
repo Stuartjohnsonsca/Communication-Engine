@@ -30,7 +30,8 @@ DECLARE
     'OpportunityCandidate','OpportunityComment','SentimentSignal','AdherenceScore','CommunicationAdherence',
     'DPIAAttestation','DSARequest','NoGoSubject',
     'BillingPeriod','BillingUserSnapshot',
-    'SignOffQuestion'
+    'SignOffQuestion',
+    'MeetingRecord'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

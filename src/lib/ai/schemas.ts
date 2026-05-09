@@ -185,3 +185,30 @@ export const meetingPaper = z.object({
   openQuestions: z.array(z.string().max(400)).default([]),
 });
 export type MeetingPaper = z.infer<typeof meetingPaper>;
+
+// ─── Meeting Summary / Minutes (PRD §7.5) ────────────────────────────────
+
+/// Summary or formal Minutes drafted from an ingested transcript. The body
+/// is markdown; the agent decides the headings/section structure based on
+/// `kind` (a Summary is shorter and discursive; Minutes are formal,
+/// numbered, with explicit Decisions and Actions sections per FCG tone).
+/// `actions` is a separate array so the Chair can lift items into the
+/// Action backlog after approval. `decisions` is similarly separated for
+/// audit / search.
+export const meetingRecordKind = z.enum(["summary", "minutes"]);
+export type MeetingRecordKindInput = z.infer<typeof meetingRecordKind>;
+
+export const meetingRecord = z.object({
+  body: z.string().min(1),
+  decisions: z.array(z.string().max(400)).default([]),
+  actions: z
+    .array(
+      z.object({
+        title: z.string().max(200),
+        owner: z.string().max(120).nullable().optional(),
+        dueAt: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+});
+export type MeetingRecord = z.infer<typeof meetingRecord>;

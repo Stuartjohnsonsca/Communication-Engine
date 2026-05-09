@@ -194,6 +194,15 @@ enum AuditEventType {
   SIGNOFF_QUESTION_UPDATED
   SIGNOFF_QUESTION_DECIDED
   SIGNOFF_QUESTION_REOPENED
+  MEETING_NOTE_TAKING_DISCLOSED
+  MEETING_NOTE_TAKING_OPTED_OUT
+  MEETING_NOTE_TAKING_BLOCKED
+  MEETING_TRANSCRIPT_INGESTED
+  MEETING_SUMMARY_DRAFTED
+  MEETING_SUMMARY_APPROVED
+  MEETING_MINUTES_DRAFTED
+  MEETING_MINUTES_APPROVED
+  MEETING_MINUTES_CIRCULATED
 }
 
 enum BillingPeriodStatus {
@@ -206,6 +215,32 @@ enum MeetingPaperStatus {
   DRAFTED
   EDITED
   ISSUED
+}
+
+/// PRD §7.5 — post-meeting record, either a Summary or Formal Minutes. Kind
+/// is fixed at row creation; status moves DRAFTED → EDITED → APPROVED →
+/// CIRCULATED. Summaries don't strictly need to circulate but the column is
+/// shared so the lifecycle is uniform.
+enum MeetingRecordKind {
+  SUMMARY
+  MINUTES
+}
+
+enum MeetingRecordStatus {
+  DRAFTED
+  EDITED
+  APPROVED
+  CIRCULATED
+}
+
+/// PRD §7.5 — provenance of an ingested meeting transcript. MANUAL is the
+/// paste-into-the-form path until the platform integrations (Tier 2 in §10.2)
+/// are wired up to ingest automatically.
+enum TranscriptSource {
+  TEAMS
+  ZOOM
+  MEET
+  MANUAL
 }
 
 enum RiskSeverity {
@@ -405,6 +440,7 @@ model Membership {
   channelAuths          ChannelAuth[]
   meetingsAsPaperAuthor Meeting[]
   meetingsCreated       Meeting[]                @relation("MeetingCreator")
+  meetingsAsChair       Meeting[]                @relation("MeetingChair")
   opportunitiesAssigned OpportunityCandidate[]   @relation("OpportunityReviewer")
   opportunitiesDecided  OpportunityCandidate[]   @relation("OpportunityDecider")
   opportunityComments   OpportunityComment[]     @relation("OpportunityCommentAuthor")
@@ -803,6 +839,11 @@ model Meeting {
   durationMin             Int                @default(60)
   createdByMembershipId   String?
   paperAuthorMembershipId String?
+  /// PRD §7.5 — the meeting Chair approves Minutes before circulation.
+  /// Defaults to the paper-author at creation time; an FCT/admin can reassign
+  /// on the detail page (e.g. for committee meetings where the Chair is
+  /// distinct from whoever drafted the agenda).
+  chairMembershipId       String?
   transcriptOptIns        Json?
   /// Working days of lead time the FCG demanded for paper issuance at the
   /// time of creation. Snapshotted so the short-notice flag remains stable
@@ -817,13 +858,30 @@ model Meeting {
   paperIssuedAt           DateTime?
   paperFcgVersionUsed     Int?
   paperModelRunId         String?
+  /// PRD §7.5 note-taking lifecycle. `noteTakingDisclosedAt` records when the
+  /// pre-meeting disclosure was sent. `noteTakingBlocked` is set true (with a
+  /// reason) once any participant opts out — transcript ingestion and
+  /// summary/minutes generation refuse to run while blocked. Manually
+  /// clearing the block requires audited override (out of scope for v1).
+  noteTakingDisclosedAt   DateTime?
+  noteTakingBlocked       Boolean            @default(false)
+  noteTakingBlockReason   String?            @db.Text
+  /// PRD §7.5 — the transcript ingested from the meeting platform (Teams,
+  /// Zoom, Meet) or pasted manually as a fallback. The body is the raw text;
+  /// agents read this directly. Stored on the Meeting row because each
+  /// meeting has at most one canonical transcript — re-uploading replaces.
+  transcriptBody          String?            @db.Text
+  transcriptSource        TranscriptSource?
+  transcriptIngestedAt    DateTime?
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt
 
   tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy    Membership?          @relation("MeetingCreator", fields: [createdByMembershipId], references: [id])
   paperAuthor  Membership?          @relation(fields: [paperAuthorMembershipId], references: [id])
+  chair        Membership?          @relation("MeetingChair", fields: [chairMembershipId], references: [id])
   participants MeetingParticipant[]
+  records      MeetingRecord[]
 
   @@index([tenantId, startsAt])
   @@index([tenantId, paperStatus])
@@ -836,19 +894,61 @@ model Meeting {
 /// Tenant relation: the row is scoped via Meeting.tenantId and `tenantId` is
 /// kept as a denormalised field for index/query efficiency.
 model MeetingParticipant {
-  id               String   @id @default(cuid())
-  tenantId         String
-  meetingId        String
-  membershipId     String?
-  name             String
-  email            String?
-  isExternal       Boolean  @default(false)
-  isMeetingCreator Boolean  @default(false)
-  createdAt        DateTime @default(now())
+  id                     String    @id @default(cuid())
+  tenantId               String
+  meetingId              String
+  membershipId           String?
+  name                   String
+  email                  String?
+  isExternal             Boolean   @default(false)
+  isMeetingCreator       Boolean   @default(false)
+  /// PRD §7.5 — external participants must be presented with an opt-out
+  /// before joining. If any participant opts out, transcript ingestion is
+  /// disabled for the whole meeting (see `Meeting.noteTakingBlocked`).
+  /// `noteTakingOptedOut` is the per-participant flag; `optedOutAt` is the
+  /// timestamp; `optOutReason` is optional free text from the participant.
+  noteTakingOptedOut     Boolean   @default(false)
+  noteTakingOptedOutAt   DateTime?
+  noteTakingOptOutReason String?   @db.Text
+  createdAt              DateTime  @default(now())
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, meetingId])
+}
+
+/// Post-meeting Summary / Formal Minutes (PRD §7.5). One row per (Meeting,
+/// kind). Drafted from `Meeting.transcriptBody` once it has been ingested
+/// AND `noteTakingBlocked` is false. The Chair (or paper-author by default)
+/// approves before circulation.
+///
+/// Body is plain markdown. `agenda`/`actions` etc. live in the body — we
+/// don't model them as separate columns because the Chair's edit pass is
+/// the legal record and they edit prose, not structured fields. Audit events
+/// for the lifecycle are MEETING_SUMMARY_DRAFTED/APPROVED and
+/// MEETING_MINUTES_DRAFTED/APPROVED/CIRCULATED.
+model MeetingRecord {
+  id                       String              @id @default(cuid())
+  tenantId                 String
+  meetingId                String
+  kind                     MeetingRecordKind
+  status                   MeetingRecordStatus @default(DRAFTED)
+  body                     String              @db.Text
+  generatedAt              DateTime            @default(now())
+  approvedAt               DateTime?
+  approvedByMembershipId   String?
+  circulatedAt             DateTime?
+  circulatedByMembershipId String?
+  fcgVersionUsed           Int?
+  modelRunId               String?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, kind])
+  @@index([tenantId, meetingId])
+  @@index([tenantId, status])
 }
 
 /// Sales Identifier candidate (PRD §8). Detected from inbound communications
@@ -1063,32 +1163,32 @@ model ModelRun {
 /// frozen here for the invoice and a `BILLING_PERIOD_CLOSED` audit event is
 /// written. Re-opening is an explicit, audited action.
 model BillingPeriod {
-  id              String              @id @default(cuid())
-  tenantId        String
+  id                   String              @id @default(cuid())
+  tenantId             String
   /// "YYYY-MM" — the calendar month the line items cover.
-  period          String
-  status          BillingPeriodStatus @default(DRAFT)
-  closedAt        DateTime?
+  period               String
+  status               BillingPeriodStatus @default(DRAFT)
+  closedAt             DateTime?
   closedByMembershipId String?
-  currency        String              @default("GBP")
+  currency             String              @default("GBP")
   /// Count of memberships that met the §15.2 "active" definition during the
   /// period. May exceed `billableUsers` if some active users were on a
   /// suspended membership at close time.
-  activeUsers     Int                 @default(0)
+  activeUsers          Int                 @default(0)
   /// Memberships actually billed (active AND not suspended/anonymised AND
   /// not in revocation grace at the time of close).
-  billableUsers   Int                 @default(0)
+  billableUsers        Int                 @default(0)
   /// Subset who additionally have the Sales Identifier add-on applied.
-  salesIdUsers    Int                 @default(0)
-  baseSubtotalMinor    Int            @default(0)
-  salesIdSubtotalMinor Int            @default(0)
-  cmkSubtotalMinor     Int            @default(0)
-  totalMinor      Int                 @default(0)
+  salesIdUsers         Int                 @default(0)
+  baseSubtotalMinor    Int                 @default(0)
+  salesIdSubtotalMinor Int                 @default(0)
+  cmkSubtotalMinor     Int                 @default(0)
+  totalMinor           Int                 @default(0)
   /// Snapshot of the pricing plan + line-by-line breakdown at close time so
   /// invoices remain reproducible even if the tenant later changes plan.
-  payload         Json
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  payload              Json
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   tenant    Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   snapshots BillingUserSnapshot[]
@@ -1104,28 +1204,28 @@ model BillingPeriod {
 /// `userEmail` is denormalised so the snapshot remains readable after a
 /// Membership is anonymised.
 model BillingUserSnapshot {
-  id                    String   @id @default(cuid())
-  tenantId              String
-  periodId              String
-  membershipId          String?
-  userEmail             String
-  role                  Role
-  membershipStatus      MembershipStatus
-  hasAuthorisedChannel  Boolean  @default(false)
-  loggedInThisPeriod    Boolean  @default(false)
-  hadDraftThisPeriod    Boolean  @default(false)
-  draftCount            Int      @default(0)
-  isActiveByPRD         Boolean  @default(false)
-  isBillable            Boolean  @default(false)
-  salesIdentifierApplies Boolean @default(false)
+  id                     String           @id @default(cuid())
+  tenantId               String
+  periodId               String
+  membershipId           String?
+  userEmail              String
+  role                   Role
+  membershipStatus       MembershipStatus
+  hasAuthorisedChannel   Boolean          @default(false)
+  loggedInThisPeriod     Boolean          @default(false)
+  hadDraftThisPeriod     Boolean          @default(false)
+  draftCount             Int              @default(0)
+  isActiveByPRD          Boolean          @default(false)
+  isBillable             Boolean          @default(false)
+  salesIdentifierApplies Boolean          @default(false)
   /// Short human-readable note on inclusion / exclusion ("billed", "no
   /// authorised channel", "suspended at close", "revocation grace", etc.).
-  reason                String   @default("")
-  createdAt             DateTime @default(now())
+  reason                 String           @default("")
+  createdAt              DateTime         @default(now())
 
-  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  period     BillingPeriod  @relation(fields: [periodId], references: [id], onDelete: Cascade)
-  membership Membership?    @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  period     BillingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  membership Membership?   @relation(fields: [membershipId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, periodId])
   @@index([periodId, isBillable])
@@ -1230,25 +1330,25 @@ model Risk {
 /// vendor tenant is itself a Client of the product and uses this exactly
 /// the same way; there is no privileged cross-tenant view.
 model SignOffQuestion {
-  id             String        @id @default(cuid())
-  tenantId       String
-  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id            String        @id @default(cuid())
+  tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// Stable short code Q-01, Q-02, … — unique per tenant, used in URLs and audit payloads.
-  code           String
-  ordinal        Int
-  question       String        @db.Text
+  code          String
+  ordinal       Int
+  question      String        @db.Text
   /// PRD-side hint baked in (e.g. "default 30 days, anonymise or delete").
   /// Held separately from the question itself so a recorded decision can be
   /// shown alongside what the working assumption was when the question was raised.
-  prdAssumption  String?       @db.Text
-  status         SignOffStatus @default(OPEN)
+  prdAssumption String?       @db.Text
+  status        SignOffStatus @default(OPEN)
   /// Captured decision text — required when status moves to DECIDED.
-  decision       String?       @db.Text
-  decidedAt      DateTime?
-  decidedByName  String?
-  notes          String?       @db.Text
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  decision      String?       @db.Text
+  decidedAt     DateTime?
+  decidedByName String?
+  notes         String?       @db.Text
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   @@unique([tenantId, code])
   @@index([tenantId])
