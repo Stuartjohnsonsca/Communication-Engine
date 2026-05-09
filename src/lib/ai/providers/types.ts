@@ -18,7 +18,8 @@ export type AgentRole =
   | "verifier"
   | "adherence"
   | "sentiment"
-  | "opportunity";
+  | "opportunity"
+  | "meeting-paper";
 
 export type SystemBlock = {
   text: string;

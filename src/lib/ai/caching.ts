@@ -115,6 +115,39 @@ export async function sentimentSystem(): Promise<SystemBlock[]> {
   return buildSystem([{ text: sys, cache: true }]);
 }
 
+export type MeetingPaperContext = {
+  fcg: unknown;
+  meeting: unknown;
+  participants: unknown[];
+  priorContext?: unknown[];
+};
+export async function meetingPaperSystem(ctx: MeetingPaperContext): Promise<SystemBlock[]> {
+  const sys = await loadPrompt("meeting");
+  return buildSystem([
+    { text: sys, cache: true },
+    {
+      text:
+        "# Authoritative Firm Culture Guide\n\n" +
+        "```json\n" +
+        JSON.stringify(ctx.fcg, null, 2) +
+        "\n```",
+      cache: true,
+    },
+    ...(ctx.priorContext && ctx.priorContext.length
+      ? [
+          {
+            text:
+              "# Prior context (use generically — do not fabricate quotes or figures)\n\n" +
+              "```json\n" +
+              JSON.stringify(ctx.priorContext, null, 2) +
+              "\n```",
+            cache: true,
+          },
+        ]
+      : []),
+  ]);
+}
+
 export async function draftSystem(ctx: { fcg: unknown; ucg: unknown; kb?: unknown[] }): Promise<SystemBlock[]> {
   const sys = await loadPrompt("draft");
   return buildSystem([

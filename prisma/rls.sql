@@ -26,7 +26,7 @@ DECLARE
     'FirmCultureGuide','FCGRule','FCGProposal','FCGChatTurn','FCGVote',
     'UserCultureGuide','UCGRule','UCGChatTurn','ComplianceRuling',
     'Draft','Action','AuditEvent',
-    'Channel','ChannelAuth','IngestedMessage','Meeting',
+    'Channel','ChannelAuth','IngestedMessage','Meeting','MeetingParticipant',
     'OpportunityCandidate','SentimentSignal','AdherenceScore','CommunicationAdherence',
     'DPIAAttestation','DSARequest','NoGoSubject'
   ];

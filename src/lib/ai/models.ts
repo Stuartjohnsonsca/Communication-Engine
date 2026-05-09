@@ -37,6 +37,7 @@ const DEFAULTS: Record<AgentRole, ModelBinding> = {
   "adherence":   { provider: "together",  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 2048, temperature: 0   },
   "sentiment":   { provider: "together",  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 1024, temperature: 0   },
   "opportunity": { provider: "together",  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 2048, temperature: 0.2 },
+  "meeting-paper": { provider: "together", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 4096, temperature: 0.4 },
 };
 
 const ENV_KEY: Record<AgentRole, string> = {
@@ -48,6 +49,7 @@ const ENV_KEY: Record<AgentRole, string> = {
   "adherence":   "LLM_ADHERENCE",
   "sentiment":   "LLM_SENTIMENT",
   "opportunity": "LLM_OPPORTUNITY",
+  "meeting-paper": "LLM_MEETING_PAPER",
 };
 
 function parseSpec(spec: string | undefined): { provider: string; model: string } | null {

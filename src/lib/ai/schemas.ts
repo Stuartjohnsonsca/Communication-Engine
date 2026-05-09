@@ -163,3 +163,19 @@ export const opportunity = z.object({
   suggestedReviewerTeam: z.string(),
 });
 export type Opportunity = z.infer<typeof opportunity>;
+
+// ─── Meeting paper (PRD §7.4) ─────────────────────────────────────────────
+
+export const agendaItem = z.object({
+  item: z.string().min(1).max(200),
+  durationMin: z.number().int().min(1).max(240).nullable().optional(),
+  owner: z.string().max(120).nullable().optional(),
+});
+export type AgendaItem = z.infer<typeof agendaItem>;
+
+export const meetingPaper = z.object({
+  agenda: z.array(agendaItem).min(1).max(20),
+  paper: z.string().min(1),
+  openQuestions: z.array(z.string().max(400)).default([]),
+});
+export type MeetingPaper = z.infer<typeof meetingPaper>;

@@ -22,6 +22,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "draft:read:self":     ["USER", "FCT_MEMBER", "FIRM_ADMIN", "SALES_REVIEWER"],
   "draft:create":        ["USER", "FCT_MEMBER", "FIRM_ADMIN", "SALES_REVIEWER"],
 
+  // Meetings (PRD §7.4) — any User can schedule a meeting they are running
+  // and draft its paper. The paper-author defaults to the meeting creator
+  // unless an FCT/admin reassigns it.
+  "meeting:create":      ["USER", "FCT_MEMBER", "FIRM_ADMIN", "SALES_REVIEWER"],
+  "meeting:write":       ["USER", "FCT_MEMBER", "FIRM_ADMIN", "SALES_REVIEWER"],
+  "meeting:read":        ["USER", "FCT_MEMBER", "FIRM_ADMIN", "SALES_REVIEWER"],
+
   // Admin
   "members:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "members:write":       ["FIRM_ADMIN"],

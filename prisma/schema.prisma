@@ -160,6 +160,18 @@ enum AuditEventType {
   DSAR_OPENED
   DSAR_FULFILLED
   AUDIT_EXPORTED
+  MEETING_CREATED
+  MEETING_PAPER_DRAFTED
+  MEETING_PAPER_REGENERATED
+  MEETING_PAPER_EDITED
+  MEETING_PAPER_ISSUED
+}
+
+enum MeetingPaperStatus {
+  NONE
+  DRAFTED
+  EDITED
+  ISSUED
 }
 
 // ─── NextAuth ──────────────────────────────────────────────────────────────
@@ -273,6 +285,7 @@ model Membership {
   actions               Action[]
   channelAuths          ChannelAuth[]
   meetingsAsPaperAuthor Meeting[]
+  meetingsCreated       Meeting[]              @relation("MeetingCreator")
   opportunitiesAssigned OpportunityCandidate[]
   adherenceScores       AdherenceScore[]
   commAdherence         CommunicationAdherence[]
@@ -641,20 +654,70 @@ model IngestedMessage {
   @@index([tenantId, threadId])
 }
 
+/// Meetings + paper drafting (PRD §7.4). Each meeting has a single
+/// paper-author (default = creator; FCG may override per service line). The
+/// system drafts agenda + discussion paper grounded in the description and
+/// any prior IngestedMessages from the same participants. Lead time is
+/// configurable on the FCG; meetings scheduled inside the lead window are
+/// flagged short-notice but the paper is still drafted as soon as the user
+/// asks.
 model Meeting {
-  id                    String   @id @default(cuid())
-  tenantId              String
-  externalId            String?
-  title                 String
-  startsAt              DateTime
+  id                      String              @id @default(cuid())
+  tenantId                String
+  externalId              String?
+  title                   String
+  description             String?             @db.Text
+  location                String?
+  startsAt                DateTime
+  durationMin             Int                 @default(60)
+  createdByMembershipId   String?
   paperAuthorMembershipId String?
-  transcriptOptIns      Json?
-  createdAt             DateTime @default(now())
+  transcriptOptIns        Json?
+  /// Working days of lead time the FCG demanded for paper issuance at the
+  /// time of creation. Snapshotted so the short-notice flag remains stable
+  /// even if the FCG changes later.
+  leadTimeWorkingDays     Int                 @default(3)
+  shortNotice             Boolean             @default(false)
+  paperStatus             MeetingPaperStatus  @default(NONE)
+  agenda                  Json?               // [{ item, durationMin?, owner? }]
+  paperBody               String?             @db.Text
+  openQuestions           Json?               // string[]
+  paperGeneratedAt        DateTime?
+  paperIssuedAt           DateTime?
+  paperFcgVersionUsed     Int?
+  paperModelRunId         String?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
-  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  paperAuthor  Membership? @relation(fields: [paperAuthorMembershipId], references: [id])
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy    Membership?           @relation("MeetingCreator", fields: [createdByMembershipId], references: [id])
+  paperAuthor  Membership?           @relation(fields: [paperAuthorMembershipId], references: [id])
+  participants MeetingParticipant[]
 
   @@index([tenantId, startsAt])
+  @@index([tenantId, paperStatus])
+}
+
+/// Per-meeting participant. Light-weight: name + email is enough to draft a
+/// paper. `isMeetingCreator` is the signal we use to default paper-authorship.
+/// Calendar OAuth ingestion (Phase 3) will populate this from the source
+/// system; until then participants are entered manually. Not joined to a
+/// Tenant relation: the row is scoped via Meeting.tenantId and `tenantId` is
+/// kept as a denormalised field for index/query efficiency.
+model MeetingParticipant {
+  id               String   @id @default(cuid())
+  tenantId         String
+  meetingId        String
+  membershipId     String?
+  name             String
+  email            String?
+  isExternal       Boolean  @default(false)
+  isMeetingCreator Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, meetingId])
 }
 
 model OpportunityCandidate {

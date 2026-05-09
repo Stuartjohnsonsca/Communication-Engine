@@ -243,6 +243,38 @@ export const sentimentTool: ToolDef = {
   },
 };
 
+export const meetingPaperTool: ToolDef = {
+  name: "respond_with_meeting_paper",
+  description:
+    "Return the structured meeting paper: an agenda (with optional per-item duration and owner), the discussion paper body in markdown, and any open questions for participants. Terminates the turn — call exactly once.",
+  schema: {
+    type: "object",
+    properties: {
+      agenda: {
+        type: "array",
+        minItems: 1,
+        maxItems: 20,
+        items: {
+          type: "object",
+          properties: {
+            item: { type: "string", maxLength: 200 },
+            durationMin: { type: ["integer", "null"], minimum: 1, maximum: 240 },
+            owner: { type: ["string", "null"], maxLength: 120 },
+          },
+          required: ["item"],
+        },
+      },
+      paper: { type: "string" },
+      openQuestions: {
+        type: "array",
+        items: { type: "string", maxLength: 400 },
+        default: [],
+      },
+    },
+    required: ["agenda", "paper"],
+  },
+};
+
 export const draftTool: ToolDef = {
   name: "respond_with_draft",
   description: "Return the final draft. Terminates the turn. Must be called exactly once and last.",
