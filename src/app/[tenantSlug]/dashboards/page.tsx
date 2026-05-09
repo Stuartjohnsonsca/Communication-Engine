@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
+import { getDpiaStatus } from "@/lib/dpia/status";
 import PerfOptInToggle from "./PerfOptInToggle";
 
 type DimensionKey =
@@ -40,6 +41,37 @@ export default async function PersonalDashboardPage({
   const { tenantSlug } = await params;
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
+
+  // PRD §12.2 graceful degradation: while no current DPIA covers the tenant
+  // we pause dashboards (drafting continues elsewhere). The DPIA Helper has
+  // the precise status; we use the boolean here.
+  const dpia = await getDpiaStatus(ctx.tenant.id);
+  if (!dpia.dashboardsAllowed) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">My adherence</h1>
+          <p className="text-sm text-ink/60">
+            Scored against what you actually sent (PRD §9.1). Currently paused.
+          </p>
+        </div>
+        <div className="card border-red-200 bg-red-50/40">
+          <div className="text-sm font-medium text-red-800">
+            Adherence dashboards paused — DPIA {dpia.state === "NEVER" ? "not yet attested" : "expired"}
+          </div>
+          <p className="mt-1 text-sm text-ink/70">{dpia.banner?.message}</p>
+          <p className="mt-2 text-xs text-ink/60">
+            Per PRD §12.2 drafting continues; dashboards and Sales Identifier are paused until a
+            Firm Administrator re-attests in the{" "}
+            <Link href={`/${tenantSlug}/dpia`} className="underline">
+              DPIA Helper
+            </Link>
+            .
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 

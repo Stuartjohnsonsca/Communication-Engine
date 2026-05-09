@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { signOut } from "@/lib/auth";
+import { getDpiaStatus } from "@/lib/dpia/status";
 
 export default async function TenantLayout({
   children,
@@ -13,6 +14,8 @@ export default async function TenantLayout({
   const { tenantSlug } = await params;
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
+
+  const dpia = await getDpiaStatus(ctx.tenant.id);
 
   const nav = [
     { href: `/${tenantSlug}/dashboard`, label: "Dashboard" },
@@ -63,7 +66,32 @@ export default async function TenantLayout({
           </form>
         </div>
       </aside>
-      <main className="flex-1 overflow-y-auto p-8">{children}</main>
+      <main className="flex-1 overflow-y-auto p-8">
+        {dpia.banner && (
+          <div
+            className={`mb-6 rounded border px-3 py-2 text-sm ${
+              dpia.banner.tone === "alert"
+                ? "border-red-300 bg-red-50/60 text-red-800"
+                : dpia.banner.tone === "warn"
+                  ? "border-amber-300 bg-amber-50/60 text-amber-900"
+                  : "border-sky-300 bg-sky-50/60 text-sky-900"
+            }`}
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <div>
+                <span className="font-medium">DPIA · {dpia.state}.</span> {dpia.banner.message}
+              </div>
+              <Link
+                href={`/${tenantSlug}/dpia`}
+                className="shrink-0 underline decoration-dotted"
+              >
+                Open DPIA →
+              </Link>
+            </div>
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }

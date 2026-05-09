@@ -4,6 +4,7 @@ import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { aggregateClosedMonths, lastClosedPeriods } from "@/lib/adherence/monthly";
+import { getDpiaStatus } from "@/lib/dpia/status";
 
 type DimensionKey =
   | "responseTime"
@@ -33,6 +34,34 @@ export default async function FctAdherencePage({
   // Same gate as the audit log: FCT_MEMBER + FIRM_ADMIN.
   if (!hasPermission(ctx.membership.role, "audit:read")) {
     redirect(`/${tenantSlug}/dashboard`);
+  }
+
+  // Same gate as the personal dashboard. PRD §12.2 — dashboards are paused
+  // when there is no current DPIA, including the firm-wide aggregate view.
+  const dpia = await getDpiaStatus(ctx.tenant.id);
+  if (!dpia.dashboardsAllowed) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Firm adherence</h1>
+          <p className="text-sm text-ink/60">PRD §9.2. Currently paused.</p>
+        </div>
+        <div className="card border-red-200 bg-red-50/40">
+          <div className="text-sm font-medium text-red-800">
+            Adherence reporting paused — DPIA {dpia.state === "NEVER" ? "not yet attested" : "expired"}
+          </div>
+          <p className="mt-1 text-sm text-ink/70">{dpia.banner?.message}</p>
+          <p className="mt-2 text-xs text-ink/60">
+            Per PRD §12.2 drafting continues; dashboards and Sales Identifier are paused until a
+            Firm Administrator re-attests in the{" "}
+            <Link href={`/${tenantSlug}/dpia`} className="underline">
+              DPIA Helper
+            </Link>
+            .
+          </p>
+        </div>
+      </div>
+    );
   }
 
   const periods = lastClosedPeriods(PERIODS_BACK);

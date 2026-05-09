@@ -36,6 +36,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "audit:read":          ["FIRM_ADMIN", "FCT_MEMBER"],
   "audit:export":        ["FIRM_ADMIN"],
 
+  // DPIA Helper (PRD §12.2). FCT can see attestation status; only the Firm
+  // Administrator (in tandem with the Client DPO offline) can sign one off.
+  "dpia:read":           ["FIRM_ADMIN", "FCT_MEMBER"],
+  "dpia:write":          ["FIRM_ADMIN"],
+
   // Sales Identifier
   "opportunity:review":  ["SALES_REVIEWER", "FIRM_ADMIN"],
 
