@@ -203,6 +203,13 @@ enum AuditEventType {
   MEETING_MINUTES_DRAFTED
   MEETING_MINUTES_APPROVED
   MEETING_MINUTES_CIRCULATED
+  XCL_OPT_IN
+  XCL_OPT_OUT
+  XCL_CANDIDATE_PROPOSED
+  XCL_CANDIDATE_APPROVED
+  XCL_CANDIDATE_REJECTED
+  XCL_CANDIDATE_COMMITTED
+  XCL_REID_TEST_RECORDED
 }
 
 enum BillingPeriodStatus {
@@ -273,6 +280,29 @@ enum SignOffStatus {
   DECIDED
   /// Consciously punted out of the current sign-off window.
   DEFERRED
+}
+
+/// PRD §11 Cross-Client Learning. Categories of insight the curator pipeline
+/// can promote into global defaults.
+enum XclInsightKind {
+  /// An FCG rule change (add/modify/remove) that improved adherence in source tenant.
+  FCG_AMENDMENT
+  /// A Sales Identifier classification rule learned from reviewer accept/revise/reject.
+  OPPORTUNITY_RULE
+  /// A refinement to the compliance judge prompt or rubric.
+  JUDGE_PROMPT
+}
+
+/// PRD §11 candidate lifecycle:
+///   PENDING   — auto-redacted, waiting for human curator (PRD §11.3).
+///   APPROVED  — curator approved; queued for the next global-defaults commit.
+///   REJECTED  — curator rejected; rejection rate + rationale tracked per §11.3.
+///   COMMITTED — rolled into the global model defaults (PRD §11.4).
+enum XclCandidateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMMITTED
 }
 
 // ─── NextAuth ──────────────────────────────────────────────────────────────
@@ -351,6 +381,17 @@ model Tenant {
   pricingSalesIdPartnerDiscountPct     Int          @default(25)
   pricingCrossClientLearningOptIn      Boolean      @default(false)
   pricingCclDiscountPct                Int          @default(10)
+  /// PRD §11.2 Cross-Client Learning (XCL) attestation. Opt-in is a separate
+  /// addendum to the Order Form — record who signed, when, and a reference to
+  /// the document. The boolean above (`pricingCrossClientLearningOptIn`)
+  /// drives both the lawful-basis gate AND the per-§15.1 billing discount;
+  /// these fields capture the attestation that authorises the gate. Opt-out
+  /// is recorded separately so the audit trail keeps the change history.
+  crossClientLearningOptedInAt         DateTime?
+  crossClientLearningOptedInByName     String?
+  crossClientLearningAddendumRef       String?
+  crossClientLearningOptedOutAt        DateTime?
+  crossClientLearningOptedOutReason    String?      @db.Text
   pricingCmkEnabled                    Boolean      @default(false)
   pricingCmkMinor                      Int          @default(50000)
   sandboxBillingFreeUntil              DateTime?
@@ -1354,4 +1395,73 @@ model SignOffQuestion {
   @@index([tenantId])
   @@index([ordinal])
   @@index([status])
+}
+
+// ─── Cross-Client Learning (PRD §11) ───────────────────────────────────────
+
+/// PRD §11 Cross-Client Learning candidate. Source-tenant insights queued
+/// for the Acumon Curator pipeline (PRD §11.3). Once Acumon takes a
+/// candidate it acts as independent controller (PRD §11.2), so
+/// XclCandidates are global (no tenantId; not under RLS). `sourceTenantId`
+/// is provenance only — it is NOT a tenant-isolation key. Candidates only
+/// enter the queue from a tenant that has opted in
+/// (`Tenant.pricingCrossClientLearningOptIn = true`).
+///
+/// `originalText` is held inside Acumon's pipeline only (not exposed back
+/// to other Clients); `redactedText` is what would be committed to global
+/// defaults. The auto-redaction log lists every replacement so the human
+/// curator can sanity-check the pipeline.
+model XclCandidate {
+  id                  String              @id @default(cuid())
+  sourceTenantId      String
+  /// Source subject for traceability (e.g. FCGProposal id, OpportunityCandidate id).
+  sourceSubjectType   String
+  sourceSubjectId     String
+  kind                XclInsightKind
+  status              XclCandidateStatus  @default(PENDING)
+  originalText        String              @db.Text
+  redactedText        String              @db.Text
+  /// Array of { kind, original, replacement } records — what the auto-pipeline stripped.
+  redactionLog        Json
+  /// Curator who reviewed (Acumon-tenant membership). Set on review.
+  curatorMembershipId String?
+  curatorTenantId     String?
+  curatorDecidedAt    DateTime?
+  curatorNotes        String?             @db.Text
+  committedAt         DateTime?
+  /// Set on COMMITTED — the operator who promoted the insight into defaults
+  /// (may differ from the curator). Free-form name string for human display.
+  committedByName     String?
+  /// Per-Client decline log. Initially empty; populated when individual Clients
+  /// decline a specific committed update (PRD §11.4 "Clients can review and
+  /// decline specific updates"). Stored as a JSON array so the decline list
+  /// doesn't pull a separate model into the schema for a v1 surface.
+  declines            Json                @default("[]")
+  modelRunId          String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([status])
+  @@index([sourceTenantId])
+  @@index([kind, status])
+}
+
+/// PRD §11.3 quarterly re-identification testing log. An independent
+/// reviewer attempts to re-identify the source tenant from a sample of
+/// committed redacted insights. One row per quarter. `reidentifiedCount > 0`
+/// is a finding that the redaction pipeline needs tightening.
+model XclReidentificationTest {
+  id                String   @id @default(cuid())
+  /// "YYYY-Qn", e.g. "2026-Q2".
+  quarter           String   @unique
+  conductedAt       DateTime
+  conductedByName   String
+  externalReviewer  Boolean  @default(true)
+  sampleSize        Int
+  reidentifiedCount Int      @default(0)
+  summary           String   @db.Text
+  notes             String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  @@index([conductedAt])
 }

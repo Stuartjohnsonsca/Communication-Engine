@@ -44,6 +44,12 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "billing:read")) {
     nav.push({ href: `/${tenantSlug}/admin/billing`, label: "Billing" });
   }
+  // PRD §11 Cross-Client Learning. Visible to anyone with xcl:read in this
+  // tenant (the page itself decides whether to render the curator console
+  // based on the Acumon-tenant gate).
+  if (hasPermission(ctx.membership.role, "xcl:read")) {
+    nav.push({ href: `/${tenantSlug}/admin/xcl`, label: "Cross-Client Learning" });
+  }
   // PRD §18 sign-off questions are per-tenant — every tenant has their own
   // copy and answers them for themselves. Visible to anyone with read
   // permission within this tenant.

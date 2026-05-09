@@ -91,8 +91,17 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "signoff:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "signoff:manage":      ["FIRM_ADMIN"],
 
-  // Acumon side
-  "xcl:curate":          ["CURATOR", "ACUMON_ADMIN"],
+  // Cross-Client Learning (PRD §11). Three permissions:
+  //   xcl:opt-in   — flip the per-tenant lawful-basis gate. Restricted to the
+  //                  Firm Administrator (controllership decision per §11.2).
+  //   xcl:read     — read the queue / opt-in status. FCT can see for governance
+  //                  oversight; CURATOR + ACUMON_ADMIN see the whole queue.
+  //   xcl:curate   — review candidates and record re-identification tests.
+  //                  Acumon-side; the page handler also gates on
+  //                  `tenant.slug === "acumon"` for FIRM_ADMIN.
+  "xcl:opt-in":          ["FIRM_ADMIN"],
+  "xcl:read":            ["FIRM_ADMIN", "FCT_MEMBER", "CURATOR", "ACUMON_ADMIN"],
+  "xcl:curate":          ["CURATOR", "ACUMON_ADMIN", "FIRM_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],
 };
 
