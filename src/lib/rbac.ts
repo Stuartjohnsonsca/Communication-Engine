@@ -91,6 +91,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "signoff:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "signoff:manage":      ["FIRM_ADMIN"],
 
+  // Switching and lock-in posture (PRD §15.3). Read is universal — every
+  // signed-in role sees the sub-processor list and the switching commitments.
+  // Manage is Acumon-side, gated additionally on `tenant.slug === "acumon"`
+  // in the page handler — same shape as Roadmap (§16) and Risks (§17).
+  "switching:read":      ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "subprocessors:manage":["FIRM_ADMIN", "ACUMON_ADMIN"],
+
   // Tenant Termination (PRD §14.4). Notice / reverse / export generation are
   // controllership decisions — restricted to the FIRM_ADMIN. The FCT can read
   // the lifecycle status for governance oversight (any export pulled is in

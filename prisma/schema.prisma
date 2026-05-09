@@ -223,6 +223,10 @@ enum AuditEventType {
   TENANT_TERMINATION_REVERSED
   TENANT_TERMINATION_EXPORT_GENERATED
   TENANT_HARD_DELETED
+  SUBPROCESSOR_ADDED
+  SUBPROCESSOR_UPDATED
+  SUBPROCESSOR_REMOVED
+  SUBPROCESSOR_REINSTATED
 }
 
 enum BillingPeriodStatus {
@@ -1559,4 +1563,40 @@ model TenantTerminationExport {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, generatedAt])
+}
+
+
+// ─── Sub-Processor List (PRD §15.3) ───────────────────────────────────────
+
+/// PRD §15.3 — Acumon publishes its sub-processor list in advance of
+/// contracting. This is the canonical list, exposed read-only to every
+/// Client and to prospective Clients. Same global-data pattern as Roadmap
+/// (§16) and Risks (§17): no tenantId, NOT under RLS, mutations gated to
+/// Acumon operators (FIRM_ADMIN of the "acumon" tenant or ACUMON_ADMIN).
+/// Audit events are written against the operator's tenant chain.
+model SubProcessor {
+  id             String    @id @default(cuid())
+  /// Stable code (e.g. "anthropic", "together") used in URLs and audit payloads.
+  code           String    @unique
+  ordinal        Int
+  name           String
+  /// Short role description (e.g. "LLM provider — primary", "Postgres host").
+  role           String
+  /// ISO country / region label (e.g. "US", "EU-IE", "UK"). Free-form text;
+  /// not enumerated because the list will outgrow Jurisdiction.
+  jurisdiction   String
+  /// Categories of personal data this sub-processor processes.
+  dataCategories String[]
+  /// Operator-side reference to the contract (DPA / SCCs / sub-processor agreement).
+  contractRef    String?
+  notes          String?   @db.Text
+  isActive       Boolean   @default(true)
+  /// When the sub-processor was added to the production stack.
+  addedAt        DateTime
+  removedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([isActive, ordinal])
+  @@index([ordinal])
 }

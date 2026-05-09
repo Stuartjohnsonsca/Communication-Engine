@@ -32,6 +32,7 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/dsar`, label: "DSAR" },
     { href: `/${tenantSlug}/roadmap`, label: "Roadmap" },
     { href: `/${tenantSlug}/risks`, label: "Risks" },
+    { href: `/${tenantSlug}/switching`, label: "Switching posture" },
     { href: `/${tenantSlug}/account`, label: "My account" },
     { href: `/${tenantSlug}/admin/adherence`, label: "Firm adherence" },
     { href: `/${tenantSlug}/admin/audit`, label: "Audit log" },
