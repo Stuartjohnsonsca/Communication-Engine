@@ -372,6 +372,9 @@ export default async function SwitchingPage({
             <code className="text-ink/70">sentimentSignals</code>,{" "}
             <code className="text-ink/70">adherenceScores</code>
           </li>
+          <li className="list-disc">
+            <code className="text-ink/70">termsRecords</code> (MSA / DPA / AUP / SLA versions per §15.4)
+          </li>
         </ul>
         <p className="text-xs text-ink/60">
           All values are JSON-portable (BigInt audit sequences are emitted as strings).

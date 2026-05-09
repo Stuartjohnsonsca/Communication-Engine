@@ -169,6 +169,7 @@ export async function generateExportPackage(
     sentiments,
     adherence,
     members,
+    termsRecords,
   ] = await Promise.all([
     superDb.firmCultureGuide.findMany({
       where: { tenantId: tenant.id },
@@ -245,6 +246,10 @@ export async function generateExportPackage(
       include: { user: { select: { id: true, email: true, name: true, createdAt: true } } },
       orderBy: { joinedAt: "asc" },
     }),
+    superDb.termsRecord.findMany({
+      where: { tenantId: tenant.id },
+      orderBy: [{ kind: "asc" }, { version: "asc" }],
+    }),
   ]);
 
   const counts = {
@@ -266,6 +271,7 @@ export async function generateExportPackage(
     sentimentSignals: sentiments.length,
     adherenceScores: adherence.length,
     members: members.length,
+    termsRecords: termsRecords.length,
   };
 
   const payload = {
@@ -314,6 +320,7 @@ export async function generateExportPackage(
     opportunityCandidates: opportunities,
     sentimentSignals: sentiments,
     adherenceScores: adherence,
+    termsRecords,
   } as unknown as Prisma.InputJsonValue;
 
   const json = JSON.stringify(payload);
@@ -511,10 +518,13 @@ export async function hardDeleteTenant(tenantId: string): Promise<Record<string,
       name: "dsarRequest",
       del: () => superDb.dSARequest.deleteMany({ where: { tenantId } }),
     },
-    // §12.5 retention floor: AuditEvent + DPIAAttestation are NOT deleted.
-    // Memberships are kept so audit-event actorMembershipId joins still work
-    // for the retention period; user-personal data on the User row is
-    // anonymised separately by the §14.3 lifecycle module.
+    // §12.5 + §15.4 retention floor: AuditEvent + DPIAAttestation +
+    // TermsRecord are NOT deleted. Memberships are kept so audit-event
+    // actorMembershipId joins still work for the retention period;
+    // user-personal data on the User row is anonymised separately by the
+    // §14.3 lifecycle module. TermsRecord persists per §15.4 ("persistent
+    // until changed; survive non-renewal") for audit-log access and DSAR
+    // fulfilment after termination.
   ];
 
   for (const t of tables) {

@@ -227,6 +227,10 @@ enum AuditEventType {
   SUBPROCESSOR_UPDATED
   SUBPROCESSOR_REMOVED
   SUBPROCESSOR_REINSTATED
+  TERMS_RECORDED
+  TERMS_ACTIVATED
+  TERMS_SUPERSEDED
+  TERMS_AMENDED
 }
 
 enum BillingPeriodStatus {
@@ -332,6 +336,25 @@ enum XclCandidateStatus {
   APPROVED
   REJECTED
   COMMITTED
+}
+
+/// PRD §15.4 — categories of Client-Acumon terms.
+/// The Sub-Processor List is published per §15.3 as a global table (not a
+/// per-Client document) and is therefore intentionally absent here.
+enum TermsKind {
+  MSA
+  DPA
+  AUP
+  SLA
+}
+
+/// PRD §15.4 lifecycle. ACTIVE = currently in force. SUPERSEDED rows are
+/// retained — "persistent until changed" — and survive non-renewal for
+/// audit + DSAR per §12.5.
+enum TermsStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
 }
 
 // ─── NextAuth ──────────────────────────────────────────────────────────────
@@ -484,6 +507,7 @@ model Tenant {
   billingUserSnapshots  BillingUserSnapshot[]
   signOffQuestions      SignOffQuestion[]
   terminationExports    TenantTerminationExport[]
+  termsRecords          TermsRecord[]
 
   @@index([status])
 }
@@ -1599,4 +1623,44 @@ model SubProcessor {
 
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+
+// ─── Terms and Conditions persistence (PRD §15.4) ─────────────────────────
+
+/// Per-tenant Client-Acumon terms record (PRD §15.4). Four kinds — MSA, DPA,
+/// AUP, SLA — versioned independently. The Sub-Processor List is a global
+/// surface under §15.3 and is intentionally NOT modelled here.
+///
+/// "Persistent until changed" + "survive non-renewal": records are tenant-
+/// scoped + RLS-protected like other Client data, but excluded from the
+/// §14.4 hard-deletion sweep — they remain readable for audit-log access,
+/// DSAR fulfilment, and statutory retention per §12.5.
+model TermsRecord {
+  id                  String      @id @default(cuid())
+  tenantId            String
+  kind                TermsKind
+  version             Int
+  status              TermsStatus @default(DRAFT)
+  /// Operator-side reference: signed-PDF storage path, DocuSign envelope id, contract repo link, etc.
+  documentRef         String
+  /// Full text or a summary of the operative terms — held in-platform so
+  /// audit and DSAR responses do not depend on an external store.
+  body                String      @db.Text
+  effectiveFrom       DateTime?
+  effectiveTo         DateTime?
+  signedByName        String?
+  signedByRole        String?
+  signedAt            DateTime?
+  countersignedByName String?
+  countersignedAt     DateTime?
+  notes               String?     @db.Text
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, version])
+  @@index([tenantId, kind, status])
+  @@index([tenantId, status])
 }

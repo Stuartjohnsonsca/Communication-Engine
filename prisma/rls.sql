@@ -32,7 +32,8 @@ DECLARE
     'BillingPeriod','BillingUserSnapshot',
     'SignOffQuestion',
     'MeetingRecord',
-    'TenantTerminationExport'
+    'TenantTerminationExport',
+    'TermsRecord'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

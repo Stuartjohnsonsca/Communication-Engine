@@ -91,6 +91,12 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "signoff:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "signoff:manage":      ["FIRM_ADMIN"],
 
+  // Terms and Conditions persistence (PRD §15.4). FCT can read for
+  // governance oversight (DPA / SLA terms tie into their compliance work);
+  // only FIRM_ADMIN records / activates / amends.
+  "terms:read":          ["FIRM_ADMIN", "FCT_MEMBER"],
+  "terms:manage":        ["FIRM_ADMIN"],
+
   // Switching and lock-in posture (PRD §15.3). Read is universal — every
   // signed-in role sees the sub-processor list and the switching commitments.
   // Manage is Acumon-side, gated additionally on `tenant.slug === "acumon"`

@@ -58,6 +58,11 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "termination:read")) {
     nav.push({ href: `/${tenantSlug}/admin/termination`, label: "Termination" });
   }
+  // PRD §15.4 Terms and Conditions persistence. FCT can read for governance
+  // oversight; FIRM_ADMIN records new versions.
+  if (hasPermission(ctx.membership.role, "terms:read")) {
+    nav.push({ href: `/${tenantSlug}/admin/terms`, label: "Terms" });
+  }
   // PRD §11 Cross-Client Learning. Visible to anyone with xcl:read in this
   // tenant (the page itself decides whether to render the curator console
   // based on the Acumon-tenant gate).
