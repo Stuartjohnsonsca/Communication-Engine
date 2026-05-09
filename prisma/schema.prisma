@@ -189,6 +189,8 @@ enum AuditEventType {
   ROADMAP_PHASE_UPDATED
   ROADMAP_EXIT_CRITERION_MET
   ROADMAP_EXIT_CRITERION_UNMET
+  RISK_UPDATED
+  RISK_REVIEWED
 }
 
 enum BillingPeriodStatus {
@@ -201,6 +203,23 @@ enum MeetingPaperStatus {
   DRAFTED
   EDITED
   ISSUED
+}
+
+enum RiskSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum RiskStatus {
+  /// Present and being actively mitigated.
+  ACTIVE
+  /// Controls in place and judged effective; still tracked.
+  MITIGATED
+  /// Tolerated within the firm's risk appetite — controls light-touch by choice.
+  ACCEPTED
+  /// No longer applicable — superseded, scope changed, or the threat model moved on.
+  CLOSED
 }
 
 enum RoadmapPhaseStatus {
@@ -1151,4 +1170,35 @@ model RoadmapExitCriterion {
   phase RoadmapPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
 
   @@index([phaseId, ordinal])
+}
+
+// ─── Risks Register (PRD §17) ──────────────────────────────────────────────
+
+/// Product-level risks register. Global (no tenantId) — these are the risks
+/// Acumon faces in delivering the product, published to every Client per PRD
+/// §15.3 transparency posture. Same shape as the §17 PRD table: title, severity,
+/// list of mitigations, plus an operator-tracked status and last-reviewed
+/// timestamp. Mutated by Acumon operators only (FIRM_ADMIN of the "acumon"
+/// tenant or ACUMON_ADMIN); audit events are written against the operator's
+/// own tenant chain. Not under RLS — see `prisma/rls.sql`.
+model Risk {
+  id             String       @id @default(cuid())
+  /// Stable short code — R-01, R-02, … — used in URLs and audit payloads.
+  code           String       @unique
+  ordinal        Int
+  title          String
+  severity       RiskSeverity
+  status         RiskStatus   @default(ACTIVE)
+  /// Bullet list of mitigation controls, lifted from the PRD §17 column.
+  mitigations    String[]
+  /// Free-form operator commentary — links to incident write-ups, control owners, etc.
+  notes          String?      @db.Text
+  /// Last time an operator confirmed this risk is up-to-date (periodic review).
+  reviewedAt     DateTime?
+  reviewedByName String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([ordinal])
+  @@index([severity, status])
 }

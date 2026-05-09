@@ -73,6 +73,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "roadmap:read":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "roadmap:manage":      ["FIRM_ADMIN", "ACUMON_ADMIN"],
 
+  // Risks Register (PRD §17). Same posture as the Roadmap (§16): published to
+  // every Client per §15.3 transparency, so every signed-in role can read.
+  // Status / severity / notes / periodic-review ticks are operator-only and
+  // additionally gated to the Acumon-internal tenant in the page handler.
+  "risks:read":          ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "risks:manage":        ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
   // Acumon side
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],
