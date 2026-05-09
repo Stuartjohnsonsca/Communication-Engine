@@ -41,6 +41,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "dpia:read":           ["FIRM_ADMIN", "FCT_MEMBER"],
   "dpia:write":          ["FIRM_ADMIN"],
 
+  // DSAR module (PRD §12.4). FCT can see and progress requests; only the
+  // Firm Administrator can mark a DSAR fulfilled (tight to the Client's
+  // statutory accountability). Subjects download their own data via the
+  // standard ACCESS export, not via a separate role.
+  "dsar:read":           ["FIRM_ADMIN", "FCT_MEMBER"],
+  "dsar:write":          ["FIRM_ADMIN", "FCT_MEMBER"],
+  "dsar:fulfill":        ["FIRM_ADMIN"],
+
   // Sales Identifier
   "opportunity:review":  ["SALES_REVIEWER", "FIRM_ADMIN"],
 
