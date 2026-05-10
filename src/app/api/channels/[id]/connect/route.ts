@@ -5,6 +5,7 @@ import { superDb } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
+import { signOAuthState } from "@/lib/channels/oauth-state";
 import { writeAuditEvent } from "@/lib/audit";
 
 const inputSchema = z.object({
@@ -31,9 +32,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const m = meta(channel.kind);
 
   if (parsed.data.mode === "real" && m.realOAuthAvailable() && m.oauthAuthorizeUrl && m.clientId) {
-    // Real OAuth handshake — return the URL to redirect to. State carries
-    // channelId + tenantSlug so the callback can resolve back. (For a full
-    // production build this state should be HMAC-signed with NEXTAUTH_SECRET.)
+    // Real OAuth handshake — return the URL to redirect to. State is
+    // HMAC-signed (see oauth-state.ts) and carries the membershipId so
+    // the callback can attribute the connection back to the User who
+    // initiated it. Without that round-trip, ChannelAuth.membershipId
+    // is null on real OAuth, which makes synthesise-from-outbound skip
+    // every send with "no authenticated membership on channel".
+    const state = signOAuthState({
+      channelId: channel.id,
+      tenantSlug: parsed.data.tenantSlug,
+      membershipId: ctx.membership.id,
+    });
     const url = new URL(m.oauthAuthorizeUrl());
     url.searchParams.set("client_id", m.clientId() ?? "");
     url.searchParams.set("redirect_uri", buildRedirectUri(req));
@@ -41,7 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     url.searchParams.set("scope", m.scopeDefault.join(" "));
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
-    url.searchParams.set("state", `${channel.id}:${parsed.data.tenantSlug}`);
+    url.searchParams.set("state", state);
     return NextResponse.json({ redirectTo: url.toString() });
   }
 

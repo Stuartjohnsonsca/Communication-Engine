@@ -2,26 +2,38 @@ import { NextResponse } from "next/server";
 import { superDb } from "@/lib/db";
 import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
+import { verifyOAuthState } from "@/lib/channels/oauth-state";
 import { writeAuditEvent } from "@/lib/audit";
 
 /**
  * Generic OAuth 2.0 authorization-code callback.
  *
- * The state value is `<channelId>:<tenantSlug>`, which we round-trip from
- * the connect route. Real production would HMAC-sign this; for a Phase 2
- * build we resolve the channel by id and re-validate against tenantSlug.
- *
- * On success we encrypt the token blob, mark the channel ACTIVE, write an
- * audit event, and bounce the user back to the admin/channels page.
+ * Backlog item 3 — state is now HMAC-signed and carries
+ * `<channelId>.<tenantSlug>.<membershipId>.<expiresAt>.<nonce>.<sig>`.
+ * Forged or expired callbacks are rejected before any token is
+ * persisted. The membershipId is what allows the bypassed-send
+ * compliance gate (item 1) to attribute scoring to the right User —
+ * without it, real-OAuth ChannelAuth rows had `membershipId = null`
+ * and synthesise-from-outbound silently skipped every send.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state") ?? "";
-  const [channelId, tenantSlug] = state.split(":");
-  if (!code || !channelId || !tenantSlug) {
+  const stateRaw = url.searchParams.get("state") ?? "";
+  if (!code || !stateRaw) {
     return NextResponse.json({ error: "invalid callback" }, { status: 400 });
   }
+
+  let verified;
+  try {
+    verified = verifyOAuthState(stateRaw);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "state verification failed" },
+      { status: 403 },
+    );
+  }
+  const { channelId, tenantSlug, membershipId } = verified;
 
   const channel = await superDb.channel.findUnique({ where: { id: channelId } });
   if (!channel) return NextResponse.json({ error: "channel not found" }, { status: 404 });
@@ -29,12 +41,15 @@ export async function GET(req: Request) {
   if (!tenant || tenant.id !== channel.tenantId) {
     return NextResponse.json({ error: "tenant mismatch" }, { status: 403 });
   }
+  const membership = await superDb.membership.findUnique({ where: { id: membershipId } });
+  if (!membership || membership.tenantId !== tenant.id) {
+    return NextResponse.json({ error: "membership mismatch" }, { status: 403 });
+  }
   const m = meta(channel.kind);
   if (!m.oauthTokenUrl || !m.clientId || !m.realOAuthAvailable()) {
     return NextResponse.json({ error: "channel kind has no OAuth in this deployment" }, { status: 400 });
   }
 
-  // Exchange code → tokens
   const params = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -48,7 +63,10 @@ export async function GET(req: Request) {
     body: params,
   });
   if (!tokenRes.ok) {
-    return NextResponse.json({ error: `token exchange ${tokenRes.status}: ${await tokenRes.text()}` }, { status: 502 });
+    return NextResponse.json(
+      { error: `token exchange ${tokenRes.status}: ${await tokenRes.text()}` },
+      { status: 502 },
+    );
   }
   const tok = (await tokenRes.json()) as {
     access_token?: string;
@@ -61,10 +79,12 @@ export async function GET(req: Request) {
     data: {
       tenantId: channel.tenantId,
       channelId: channel.id,
+      membershipId,
       encryptedTokens: encryptJson({
         access_token: tok.access_token,
         refresh_token: tok.refresh_token,
         expires_at: tok.expires_in ? Math.floor(Date.now() / 1000) + tok.expires_in : undefined,
+        scope: tok.scope,
       }),
       scope: tok.scope ?? m.scopeDefault.join(" "),
       expiresAt: tok.expires_in ? new Date(Date.now() + tok.expires_in * 1000) : null,
@@ -75,10 +95,10 @@ export async function GET(req: Request) {
   await writeAuditEvent({
     tenantId: channel.tenantId,
     eventType: "CHANNEL_AUTHORISED",
-    actorMembershipId: null,
+    actorMembershipId: membershipId,
     subjectType: "Channel",
     subjectId: channel.id,
-    payload: { kind: channel.kind, mode: "oauth" },
+    payload: { kind: channel.kind, mode: "oauth", hasRefreshToken: Boolean(tok.refresh_token) },
   });
 
   return NextResponse.redirect(`${url.origin}/${tenantSlug}/admin/channels`);

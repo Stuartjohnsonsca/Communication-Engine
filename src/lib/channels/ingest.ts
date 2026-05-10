@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { superDb } from "@/lib/db";
 import { adapterFor, type Tokens } from "./adapters";
-import { decryptJson } from "./crypto";
 import { writeAuditEvent } from "@/lib/audit";
 import { synthesiseFromOutbound } from "@/lib/adherence/synthesise";
+import { ensureFreshTokens } from "./oauth-refresh";
 
 /**
  * Run an adapter ingest and persist rows as `IngestedMessage`. Returns
@@ -12,6 +12,12 @@ import { synthesiseFromOutbound } from "@/lib/adherence/synthesise";
  * Idempotency: each (channelId, externalId) is unique by `hash` —
  * re-running the ingest doesn't duplicate rows. Adapter rows lacking an
  * externalId are deduped on a content-hash fallback.
+ *
+ * Refresh: before handing tokens to the adapter we call
+ * `ensureFreshTokens` to swap an expired access_token for a fresh one
+ * via the refresh_token grant. If the refresh hard-fails (refresh_token
+ * revoked) the channel is flipped to REFRESH_FAILED and the ingest call
+ * returns zeroes — the User must re-run OAuth.
  *
  * Side effect: every newly-inserted OUT row is handed to
  * `synthesiseFromOutbound` so the bypassed-send compliance gate fires
@@ -26,6 +32,7 @@ export async function runIngest(channelId: string): Promise<{
   skipped: number;
   synthesised: number;
   matched: number;
+  refreshFailed?: boolean;
 }> {
   const channel = await superDb.channel.findUnique({ where: { id: channelId } });
   if (!channel) throw new Error("channel not found");
@@ -38,22 +45,26 @@ export async function runIngest(channelId: string): Promise<{
   const auth = auths[0];
 
   let tokens: Tokens = {};
+  let refreshFailed = false;
   if (auth) {
-    try {
-      tokens = decryptJson<Tokens>(auth.encryptedTokens);
-    } catch {
-      tokens = {};
+    const refresh = await ensureFreshTokens(auth.id);
+    if (refresh.result === "failed") {
+      refreshFailed = true;
+    } else {
+      tokens = refresh.tokens;
     }
   }
 
   const adapter = adapterFor(channel.kind);
-  const rows = await adapter.ingest({
-    tenantId: channel.tenantId,
-    channelId,
-    membershipId: auth?.membershipId ?? null,
-    tokens,
-    scope: auth?.scope ?? undefined,
-  });
+  const rows = refreshFailed
+    ? []
+    : await adapter.ingest({
+        tenantId: channel.tenantId,
+        channelId,
+        membershipId: auth?.membershipId ?? null,
+        tokens,
+        scope: auth?.scope ?? undefined,
+      });
 
   let inserted = 0;
   let skipped = 0;
@@ -111,10 +122,18 @@ export async function runIngest(channelId: string): Promise<{
       synthesised,
       matched,
       op: "ingest",
+      refreshFailed: refreshFailed || undefined,
     },
   });
 
-  return { fetched: rows.length, inserted, skipped, synthesised, matched };
+  return {
+    fetched: rows.length,
+    inserted,
+    skipped,
+    synthesised,
+    matched,
+    refreshFailed: refreshFailed || undefined,
+  };
 }
 
 function sha256(s: string) {
