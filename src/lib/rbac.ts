@@ -135,6 +135,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "xcl:read":            ["FIRM_ADMIN", "FCT_MEMBER", "CURATOR", "ACUMON_ADMIN"],
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN", "FIRM_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],
+
+  // Integration Tiers (PRD §10). Same posture as the Roadmap (§16), Risks
+  // (§17) and Sub-Processors (§15.3): the catalogue is published to every
+  // Client per §15.3 transparency, so any signed-in role can read. Mutating
+  // status / scope / new entries is operator-only and additionally gated to
+  // the Acumon-internal tenant in the page handler — there's no concept of
+  // a per-Client integration roadmap, only one product-wide list.
+  "integrations:read":   ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "integrations:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

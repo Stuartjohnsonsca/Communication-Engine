@@ -236,6 +236,9 @@ enum AuditEventType {
   FCG_SCAN_FAILED
   FCG_SCAN_PROMOTED
   FCG_SCAN_DISCARDED
+  INTEGRATION_TARGET_ADDED
+  INTEGRATION_TARGET_UPDATED
+  INTEGRATION_TARGET_STATUS_CHANGED
 }
 
 enum BillingPeriodStatus {
@@ -360,6 +363,47 @@ enum TermsStatus {
   DRAFT
   ACTIVE
   SUPERSEDED
+}
+
+/// PRD §10 integration tier. Tier 1 must be live at GA; Tier 2 within 6
+/// months of GA; Tier 3 is roadmap; SDK is the generic Integration Capability
+/// (§10.4) — Clients and partners wire arbitrary systems via the documented
+/// SDK + MCP adaptor layer rather than bespoke engineering.
+enum IntegrationTier {
+  TIER_1
+  TIER_2
+  TIER_3
+  SDK
+}
+
+/// PRD §10 integration delivery status. PLANNED = on the roadmap, no code
+/// shipped; IN_DEVELOPMENT = actively under build; AVAILABLE = generally
+/// available to Clients; DEPRECATED = sunset (kept readable for audit so
+/// past Channel rows still resolve their target).
+enum IntegrationStatus {
+  PLANNED
+  IN_DEVELOPMENT
+  AVAILABLE
+  DEPRECATED
+}
+
+/// PRD §10 integration category — drives the Channel.kind that the target
+/// produces and how it appears in the integrations catalogue. Multiple
+/// targets can share a category (e.g. Microsoft 365 and Google Workspace
+/// both produce EMAIL channels).
+enum IntegrationCategory {
+  EMAIL
+  CHAT
+  DOCUMENTS
+  CALENDAR
+  MEETINGS
+  E_SIGNATURE
+  PRACTICE_MANAGEMENT
+  CRM
+  KNOWLEDGE_BASE
+  ACCOUNTING
+  TASK_MANAGEMENT
+  OTHER
 }
 
 /// PRD §5.1.1 Firm Culture Scan lifecycle. PENDING = scan record created;
@@ -1675,6 +1719,69 @@ model SubProcessor {
 
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+
+// ─── Integration Tiers (PRD §10) ──────────────────────────────────────────
+
+/// PRD §10 — every integration target Acumon offers (or plans to offer) as a
+/// row. Global (no tenantId, NOT under RLS) — same global-data pattern as
+/// Roadmap (§16), Risks (§17) and Sub-Processors (§15.3): mutations gated to
+/// Acumon operators (FIRM_ADMIN of "acumon" tenant or ACUMON_ADMIN). Audit
+/// events written against the operator's tenant chain.
+///
+/// Each target has a tier (PRD §10.1/10.2/10.3/SDK), a category that drives
+/// `Channel.kind`, an auth mechanism, an array of OAuth scopes (or scope-like
+/// permission strings), a status, and an optional `channelKind` mapping back
+/// to the per-tenant `Channel` model. The `/integrations` page renders this
+/// catalogue read-only to every tenant; each tenant's actually-authorised
+/// surface is `/admin/channels`.
+model IntegrationTarget {
+  id                     String              @id @default(cuid())
+  /// Stable code (e.g. "m365", "google-workspace", "slack"). Used in URLs,
+  /// audit payloads, and as the FK from `Channel.kind` for v1 targets.
+  code                   String              @unique
+  ordinal                Int
+  name                   String
+  vendor                 String?
+  tier                   IntegrationTier
+  category               IntegrationCategory
+  status                 IntegrationStatus   @default(PLANNED)
+  /// Channel.kind value emitted when a tenant authorises this target
+  /// (e.g. "M365", "GOOGLE", "SLACK"). Null for SDK / non-Channel targets
+  /// (DocuSign event triggers, practice-management bridges).
+  channelKind            String?
+  /// OAuth + permission mechanism — "oauth2", "api_key", "saml", "webhook".
+  /// Free-form because the integrations matrix is too varied for an enum.
+  authMechanism          String              @default("oauth2")
+  /// Array of scope strings the target requires. Documented per PRD §10.4
+  /// "All integrations inherit the source system's permissions model".
+  requiredScopes         String[]            @default([])
+  /// Surfaces this integration produces inside the platform — array of
+  /// strings like "drafts", "minutes", "actions", "follow-ups". Drives the
+  /// /integrations catalog without hard-coding per-target rendering.
+  capabilities           String[]            @default([])
+  /// Short human-readable role (e.g. "Email + calendar + chat", "Document
+  /// management for legal").
+  role                   String?
+  /// Operator commentary — limitations, prerequisite addenda, etc.
+  notes                  String?             @db.Text
+  /// Lifecycle timestamps. `targetGaAt` is the date this target is committed
+  /// to be GA; `availableSince` is when it actually shipped. These are
+  /// independent because Tier 2 targets have a 6-month-from-GA SLO that
+  /// outlives the parent product GA date.
+  targetGaAt             DateTime?
+  availableSince         DateTime?
+  deprecatedAt           DateTime?
+  /// Whether this target hooks the §14.4 export schema directly, the §10.4
+  /// SDK adaptor pattern, or neither — informational only.
+  export                 String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([tier, ordinal])
+  @@index([category, status])
+  @@index([status])
 }
 
 

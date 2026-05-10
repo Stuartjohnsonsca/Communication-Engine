@@ -296,33 +296,22 @@ export default async function SwitchingPage({
       <section className="card space-y-2">
         <h2 className="text-base font-medium">Integration APIs (PRD §10)</h2>
         <p className="text-sm text-ink/70">
-          Documented in the PRD as Tier 1 / 2 / 3. The same per-tenant Channel + ChannelAuth
-          model surfaces all of them — see{" "}
+          The integrations catalogue — every Tier 1 / 2 / 3 target plus the §10.4 generic SDK
+          commitment, with required scopes and delivery status — lives at{" "}
+          <Link
+            href={`/${tenantSlug}/integrations`}
+            className="underline decoration-dotted"
+          >
+            /integrations
+          </Link>
+          . Your tenant&rsquo;s actual authorisations are in{" "}
           <Link
             href={`/${tenantSlug}/admin/channels`}
             className="underline decoration-dotted"
           >
             channel administration
-          </Link>{" "}
-          for what your tenant has authorised today.
-        </p>
-        <dl className="grid gap-2 text-sm md:grid-cols-3">
-          <div className="rounded bg-ink/5 p-2">
-            <dt className="text-xs font-medium text-ink/70">Tier 1 (GA)</dt>
-            <dd>Microsoft 365, Google Workspace, Slack</dd>
-          </div>
-          <div className="rounded bg-ink/5 p-2">
-            <dt className="text-xs font-medium text-ink/70">Tier 2 (within 6 months)</dt>
-            <dd>WhatsApp Business, iManage, NetDocuments, Zoom, DocuSign, Clio, Xero, IRIS, CCH</dd>
-          </div>
-          <div className="rounded bg-ink/5 p-2">
-            <dt className="text-xs font-medium text-ink/70">Tier 3 (roadmap)</dt>
-            <dd>HubSpot, Salesforce, Confluence, Notion, Calendly, accounting/billing</dd>
-          </div>
-        </dl>
-        <p className="text-xs text-ink/60">
-          A documented Integration SDK + MCP-compatible adaptor layer (§10.4) lets Clients and
-          partners wire in additional systems without bespoke engineering.
+          </Link>
+          .
         </p>
       </section>
 
