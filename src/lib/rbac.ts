@@ -177,6 +177,23 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "breach:read":   ["FIRM_ADMIN", "FCT_MEMBER"],
   "breach:notify": ["FIRM_ADMIN"],
   "breach:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
+  // Service Levels (PRD §13). The SLA target catalogue is universal-read
+  // (transparent commitment); each tenant's measurements are read by FCT
+  // + FIRM_ADMIN; recording measurements is gated to Acumon operators
+  // (page handler also gates on tenant.slug === "acumon" for some paths).
+  "sla:read":       ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "sla:manage":     ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
+  // Localisation (PRD §13.5). The supported-languages registry is
+  // universal-read; mutations gated to Acumon operators.
+  "languages:read":   ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "languages:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
+  // Accessibility statement (PRD §13.4). Universal-read; published
+  // versions managed by Acumon operators.
+  "accessibility:read":   ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "accessibility:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

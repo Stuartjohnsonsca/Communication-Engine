@@ -251,6 +251,11 @@ enum AuditEventType {
   BREACH_RESOLVED
   BREACH_CLIENT_NOTIFIED
   BREACH_UPDATE_PUBLISHED
+  SLA_TARGET_UPDATED
+  SLA_MEASUREMENT_RECORDED
+  LANGUAGE_ADDED
+  LANGUAGE_UPDATED
+  ACCESSIBILITY_STATEMENT_PUBLISHED
 }
 
 enum BillingPeriodStatus {
@@ -416,6 +421,24 @@ enum IntegrationCategory {
   ACCOUNTING
   TASK_MANAGEMENT
   OTHER
+}
+
+/// PRD §13.1 Service Level kind. AVAILABILITY = uptime percentage;
+/// LATENCY = response-time threshold (median or P95). The unit lives on
+/// the row because availability is a percentage and latency is seconds.
+enum SlaKind {
+  AVAILABILITY
+  LATENCY
+}
+
+/// PRD §13.1 measurement outcome. MET = measured value at or better than
+/// the target; MISSED = worse; INSUFFICIENT_DATA = the period did not
+/// produce enough samples to make a determination (e.g. a tenant with no
+/// drafts produced no latency samples in the month).
+enum SlaOutcome {
+  MET
+  MISSED
+  INSUFFICIENT_DATA
 }
 
 /// PRD §12.9 Breach incident lifecycle. TRIAGE = operator confirming
@@ -629,6 +652,7 @@ model Tenant {
   termsRecords          TermsRecord[]
   transferImpactAssessments TransferImpactAssessment[]
   breachNotifications   BreachClientNotification[]
+  slaMeasurements       SlaMeasurement[]
 
   @@index([status])
 }
@@ -1776,6 +1800,135 @@ model SubProcessor {
 
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+
+// ─── Service Levels + Localisation + Accessibility (PRD §13) ──────────────
+
+/// PRD §13.1 SLA target. Global catalogue — every Client sees the same
+/// commitments. Acumon operators amend the catalogue (add a target,
+/// tighten a threshold) and the operator console at `/sla` records
+/// per-tenant per-month measurements against each.
+///
+/// Same global-data pattern as Roadmap, Risks, Sub-Processors, Integrations,
+/// ProcessingActivity: no tenantId, NOT under RLS, mutations gated to
+/// Acumon operators. Audit events on the operator's chain.
+model SlaTarget {
+  id           String   @id @default(cuid())
+  /// Stable code (e.g. "availability-overall", "drafting-latency-short").
+  code         String   @unique
+  ordinal      Int
+  name         String
+  kind         SlaKind
+  /// Numeric threshold. For AVAILABILITY this is a percentage (e.g. 99.9).
+  /// For LATENCY this is the seconds limit (e.g. 5 for a ≤5s short-draft
+  /// median). The display layer renders units from `kind`.
+  threshold    Float
+  /// Unit hint shown in the UI ("%" or "s" or "× audio duration").
+  unit         String
+  /// Aggregation rule for measurements: "median" | "p95" | "monthly_pct".
+  aggregation  String
+  /// PRD scope ("business hours 07:00–19:00 local", "overall", "at UCG commit").
+  scope        String
+  /// Free-form operator commentary.
+  notes        String?  @db.Text
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  measurements SlaMeasurement[]
+
+  @@index([ordinal])
+  @@index([kind, isActive])
+}
+
+/// PRD §13.1 monthly measurement for a single tenant against a single
+/// target. Tenant-scoped + RLS-protected so each Client only reads their
+/// own performance numbers. Auto-computed for the latency-flavoured
+/// targets from `ModelRun`; availability requires operator input from
+/// external uptime monitoring.
+model SlaMeasurement {
+  id           String     @id @default(cuid())
+  tenantId     String
+  targetId     String
+  /// "YYYY-MM"
+  period       String
+  /// The actual measured value, in the same unit as the target.
+  observed     Float?
+  outcome      SlaOutcome @default(INSUFFICIENT_DATA)
+  /// Sample count behind the measurement (latency targets) or hours of
+  /// observed coverage (availability targets).
+  sampleN      Int        @default(0)
+  /// JSON payload for additional dimensions: {p95, max, perDimension, ...}.
+  payload      Json?
+  /// Operator note (e.g. for a missed period, what mitigation was applied).
+  note         String?    @db.Text
+  recordedAt   DateTime   @default(now())
+  recordedByName String?
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  target SlaTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, targetId, period])
+  @@index([tenantId, period])
+  @@index([targetId, period])
+  @@index([outcome])
+}
+
+/// PRD §13.5 Localisation. Global registry of supported languages. The
+/// `isInterface` flag controls whether the language appears in the UI
+/// language picker; `isDrafting` controls whether the drafting agent +
+/// FCG/UCG content support that language. At GA the same set of 8
+/// languages is supported for both per the PRD.
+model SupportedLanguage {
+  id          String   @id @default(cuid())
+  /// BCP-47 code (e.g. "en-GB", "fr", "de").
+  code        String   @unique
+  /// English-language display name ("French (France)").
+  name        String
+  /// Endonym (the language's own name for itself, e.g. "Français").
+  nativeName  String
+  ordinal     Int
+  isInterface Boolean  @default(true)
+  isDrafting  Boolean  @default(true)
+  /// Whether this language's typography needs RTL handling.
+  rtl         Boolean  @default(false)
+  /// Operator note (e.g. "GA at month 4", "EU expansion P3 milestone").
+  notes       String?  @db.Text
+  addedAt     DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ordinal])
+  @@index([isInterface, isDrafting])
+}
+
+/// PRD §13.4 Accessibility Statement. Single row for the active version;
+/// older versions are retained (not soft-deleted) for the audit trail of
+/// what the published commitment was on a given date. Mutations are
+/// Acumon-operator-only; read is universal.
+model AccessibilityStatement {
+  id              String    @id @default(cuid())
+  version         Int       @unique
+  /// "WCAG 2.2 AA" target per PRD §13.4. Held as text so future versions
+  /// (WCAG 3.0) don't need a schema change.
+  conformanceTo   String
+  /// Conformance claim — "Fully conformant", "Partially conformant", or
+  /// "Not conformant". Held as text for the same reason as `conformanceTo`.
+  claim           String
+  body            String    @db.Text
+  /// Last formal accessibility audit date.
+  auditedAt       DateTime?
+  auditedByName   String?
+  /// Known issues with workarounds — JSON array of {issue, impact, workaround}.
+  knownIssues     Json      @default("[]")
+  isActive        Boolean   @default(false)
+  publishedAt     DateTime?
+  publishedByName String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([isActive])
+  @@index([version])
 }
 
 

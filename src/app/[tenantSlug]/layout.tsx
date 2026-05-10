@@ -43,6 +43,15 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/risks`, label: "Risks" },
     { href: `/${tenantSlug}/switching`, label: "Switching posture" },
     { href: `/${tenantSlug}/integrations`, label: "Integrations" },
+    ...(hasPermission(ctx.membership.role, "sla:read")
+      ? [{ href: `/${tenantSlug}/sla`, label: "Service levels" }]
+      : []),
+    ...(hasPermission(ctx.membership.role, "accessibility:read")
+      ? [{ href: `/${tenantSlug}/accessibility`, label: "Accessibility" }]
+      : []),
+    ...(hasPermission(ctx.membership.role, "languages:read")
+      ? [{ href: `/${tenantSlug}/languages`, label: "Languages" }]
+      : []),
     { href: `/${tenantSlug}/account`, label: "My account" },
     { href: `/${tenantSlug}/admin/adherence`, label: "Firm adherence" },
     { href: `/${tenantSlug}/admin/audit`, label: "Audit log" },

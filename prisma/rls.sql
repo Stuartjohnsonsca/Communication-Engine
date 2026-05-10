@@ -35,7 +35,8 @@ DECLARE
     'TenantTerminationExport',
     'TermsRecord',
     'TransferImpactAssessment',
-    'BreachClientNotification'
+    'BreachClientNotification',
+    'SlaMeasurement'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP
