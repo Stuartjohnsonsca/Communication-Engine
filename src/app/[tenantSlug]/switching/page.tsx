@@ -108,6 +108,18 @@ export default async function SwitchingPage({
         </p>
       </div>
 
+      <section className="card space-y-2">
+        <h2 className="text-base font-medium">Public surface</h2>
+        <p className="text-sm text-ink/70">
+          The same sub-processor list, recent incident posture, accessibility statement and
+          terms-versioning summary are mirrored at{" "}
+          <Link href="/status" className="underline decoration-dotted">
+            /status
+          </Link>{" "}
+          for procurement reviewers and prospective Clients to read without an account.
+        </p>
+      </section>
+
       <section className="card space-y-2 border-emerald-300 bg-emerald-50/40">
         <h2 className="text-base font-medium">Three commitments</h2>
         <ol className="list-decimal space-y-1 pl-5 text-sm">

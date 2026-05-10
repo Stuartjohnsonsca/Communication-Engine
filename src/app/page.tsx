@@ -24,7 +24,13 @@ export default async function Home() {
         the Acumon Communications PRD v0.1 (May 2026).
       </p>
 
-      <section className="card mt-8">
+      <p className="mt-4 text-sm">
+        <Link href="/status" className="underline decoration-dotted">
+          Public service status →
+        </Link>
+      </p>
+
+      <section className="card mt-6">
         <h2 className="text-lg font-medium">Sign in</h2>
         {session?.user ? (
           <div className="mt-2 text-sm">
