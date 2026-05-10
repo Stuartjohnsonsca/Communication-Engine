@@ -8,6 +8,7 @@ import { requirePermission } from "@/lib/rbac";
 import { evaluate } from "@/lib/voting/state-machine";
 import { eligibleVoterIds } from "@/lib/voting/quorum";
 import { flagConflictsAfterFcgCommit } from "@/lib/ucg/propagation";
+import { reportError } from "@/lib/observability";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -78,10 +79,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         tenantId: ctx.tenant.id,
         newFcgId,
         actorMembershipId: ctx.membership.id,
-      }).catch((e) => console.error("[flagConflictsAfterFcgCommit] failed:", e));
+      }).catch((e) =>
+        reportError(e, {
+          route: "api/fcg/proposals/[id]/vote",
+          tenantId: ctx.tenant.id,
+          membershipId: ctx.membership.id,
+          extra: { proposalId: proposal.id, newFcgId },
+        }, "flagConflictsAfterFcgCommit failed"),
+      );
       return NextResponse.json({ proposalState: "PASSED", reason: decision.reason, newFcgId });
     } catch (e) {
-      console.error("commitProposal failed:", e);
+      reportError(e, {
+        route: "api/fcg/proposals/[id]/vote",
+        tenantId: ctx.tenant.id,
+        membershipId: ctx.membership.id,
+        extra: { proposalId: proposal.id },
+      }, "commitProposal failed");
       return NextResponse.json(
         {
           proposalState: "OPEN_FOR_VOTE",

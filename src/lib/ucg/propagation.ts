@@ -3,6 +3,7 @@ import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { judgeUcg } from "@/lib/ai/agents/judgeAgent";
 import { addWorkingDays } from "@/lib/working-days";
+import { reportError } from "@/lib/observability";
 
 /**
  * PRD §5.2.2 — when an FCG amendment is committed, every currently committed
@@ -157,7 +158,11 @@ export async function flagConflictsAfterFcgCommit(opts: {
         });
       }
     } catch (e) {
-      console.error(`[flagConflictsAfterFcgCommit] judge failed for UCG ${ucg.id}:`, e);
+      reportError(e, {
+        route: "lib/ucg/propagation",
+        tenantId: opts.tenantId,
+        extra: { ucgId: ucg.id, newFcgId: opts.newFcgId },
+      }, "flagConflictsAfterFcgCommit: judge failed for UCG");
       // Leave the UCG flagged; sweep will handle it at grace expiry.
     }
   }

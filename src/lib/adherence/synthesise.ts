@@ -3,6 +3,7 @@ import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { scoreAdherence } from "@/lib/ai/agents/adherenceAgent";
 import { escalateAdherenceIfPoor } from "./escalation";
+import { reportError } from "@/lib/observability";
 
 /**
  * Backlog item 1 — bypassed-send detection.
@@ -243,7 +244,11 @@ export async function synthesiseFromOutbound(
       responseLatencyMin,
     });
   } catch (e) {
-    console.error("synthesised adherence scoring failed", e);
+    reportError(e, {
+      route: "lib/adherence/synthesise",
+      tenantId: channel.tenantId,
+      extra: { ingestedMessageId: ingested.id },
+    }, "synthesised adherence scoring failed");
   }
 
   if (!scored) {

@@ -7,6 +7,7 @@ import { classifyAndRecordInbound } from "@/lib/sentiment/record";
 import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
 import { getMemberLifecycleState, isDraftingPermitted } from "@/lib/lifecycle";
+import { reportError } from "@/lib/observability";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -124,7 +125,12 @@ export async function POST(req: Request) {
       ingestedMessageId: ingested.id,
       inbound: parsed.data.inbound,
     }).catch((err) => {
-      console.error("[sentiment] classify failed", err);
+      reportError(err, {
+        route: "api/ai/draft",
+        tenantId: ctx.tenant.id,
+        membershipId: ctx.membership.id,
+        extra: { ingestedMessageId: ingested.id },
+      }, "sentiment classify failed");
       return null;
     }),
   ]);

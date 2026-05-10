@@ -6,6 +6,7 @@ import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
 import { scoreAdherence } from "@/lib/ai/agents/adherenceAgent";
 import { escalateAdherenceIfPoor } from "@/lib/adherence/escalation";
+import { reportError } from "@/lib/observability";
 import type { Prisma } from "@prisma/client";
 
 const inputSchema = z.object({
@@ -153,7 +154,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       responseLatencyMin,
     });
   } catch (e) {
-    console.error("adherence scoring failed", e);
+    reportError(e, {
+      route: "api/drafts/[id]/sent",
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
+      extra: { draftId: id },
+    }, "adherence scoring failed");
   }
 
   if (!scored) {

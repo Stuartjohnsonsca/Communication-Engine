@@ -4,6 +4,7 @@ import { adapterFor, type Tokens } from "./adapters";
 import { writeAuditEvent } from "@/lib/audit";
 import { synthesiseFromOutbound } from "@/lib/adherence/synthesise";
 import { ensureFreshTokens } from "./oauth-refresh";
+import { reportError } from "@/lib/observability";
 
 /**
  * Run an adapter ingest and persist rows as `IngestedMessage`. Returns
@@ -103,7 +104,11 @@ export async function runIngest(channelId: string): Promise<{
         if (outcome.result === "synthesised") synthesised++;
         else if (outcome.result === "matched") matched++;
       } catch (e) {
-        console.error("synthesiseFromOutbound failed", { ingestedMessageId: created.id, e });
+        reportError(e, {
+          route: "lib/channels/ingest",
+          tenantId: channel.tenantId,
+          extra: { channelId, ingestedMessageId: created.id },
+        }, "synthesiseFromOutbound failed");
       }
     }
   }

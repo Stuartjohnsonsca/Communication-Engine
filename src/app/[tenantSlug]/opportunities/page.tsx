@@ -6,6 +6,7 @@ import { superDb } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { getDpiaStatus } from "@/lib/dpia/status";
 import { detectOpportunity } from "@/lib/opportunities/detect";
+import { reportError } from "@/lib/observability";
 
 type Filter = "OPEN" | "ACCEPTED" | "REJECTED" | "ROUTED" | "ALL";
 const FILTERS: Filter[] = ["OPEN", "ACCEPTED", "REJECTED", "ROUTED", "ALL"];
@@ -147,7 +148,12 @@ export default async function OpportunitiesPage({
           },
         });
       } catch (e) {
-        console.error("detectOpportunity failed", msg.id, e);
+        reportError(e, {
+          route: "[tenantSlug]/opportunities (server action)",
+          tenantId: inner.tenant.id,
+          tenantSlug,
+          extra: { ingestedMessageId: msg.id },
+        }, "detectOpportunity failed");
       }
     }
 
