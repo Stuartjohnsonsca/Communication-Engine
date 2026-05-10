@@ -28,6 +28,9 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/opportunities`, label: "Opportunities" },
     { href: `/${tenantSlug}/sentiment`, label: "Sentiment" },
     { href: `/${tenantSlug}/dashboards`, label: "Adherence" },
+    ...(hasPermission(ctx.membership.role, "adherence:read")
+      ? [{ href: `/${tenantSlug}/adherence/escalations`, label: "Adherence escalations" }]
+      : []),
     { href: `/${tenantSlug}/dpia`, label: "DPIA" },
     ...(hasPermission(ctx.membership.role, "processing-map:read")
       ? [{ href: `/${tenantSlug}/compliance/processing-map`, label: "Controller / Processor" }]

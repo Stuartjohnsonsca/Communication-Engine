@@ -25,12 +25,15 @@ export type AdherenceRuleFinding = {
 };
 
 export type AdherenceDetail = {
+  id: string;
   overall: number;
   perDimension: Record<AdherenceDimensionKey, AdherenceDimension>;
   perRule: AdherenceRuleFinding[];
   fcgVersionUsed: number;
   ucgVersionUsed: number | null;
   createdAt: string;
+  escalatedAt: string | null;
+  acknowledgedAt: string | null;
 };
 
 export type SentimentDetail = {
@@ -80,6 +83,7 @@ export type DraftDetail = {
   parent: { id: string; status: string; createdAt: string } | null;
   children: { id: string; status: string; createdAt: string }[];
   sentiment: SentimentDetail | null;
+  synthesisedFromOutboundIngest: boolean;
 };
 
 const DIMENSION_LABELS: Record<AdherenceDimensionKey, string> = {
@@ -229,6 +233,11 @@ export default function DraftDetailClient({
               <span className="tag bg-violet-100">research required</span>
             )}
             {draft.noGoSubjectHit && <span className="tag bg-red-100">no-go subject</span>}
+            {draft.synthesisedFromOutboundIngest && (
+              <span className="tag bg-amber-100" title="Reconstructed by ingest from the connected mailbox — the User did not draft this in the engine.">
+                bypassed send
+              </span>
+            )}
             <span>created {draft.createdAt.slice(0, 16).replace("T", " ")}</span>
             {draft.sentMarkedAt && (
               <span>sent {draft.sentMarkedAt.slice(0, 16).replace("T", " ")}</span>
@@ -278,6 +287,13 @@ export default function DraftDetailClient({
         <SentimentEscalationBanner
           tenantSlug={tenantSlug}
           sentiment={draft.sentiment}
+        />
+      )}
+
+      {draft.adherence && draft.adherence.escalatedAt && !draft.adherence.acknowledgedAt && (
+        <AdherenceEscalationBanner
+          tenantSlug={tenantSlug}
+          adherence={draft.adherence}
         />
       )}
 
@@ -570,6 +586,76 @@ function AdherencePanel({ adherence }: { adherence: AdherenceDetail }) {
           </ul>
         </details>
       )}
+    </div>
+  );
+}
+
+function AdherenceEscalationBanner({
+  tenantSlug,
+  adherence,
+}: {
+  tenantSlug: string;
+  adherence: AdherenceDetail;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const overallPct = Math.round(adherence.overall * 100);
+  const failures = adherence.perRule.filter((r) => r.verdict === "fail").slice(0, 3);
+
+  function acknowledge() {
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/adherence/${adherence.id}/acknowledge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tenantSlug }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? res.statusText);
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="card border-red-400 bg-red-50/60 space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-base font-medium text-red-800">
+            Adherence escalation — sent communication scored {overallPct}% overall
+          </h2>
+          <p className="mt-1 text-xs text-red-900/70">
+            Below the {Math.round(0.6 * 100)}% threshold. The Firm Culture Team has also been notified.
+            Acknowledge once you have followed up with the counterparty or otherwise have the matter in
+            hand — this records who took ownership.
+          </p>
+        </div>
+        <div className="text-right text-xs text-red-900/70">
+          <div className="tabular-nums">FCG v{adherence.fcgVersionUsed}</div>
+          {adherence.ucgVersionUsed != null && (
+            <div className="tabular-nums">UCG v{adherence.ucgVersionUsed}</div>
+          )}
+        </div>
+      </div>
+      {failures.length > 0 && (
+        <ul className="space-y-1 text-xs">
+          {failures.map((r, i) => (
+            <li key={i} className="rounded bg-white/70 p-2 text-red-900">
+              <span className="font-mono opacity-70">{r.source}:{r.ruleExternalId}</span>
+              <div>{r.explanation}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-center gap-3">
+        <button className="btn btn-primary text-xs" onClick={acknowledge} disabled={pending}>
+          {pending ? "…" : "Acknowledge escalation"}
+        </button>
+        {error && <span className="text-xs text-red-700">{error}</span>}
+      </div>
     </div>
   );
 }

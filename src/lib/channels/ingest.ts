@@ -3,6 +3,7 @@ import { superDb } from "@/lib/db";
 import { adapterFor, type Tokens } from "./adapters";
 import { decryptJson } from "./crypto";
 import { writeAuditEvent } from "@/lib/audit";
+import { synthesiseFromOutbound } from "@/lib/adherence/synthesise";
 
 /**
  * Run an adapter ingest and persist rows as `IngestedMessage`. Returns
@@ -11,11 +12,20 @@ import { writeAuditEvent } from "@/lib/audit";
  * Idempotency: each (channelId, externalId) is unique by `hash` —
  * re-running the ingest doesn't duplicate rows. Adapter rows lacking an
  * externalId are deduped on a content-hash fallback.
+ *
+ * Side effect: every newly-inserted OUT row is handed to
+ * `synthesiseFromOutbound` so the bypassed-send compliance gate fires
+ * (backlog item 1). That call links the OUT to an existing SENT Draft
+ * if one matches, otherwise synthesises a forensic SENT Draft + scores
+ * adherence + escalates on a poor score. Failures there are logged but
+ * never block the ingest count from being returned.
  */
 export async function runIngest(channelId: string): Promise<{
   fetched: number;
   inserted: number;
   skipped: number;
+  synthesised: number;
+  matched: number;
 }> {
   const channel = await superDb.channel.findUnique({ where: { id: channelId } });
   if (!channel) throw new Error("channel not found");
@@ -47,6 +57,8 @@ export async function runIngest(channelId: string): Promise<{
 
   let inserted = 0;
   let skipped = 0;
+  let synthesised = 0;
+  let matched = 0;
   for (const r of rows) {
     const hash = sha256(`${channelId}|${r.externalId ?? ""}|${r.body}`);
     const existing = await superDb.ingestedMessage.findFirst({
@@ -57,7 +69,7 @@ export async function runIngest(channelId: string): Promise<{
       skipped++;
       continue;
     }
-    await superDb.ingestedMessage.create({
+    const created = await superDb.ingestedMessage.create({
       data: {
         tenantId: channel.tenantId,
         channelId,
@@ -73,6 +85,16 @@ export async function runIngest(channelId: string): Promise<{
       },
     });
     inserted++;
+
+    if (r.direction === "OUT") {
+      try {
+        const outcome = await synthesiseFromOutbound(channelId, created.id);
+        if (outcome.result === "synthesised") synthesised++;
+        else if (outcome.result === "matched") matched++;
+      } catch (e) {
+        console.error("synthesiseFromOutbound failed", { ingestedMessageId: created.id, e });
+      }
+    }
   }
 
   await writeAuditEvent({
@@ -81,10 +103,18 @@ export async function runIngest(channelId: string): Promise<{
     actorMembershipId: auth?.membershipId ?? null,
     subjectType: "Channel",
     subjectId: channelId,
-    payload: { kind: channel.kind, fetched: rows.length, inserted, skipped, op: "ingest" },
+    payload: {
+      kind: channel.kind,
+      fetched: rows.length,
+      inserted,
+      skipped,
+      synthesised,
+      matched,
+      op: "ingest",
+    },
   });
 
-  return { fetched: rows.length, inserted, skipped };
+  return { fetched: rows.length, inserted, skipped, synthesised, matched };
 }
 
 function sha256(s: string) {

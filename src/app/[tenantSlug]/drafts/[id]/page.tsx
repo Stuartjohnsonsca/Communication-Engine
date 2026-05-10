@@ -63,14 +63,18 @@ export default async function DraftDetailPage({
     sentResponseLatencyMin: draft.sentResponseLatencyMin,
     adherence: draft.adherence
       ? ({
+          id: draft.adherence.id,
           overall: draft.adherence.overall,
           perDimension: draft.adherence.perDimension,
           perRule: draft.adherence.perRule,
           fcgVersionUsed: draft.adherence.fcgVersionUsed,
           ucgVersionUsed: draft.adherence.ucgVersionUsed,
           createdAt: draft.adherence.createdAt.toISOString(),
+          escalatedAt: draft.adherence.escalatedAt?.toISOString() ?? null,
+          acknowledgedAt: draft.adherence.acknowledgedAt?.toISOString() ?? null,
         } as AdherenceDetail)
       : null,
+    synthesisedFromOutboundIngest: draft.synthesisedFromOutboundIngest,
     actions: draft.actions.map((a) => ({
       id: a.id,
       title: a.title,

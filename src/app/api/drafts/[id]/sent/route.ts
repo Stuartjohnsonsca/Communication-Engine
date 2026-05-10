@@ -5,6 +5,7 @@ import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
 import { scoreAdherence } from "@/lib/ai/agents/adherenceAgent";
+import { escalateAdherenceIfPoor } from "@/lib/adherence/escalation";
 import type { Prisma } from "@prisma/client";
 
 const inputSchema = z.object({
@@ -184,6 +185,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       fcgVersionUsed: fcg.version,
       ucgVersionUsed: ucg?.version ?? null,
     },
+  });
+
+  await escalateAdherenceIfPoor({
+    tenantId: ctx.tenant.id,
+    adherenceId: created.id,
+    overall: scored.result.overall,
+    draftId: updated.id,
+    membershipId: ctx.membership.id,
   });
 
   return NextResponse.json({ draft: updated, adherence: created });

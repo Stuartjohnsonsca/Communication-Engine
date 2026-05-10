@@ -260,6 +260,9 @@ enum AuditEventType {
   ONBOARDING_STEP_UNTICKED
   ONBOARDING_PHASE_CHANGED
   ONBOARDING_COMPLETED
+  DRAFT_SYNTHESISED_FROM_OUTBOX
+  ADHERENCE_ESCALATED
+  ADHERENCE_ACKNOWLEDGED
 }
 
 enum BillingPeriodStatus {
@@ -755,6 +758,7 @@ model Membership {
   opportunityComments   OpportunityComment[]     @relation("OpportunityCommentAuthor")
   adherenceScores       AdherenceScore[]
   commAdherence         CommunicationAdherence[]
+  adherenceAcknowledged CommunicationAdherence[] @relation("AdherenceAcknowledger")
   sentimentAssigned     SentimentSignal[]        @relation("SentimentAssignee")
   sentimentAcknowledged SentimentSignal[]        @relation("SentimentAcknowledger")
   auditEventsActor      AuditEvent[]             @relation("AuditActor")
@@ -1047,6 +1051,16 @@ model Draft {
   // (if a holding deadline applied) how late they sent relative to it.
   sentText               String?     @db.Text
   sentResponseLatencyMin Int?
+  // Backlog item 1 — bypassed-send detection. When the channel ingest
+  // observes an OUT message that matches an existing SENT draft (verbatim
+  // body match), we link the OUT IngestedMessage here. When no match is
+  // found, we synthesise a brand-new Draft in SENT status with
+  // `synthesisedFromOutboundIngest = true` and link the same OUT message.
+  // Either way every observed outbound corresponds to one Draft — that's
+  // what makes the "every send is scored" invariant survive bypass.
+  outboundIngestedMessageId     String?  @unique
+  outboundIngestedMessage       IngestedMessage? @relation("DraftOutbound", fields: [outboundIngestedMessageId], references: [id])
+  synthesisedFromOutboundIngest Boolean  @default(false)
 
   tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   membership      Membership              @relation(fields: [membershipId], references: [id])
@@ -1155,6 +1169,7 @@ model IngestedMessage {
   tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   channel       Channel?               @relation(fields: [channelId], references: [id])
   drafts        Draft[]
+  outboundDraft Draft?                 @relation("DraftOutbound")
   sentiments    SentimentSignal[]
   opportunities OpportunityCandidate[]
 
@@ -1426,12 +1441,20 @@ model CommunicationAdherence {
   perRule        Json // [{ ruleExternalId, source: "fcg"|"ucg", verdict, explanation }]
   modelRunId     String?
   createdAt      DateTime @default(now())
+  // Backlog item 1 — adherence escalation. When `overall` is below the
+  // threshold the row is escalated to the assignee (= `membership`) AND
+  // the FCT for governance, mirroring sentiment escalation.
+  escalatedAt      DateTime?
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  draft      Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  membership Membership @relation(fields: [membershipId], references: [id])
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  draft          Draft       @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  membership     Membership  @relation(fields: [membershipId], references: [id])
+  acknowledgedBy Membership? @relation("AdherenceAcknowledger", fields: [acknowledgedById], references: [id])
 
   @@index([tenantId, membershipId, createdAt])
+  @@index([tenantId, escalatedAt])
 }
 
 model DPIAAttestation {

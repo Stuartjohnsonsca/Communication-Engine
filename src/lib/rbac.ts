@@ -201,6 +201,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // checklist itself is per-tenant; there is no Acumon-tenant gate.
   "onboarding:read":   ["FIRM_ADMIN", "FCT_MEMBER"],
   "onboarding:manage": ["FIRM_ADMIN"],
+
+  // Adherence escalations (post-PRD backlog item 1). Anyone with a
+  // membership can read their own escalations queue; the page itself
+  // widens to firm-wide for FCT / FIRM_ADMIN via members:read so
+  // governance retains the same visibility it has on sentiment.
+  // Acknowledge is allowed for the assignee or any FCT / FIRM_ADMIN —
+  // enforced inside the route, mirroring sentiment acknowledge.
+  "adherence:read":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER"],
+  "adherence:acknowledge": ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {
