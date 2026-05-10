@@ -19,6 +19,11 @@ export function middleware(req: NextRequest) {
 
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set(REQUEST_ID_HEADER, requestId);
+  // Mirror the active pathname into a request header so server components
+  // can read it. Next 15 App Router does not surface the active pathname
+  // to server components directly; layouts use this for redirect decisions
+  // (e.g. the 2FA gate allowlists certain paths to avoid redirect loops).
+  requestHeaders.set("x-pathname", req.nextUrl.pathname);
 
   const res = NextResponse.next({
     request: { headers: requestHeaders },

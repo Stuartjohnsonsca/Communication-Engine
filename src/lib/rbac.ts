@@ -216,6 +216,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // enforced inside the route, mirroring sentiment acknowledge.
   "adherence:read":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER"],
   "adherence:acknowledge": ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER"],
+
+  // Post-PRD hardening item 12 — TOTP 2FA. Every Membership can enroll
+  // / disable / verify their own TOTP. Only FIRM_ADMIN can flip the
+  // tenant-wide `requireTotp` flag (the policy that mandates enrollment
+  // for every Membership in the tenant). There is no operator-wide gate
+  // — 2FA is universal-baseline; tenant policy is a per-tenant decision.
+  "auth:configure-totp":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "tenant:configure-totp-policy": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

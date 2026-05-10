@@ -54,6 +54,7 @@ export const enGB: Dictionary = {
     terms: "Terms",
     xcl: "Cross-Client Learning",
     signoff: "Sign-off questions",
+    security: "Security",
   },
   shell: {
     openNavigation: "Open navigation",
@@ -79,6 +80,40 @@ export const enGB: Dictionary = {
     inheritFromTenant: "Inherit from tenant default ({locale})",
     save: "Save preference",
     saved: "Preference saved.",
+  },
+  twofa: {
+    accountHeading: "Two-factor authentication",
+    enrolledDescription:
+      "Two-factor authentication is enabled. You will be challenged for an authenticator code after every sign-in.",
+    notEnrolledDescription:
+      "Add a second factor to your account. Use any TOTP authenticator app — Google Authenticator, Authy, 1Password, Bitwarden, Microsoft Authenticator. Once enabled, you will be challenged for a 6-digit code after each sign-in.",
+    enforcedNote:
+      "Your Firm Administrator requires two-factor authentication for this tenant. Enroll to continue.",
+    enrolledOn: "Enrolled",
+    lastUsed: "Last used",
+    recoveryRemaining: "Recovery codes left",
+    enableButton: "Enable two-factor",
+    disableButton: "Disable two-factor",
+    cancel: "Cancel",
+    secretLabel: "Secret (enter into authenticator app)",
+    otpauthLabel: "Show otpauth URI (for QR import)",
+    enterCodeLabel: "Authenticator code",
+    submitCode: "Confirm",
+    recoveryHeading: "Two-factor authentication is now active.",
+    recoveryWarning:
+      "Save these recovery codes somewhere safe. Each can be used once to sign in if you lose access to your authenticator. They will not be shown again.",
+    enrollFailed: "That code didn't match. Try the next one your authenticator displays.",
+    disableConfirm:
+      "Enter your current authenticator code or a recovery code to confirm disabling two-factor authentication.",
+    disableFailed: "That code didn't match. Try again.",
+    never: "never",
+    challengeHeading: "Verify it's you",
+    challengeDescription:
+      "Enter the 6-digit code from your authenticator app to continue. If you have lost access to your authenticator, you can enter a recovery code instead.",
+    challengeHelp: "6-digit code from your authenticator app, or a recovery code.",
+    continueButton: "Continue",
+    badCodeError: "That code didn't match. Try the next one your authenticator displays.",
+    rateLimitedError: "Too many attempts. Try again shortly.",
   },
 };
 
@@ -128,6 +163,7 @@ export type Dictionary = {
     terms: string;
     xcl: string;
     signoff: string;
+    security: string;
   };
   shell: {
     openNavigation: string;
@@ -150,5 +186,33 @@ export type Dictionary = {
     inheritFromTenant: string;
     save: string;
     saved: string;
+  };
+  twofa: {
+    accountHeading: string;
+    enrolledDescription: string;
+    notEnrolledDescription: string;
+    enforcedNote: string;
+    enrolledOn: string;
+    lastUsed: string;
+    recoveryRemaining: string;
+    enableButton: string;
+    disableButton: string;
+    cancel: string;
+    secretLabel: string;
+    otpauthLabel: string;
+    enterCodeLabel: string;
+    submitCode: string;
+    recoveryHeading: string;
+    recoveryWarning: string;
+    enrollFailed: string;
+    disableConfirm: string;
+    disableFailed: string;
+    never: string;
+    challengeHeading: string;
+    challengeDescription: string;
+    challengeHelp: string;
+    continueButton: string;
+    badCodeError: string;
+    rateLimitedError: string;
   };
 };

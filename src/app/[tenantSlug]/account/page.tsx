@@ -11,6 +11,17 @@ import {
   resolveLocale,
 } from "@/lib/i18n";
 import { hasPermission } from "@/lib/rbac";
+import {
+  getEnrollmentStatus,
+  initiateEnrollment,
+  verifyEnrollment,
+  verifyChallenge,
+  consumeRecoveryCode,
+  disable as disableTotp,
+  resolveCurrentSessionId,
+} from "@/lib/auth/totp";
+import { rateLimit } from "@/lib/ratelimit";
+import { TwoFactorCard } from "./TwoFactorCard";
 
 export default async function AccountPage({
   params,
@@ -21,7 +32,7 @@ export default async function AccountPage({
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
 
-  const [member, channelAuths] = await Promise.all([
+  const [member, channelAuths, totpStatus] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
     }),
@@ -30,6 +41,7 @@ export default async function AccountPage({
       include: { channel: { select: { kind: true } } },
       orderBy: { createdAt: "desc" },
     }),
+    getEnrollmentStatus(ctx.user.id),
   ]);
   if (!member) redirect("/login");
 
@@ -83,6 +95,85 @@ export default async function AccountPage({
     });
     revalidatePath(`/${tenantSlug}/account`);
     revalidatePath(`/${tenantSlug}`, "layout");
+  }
+
+  async function initiateTotpAction() {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "auth:configure-totp")) {
+      throw new Error("forbidden");
+    }
+    return initiateEnrollment({ userId: inner.user.id, accountEmail: inner.user.email });
+  }
+
+  async function confirmTotpAction(code: string) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "auth:configure-totp")) {
+      throw new Error("forbidden");
+    }
+    const rl = await rateLimit({
+      identity: { kind: "membership", value: inner.membership.id },
+      scope: "totp-enroll",
+      limit: 10,
+      windowSeconds: 60,
+      tenantId: inner.tenant.id,
+      membershipId: inner.membership.id,
+    });
+    if (!rl.allowed) return { ok: false, reason: "rate-limited" as const };
+    const cleaned = code.replace(/\s+/g, "").slice(0, 6);
+    const res = await verifyEnrollment({ userId: inner.user.id, code: cleaned });
+    if (res.ok) {
+      const sessionId = await resolveCurrentSessionId();
+      if (sessionId) {
+        await superDb.session.update({
+          where: { id: sessionId },
+          data: { totpVerifiedAt: new Date() },
+        });
+      }
+      revalidatePath(`/${tenantSlug}/account`);
+      revalidatePath(`/${tenantSlug}`, "layout");
+      return { ok: true as const };
+    }
+    return { ok: false as const, reason: res.reason };
+  }
+
+  async function disableTotpAction(code: string) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "auth:configure-totp")) {
+      throw new Error("forbidden");
+    }
+    const rl = await rateLimit({
+      identity: { kind: "membership", value: inner.membership.id },
+      scope: "totp-disable",
+      limit: 10,
+      windowSeconds: 60,
+      tenantId: inner.tenant.id,
+      membershipId: inner.membership.id,
+    });
+    if (!rl.allowed) return { ok: false as const, reason: "rate-limited" as const };
+    const sessionId = await resolveCurrentSessionId();
+    if (!sessionId) return { ok: false as const, reason: "no-session" as const };
+    // Require a current TOTP code OR a recovery code before disabling.
+    // Prevents an attacker with cookie-only access from turning 2FA off.
+    const cleaned = code.replace(/\s+/g, "");
+    let verified = false;
+    if (/^\d{6}$/.test(cleaned)) {
+      const r = await verifyChallenge({ userId: inner.user.id, sessionId, code: cleaned });
+      verified = r.ok;
+    } else {
+      const r = await consumeRecoveryCode({ userId: inner.user.id, sessionId, code: cleaned });
+      verified = r.ok;
+    }
+    if (!verified) return { ok: false as const, reason: "bad-code" as const };
+    await disableTotp({ userId: inner.user.id, actorTenantId: inner.tenant.id });
+    revalidatePath(`/${tenantSlug}/account`);
+    revalidatePath(`/${tenantSlug}`, "layout");
+    return { ok: true as const };
   }
 
   async function setTenantDefaultLocaleAction(formData: FormData) {
@@ -204,6 +295,38 @@ export default async function AccountPage({
           </div>
         </form>
       )}
+
+      <TwoFactorCard
+        status={totpStatus}
+        tenantRequireTotp={ctx.tenant.requireTotp}
+        actions={{
+          initiate: initiateTotpAction,
+          confirm: confirmTotpAction,
+          disable: disableTotpAction,
+        }}
+        copy={{
+          heading: t("twofa.accountHeading"),
+          enrolledDescription: t("twofa.enrolledDescription"),
+          notEnrolledDescription: t("twofa.notEnrolledDescription"),
+          enforcedNote: t("twofa.enforcedNote"),
+          enrolledOn: t("twofa.enrolledOn"),
+          lastUsed: t("twofa.lastUsed"),
+          recoveryRemaining: t("twofa.recoveryRemaining"),
+          enableButton: t("twofa.enableButton"),
+          disableButton: t("twofa.disableButton"),
+          cancel: t("twofa.cancel"),
+          secretLabel: t("twofa.secretLabel"),
+          otpauthLabel: t("twofa.otpauthLabel"),
+          enterCodeLabel: t("twofa.enterCodeLabel"),
+          submitCode: t("twofa.submitCode"),
+          recoveryHeading: t("twofa.recoveryHeading"),
+          recoveryWarning: t("twofa.recoveryWarning"),
+          enrollFailed: t("twofa.enrollFailed"),
+          disableConfirm: t("twofa.disableConfirm"),
+          disableFailed: t("twofa.disableFailed"),
+          never: t("twofa.never"),
+        }}
+      />
 
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Channel authorisations</h2>

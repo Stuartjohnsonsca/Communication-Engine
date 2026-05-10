@@ -51,6 +51,7 @@ export const fr: Dictionary = {
     terms: "Conditions",
     xcl: "Apprentissage inter-clients",
     signoff: "Questions de validation",
+    security: "Sécurité",
   },
   shell: {
     openNavigation: "Ouvrir la navigation",
@@ -76,5 +77,41 @@ export const fr: Dictionary = {
     inheritFromTenant: "Hériter du paramètre par défaut du tenant ({locale})",
     save: "Enregistrer la préférence",
     saved: "Préférence enregistrée.",
+  },
+  twofa: {
+    accountHeading: "Authentification à deux facteurs",
+    enrolledDescription:
+      "L'authentification à deux facteurs est activée. Un code de l'application d'authentification vous sera demandé après chaque connexion.",
+    notEnrolledDescription:
+      "Ajoutez un second facteur à votre compte. Utilisez n'importe quelle application TOTP — Google Authenticator, Authy, 1Password, Bitwarden, Microsoft Authenticator. Une fois activée, un code à 6 chiffres vous sera demandé à chaque connexion.",
+    enforcedNote:
+      "Votre Administrateur du cabinet exige l'authentification à deux facteurs pour ce tenant. Inscrivez-vous pour continuer.",
+    enrolledOn: "Activée le",
+    lastUsed: "Dernière utilisation",
+    recoveryRemaining: "Codes de récupération restants",
+    enableButton: "Activer l'authentification à deux facteurs",
+    disableButton: "Désactiver l'authentification à deux facteurs",
+    cancel: "Annuler",
+    secretLabel: "Secret (à saisir dans l'application d'authentification)",
+    otpauthLabel: "Afficher l'URI otpauth (pour l'import par QR)",
+    enterCodeLabel: "Code d'authentification",
+    submitCode: "Confirmer",
+    recoveryHeading: "L'authentification à deux facteurs est maintenant active.",
+    recoveryWarning:
+      "Conservez ces codes de récupération en lieu sûr. Chacun peut être utilisé une seule fois pour vous connecter si vous perdez l'accès à votre application d'authentification. Ils ne seront plus affichés.",
+    enrollFailed:
+      "Ce code ne correspond pas. Essayez le suivant affiché par votre application d'authentification.",
+    disableConfirm:
+      "Saisissez votre code d'authentification actuel ou un code de récupération pour confirmer la désactivation de l'authentification à deux facteurs.",
+    disableFailed: "Ce code ne correspond pas. Réessayez.",
+    never: "jamais",
+    challengeHeading: "Vérification d'identité",
+    challengeDescription:
+      "Saisissez le code à 6 chiffres affiché par votre application d'authentification pour continuer. Si vous avez perdu l'accès à votre application, vous pouvez saisir un code de récupération à la place.",
+    challengeHelp: "Code à 6 chiffres de votre application d'authentification, ou code de récupération.",
+    continueButton: "Continuer",
+    badCodeError:
+      "Ce code ne correspond pas. Essayez le suivant affiché par votre application d'authentification.",
+    rateLimitedError: "Trop de tentatives. Réessayez dans un instant.",
   },
 };

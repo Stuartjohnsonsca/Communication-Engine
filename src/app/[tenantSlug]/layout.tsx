@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { signOut } from "@/lib/auth";
@@ -8,6 +9,7 @@ import { getNavBadges } from "@/lib/notifications";
 import { NavShell } from "@/components/NavShell";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { getT, resolveLocale } from "@/lib/i18n";
+import { evaluateTotpGate, resolveCurrentSessionId } from "@/lib/auth/totp";
 
 export default async function TenantLayout({
   children,
@@ -19,6 +21,31 @@ export default async function TenantLayout({
   const { tenantSlug } = await params;
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
+
+  // Post-PRD hardening item 12 — 2FA gate. Allowlist the pages that must
+  // remain reachable while a User is in the enroll-required or
+  // verify-required state, otherwise the redirect loops (the redirect
+  // target also runs this layout). The challenge page (/auth/2fa) handles
+  // verification; /account hosts enrollment.
+  const requestPathname = (await headers()).get("x-pathname") ?? "";
+  const gateAllowlist =
+    requestPathname === `/${tenantSlug}/account` ||
+    requestPathname.startsWith(`/${tenantSlug}/auth/2fa`);
+  if (!gateAllowlist) {
+    const sessionId = await resolveCurrentSessionId();
+    const gate = await evaluateTotpGate({
+      userId: ctx.user.id,
+      sessionId,
+      tenantRequireTotp: ctx.tenant.requireTotp,
+    });
+    if (gate === "enroll-required") {
+      redirect(`/${tenantSlug}/account`);
+    }
+    if (gate === "verify-required") {
+      const next = encodeURIComponent(requestPathname || `/${tenantSlug}/dashboard`);
+      redirect(`/${tenantSlug}/auth/2fa?next=${next}`);
+    }
+  }
 
   const [dpia, badges] = await Promise.all([
     getDpiaStatus(ctx.tenant.id),
@@ -77,6 +104,12 @@ export default async function TenantLayout({
   ];
   if (hasPermission(ctx.membership.role, "billing:read")) {
     nav.push({ href: `/${tenantSlug}/admin/billing`, label: t("nav.billing") });
+  }
+  // Post-PRD hardening item 12 — tenant-wide 2FA policy. Only FIRM_ADMINs
+  // can flip the policy; the page itself is gated, but we also hide the
+  // nav entry from everyone else to keep the sidebar tidy.
+  if (hasPermission(ctx.membership.role, "tenant:configure-totp-policy")) {
+    nav.push({ href: `/${tenantSlug}/admin/security`, label: t("nav.security") });
   }
   // PRD §14.2 Sandbox — only meaningful in production tenants. The page
   // itself short-circuits when accessed from inside a sandbox tenant.

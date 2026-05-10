@@ -269,6 +269,12 @@ enum AuditEventType {
   NOTIFICATION_DISPATCH_FAILED
   NOTIFICATION_DIGEST_RUN
   RATE_LIMIT_EXCEEDED
+  TOTP_ENROLLED
+  TOTP_DISABLED
+  TOTP_VERIFIED
+  TOTP_VERIFICATION_FAILED
+  TOTP_RECOVERY_CODE_USED
+  TENANT_TOTP_REQUIREMENT_CHANGED
 }
 
 enum BillingPeriodStatus {
@@ -547,11 +553,17 @@ model Account {
 }
 
 model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String    @id @default(cuid())
+  sessionToken   String    @unique
+  userId         String
+  expires        DateTime
+  /// Post-PRD hardening item 12. Timestamp at which this session passed a
+  /// TOTP step-up challenge. Null = not yet verified for this session. The
+  /// layout-level gate redirects to /login/2fa when the User has a verified
+  /// UserTotp but the active Session has no totpVerifiedAt. Reset on every
+  /// new session (sign-in produces a fresh Session row).
+  totpVerifiedAt DateTime?
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model VerificationToken {
@@ -671,6 +683,13 @@ model Tenant {
   /// existing tenant preferences; the i18n loader silently falls back to
   /// en-GB on any unknown code.
   defaultLocale                        String       @default("en-GB")
+  /// Post-PRD hardening item 12. When true, every active Membership in this
+  /// tenant must have a verified `UserTotp` before reaching tenant routes;
+  /// the layout redirects un-enrolled users to /account to enroll. Per-User
+  /// enrollment is always self-service via /account regardless of this flag —
+  /// the flag governs whether enrollment is *required*, not whether it is
+  /// *permitted*.
+  requireTotp                          Boolean      @default(false)
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 
@@ -718,6 +737,32 @@ model User {
   accounts    Account[]
   sessions    Session[]
   memberships Membership[]
+  totp        UserTotp?
+}
+
+/// Post-PRD hardening item 12. RFC 6238 TOTP enrollment for a User. Global
+/// (one per User, not per Membership) — a User with memberships across
+/// multiple tenants enrolls once. The secret is AES-256-GCM encrypted at
+/// rest using the existing ENCRYPTION_KEY (`src/lib/channels/crypto.ts`).
+/// Recovery codes are SHA-256 hashed (single-use; we only ever verify, never
+/// re-display). `verifiedAt` is null between `enrollmentInitiated` and the
+/// first successful code entry; until then the enrollment hasn't taken
+/// effect. `disabledAt` records when the User turned 2FA off — the row is
+/// kept rather than deleted so an audit trail of past enrollments survives,
+/// but a disabled row is treated as no-enrollment by the gate.
+model UserTotp {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  secretEncrypted     String
+  verifiedAt          DateTime?
+  disabledAt          DateTime?
+  lastUsedAt          DateTime?
+  recoveryCodesHashed String[]  @default([])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([verifiedAt])
 }
 
 model Membership {

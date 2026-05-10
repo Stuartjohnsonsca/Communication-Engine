@@ -50,6 +50,9 @@ export type RateLimitScope =
   | "health"
   | "notifications"
   | "vote"
+  | "totp-enroll"
+  | "totp-disable"
+  | "totp-challenge"
   | "default";
 
 export type RateLimitOpts = {
