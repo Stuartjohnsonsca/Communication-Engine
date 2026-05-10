@@ -29,6 +29,9 @@ export default async function TenantLayout({
     { href: `/${tenantSlug}/sentiment`, label: "Sentiment" },
     { href: `/${tenantSlug}/dashboards`, label: "Adherence" },
     { href: `/${tenantSlug}/dpia`, label: "DPIA" },
+    ...(hasPermission(ctx.membership.role, "processing-map:read")
+      ? [{ href: `/${tenantSlug}/compliance/processing-map`, label: "Controller / Processor" }]
+      : []),
     { href: `/${tenantSlug}/dsar`, label: "DSAR" },
     { href: `/${tenantSlug}/roadmap`, label: "Roadmap" },
     { href: `/${tenantSlug}/risks`, label: "Risks" },

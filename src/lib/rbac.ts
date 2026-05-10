@@ -144,6 +144,16 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // a per-Client integration roadmap, only one product-wide list.
   "integrations:read":   ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "integrations:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
+  // Controller / Processor Map (PRD §12.1). FCT + FIRM_ADMIN read for
+  // governance oversight; the page itself is also indirectly visible via
+  // the DPIA workspace which already has fct/firm_admin scoping. Mutating
+  // the matrix is operator-only and gated to the Acumon tenant — the
+  // controller/processor model is product-wide, not per-Client. We do not
+  // expose this to USER / SALES_REVIEWER because the legal classification
+  // is governance-grade content (DPO-level reading), not operational copy.
+  "processing-map:read":   ["FIRM_ADMIN", "FCT_MEMBER", "ACUMON_ADMIN", "CURATOR"],
+  "processing-map:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

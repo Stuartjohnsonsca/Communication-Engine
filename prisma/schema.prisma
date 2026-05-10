@@ -239,6 +239,9 @@ enum AuditEventType {
   INTEGRATION_TARGET_ADDED
   INTEGRATION_TARGET_UPDATED
   INTEGRATION_TARGET_STATUS_CHANGED
+  PROCESSING_ACTIVITY_ADDED
+  PROCESSING_ACTIVITY_UPDATED
+  PROCESSING_ACTIVITY_REMOVED
 }
 
 enum BillingPeriodStatus {
@@ -1718,6 +1721,64 @@ model SubProcessor {
   updatedAt      DateTime  @updatedAt
 
   @@index([isActive, ordinal])
+  @@index([ordinal])
+}
+
+
+// ─── Controller / Processor Map (PRD §12.1) ───────────────────────────────
+
+/// PRD §12.1 — published Controller / Processor matrix that every Client and
+/// prospective Client can read. Rows match the PRD table: a labelled
+/// processing activity, who the controller is, who the processor is, and
+/// the contract / addendum that applies.
+///
+/// Same global-data pattern as Roadmap, Risks, Sub-Processors, Integrations:
+/// no tenantId, NOT under RLS. Mutations gated to Acumon operators (FIRM_ADMIN
+/// of "acumon" tenant or ACUMON_ADMIN). Audit events on the operator's chain.
+///
+/// Per-tenant applicability is computed at read time from tenant flags
+/// (Sales Identifier on/off, XCL opt-in, voice authorised, partner type).
+/// We do NOT store applicability per-tenant — the controller/processor model
+/// is the same for every Client, only the activated subset varies.
+model ProcessingActivity {
+  id                  String   @id @default(cuid())
+  /// Stable code (e.g. "core", "xcl", "si-intra", "si-third-party", "auth", "voice").
+  code                String   @unique
+  ordinal             Int
+  /// Display label, lifted from the PRD column.
+  label               String
+  /// Controller designation — free-form to match PRD ("Client", "Acumon
+  /// Intelligence (independent controller)", "Client + third party (joint)").
+  controller          String
+  /// Processor designation — same pattern. May be "—" for activities where
+  /// Acumon is itself the controller (e.g. XCL).
+  processor           String
+  /// Lawful basis classification (e.g. "legitimate interests", "consent",
+  /// "contract", "legal obligation"). Free-form because some rows combine
+  /// bases per A2 in PRD §1.2.
+  lawfulBasis         String?
+  /// Contract / addendum that governs the row. Free-form to match the PRD
+  /// "Notes" column ("Standard DPA, EU/UK SCCs not required (in-region)",
+  /// "Tripartite agreement", "Listed sub-processor", etc.).
+  contract            String?
+  /// Whether this activity processes personal data — almost all rows do, but
+  /// future additions (e.g. anonymous analytics) may not.
+  processesPersonal   Boolean  @default(true)
+  /// Whether this activity processes special-category data per UK GDPR Art. 9.
+  processesSpecial    Boolean  @default(false)
+  /// Per-tenant feature flag that activates this row. Read from the
+  /// Tenant column at view time. Null means "always applies".
+  ///   "always"                       — every Client (default)
+  ///   "salesIdentifierEnabled"       — only when SI is on
+  ///   "salesIdentifierThirdParty"    — only when SI Partner = third party
+  ///   "crossClientLearningOptedIn"   — only when XCL is on
+  ///   "voiceAuthorised"              — only when a Voice channel is active
+  ///   "ssoConfigured"                — only when SAML/OIDC is active
+  applicabilityFlag   String?
+  notes               String?  @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
   @@index([ordinal])
 }
 
