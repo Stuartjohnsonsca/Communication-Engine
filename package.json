@@ -18,6 +18,15 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.config.ts",
     "test:setup-db": "tsx tests/setup-db.ts",
+    "eval": "tsx evals/cli.ts",
+    "eval:all": "tsx evals/cli.ts all",
+    "eval:judge": "tsx evals/cli.ts judge",
+    "eval:draft": "tsx evals/cli.ts draft",
+    "eval:adherence": "tsx evals/cli.ts adherence",
+    "eval:sentiment": "tsx evals/cli.ts sentiment",
+    "eval:opportunity": "tsx evals/cli.ts opportunity",
+    "eval:fcg": "tsx evals/cli.ts fcg",
+    "eval:ucg": "tsx evals/cli.ts ucg",
     "postinstall": "prisma generate"
   },
   "dependencies": {

@@ -1,0 +1,43 @@
+{
+  "name": "001-smoke-pass",
+  "tags": ["smoke"],
+  "input": {
+    "fcg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Maintain a courteous, professional tone in all client communications.",
+          "mandatory": true,
+          "payload": {}
+        }
+      ]
+    },
+    "ucg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "user-tone-1",
+          "category": "tone",
+          "channel": "email",
+          "statement": "Use first names with long-standing clients once they have done so first.",
+          "mandatory": false,
+          "payload": {},
+          "narrowsFcgRule": "tone-1"
+        }
+      ]
+    }
+  },
+  "expectedByProvider": {
+    "mock": {
+      "overall": { "in": ["pass", "fail", "partial"] },
+      "rulings": { "type": "array" }
+    }
+  },
+  "expected": {
+    "overall": { "in": ["pass", "partial"] },
+    "rulings": { "type": "array" }
+  }
+}

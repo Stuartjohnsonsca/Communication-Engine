@@ -1,0 +1,21 @@
+{
+  "name": "001-smoke-shape",
+  "tags": ["smoke"],
+  "input": {
+    "channel": "email",
+    "sender": "ops@bigco.com",
+    "subject": "Quick update",
+    "body": "Just letting you know we've finalised the procurement schedule. No action needed for now.",
+    "context": { "jurisdiction": "UK", "serviceLineHints": ["corporate", "tax"] }
+  },
+  "expectedByProvider": {
+    "mock": {
+      "confidence": { "min": 0, "max": 1 },
+      "classification": { "in": ["new_engagement", "expansion", "renewal", "cross_sell", "referral"] }
+    }
+  },
+  "expected": {
+    "confidence": { "min": 0, "max": 1 },
+    "classification": { "in": ["new_engagement", "expansion", "renewal", "cross_sell", "referral"] }
+  }
+}

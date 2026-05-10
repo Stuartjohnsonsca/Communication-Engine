@@ -53,3 +53,24 @@ jobs:
         run: npm run test:setup-db
       - name: Run integration tests
         run: npm test
+
+  evals:
+    # AI eval harness — drift detection per PRD §17 mitigation for
+    # "judge inconsistency" risk. Non-blocking by design (continue-on-error)
+    # so transient model drift doesn't fail CI; the report is logged.
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Run AI evals (mock provider unless API keys are present)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+        run: npm run eval:all

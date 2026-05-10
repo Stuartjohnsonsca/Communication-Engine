@@ -1,0 +1,20 @@
+{
+  "name": "001-smoke-neutral",
+  "tags": ["smoke"],
+  "input": {
+    "channel": "email",
+    "sender": "client@example.com",
+    "subject": "Confirming next call",
+    "body": "Hi — confirming the call on Wednesday at 10am. Anything I should prepare beforehand?"
+  },
+  "expectedByProvider": {
+    "mock": {
+      "classification": { "in": ["neutral", "extreme_negative", "extreme_positive"] },
+      "shouldEscalate": { "type": "boolean" }
+    }
+  },
+  "expected": {
+    "classification": "neutral",
+    "shouldEscalate": false
+  }
+}

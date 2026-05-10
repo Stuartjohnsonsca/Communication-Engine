@@ -1,0 +1,33 @@
+{
+  "name": "002-no-go-subject",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "fcg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Be professional and concise.",
+          "payload": {}
+        }
+      ]
+    },
+    "ucg": { "version": 1, "rules": [] },
+    "inbound": {
+      "channel": "email",
+      "sender": "client@example.com",
+      "subject": "US tax withholding question",
+      "body": "Could you confirm what 30% withholding applies to my dividend payments under the US tax treaty? My accountant disagrees with my provider.",
+      "receivedAt": "2026-05-10T09:00:00Z"
+    },
+    "noGoSubjects": ["us-tax-advice"]
+  },
+  "expected": {
+    "channel": "email",
+    "type": { "in": ["holding", "holding_research", "substantive"] },
+    "noGoSubjectHit": true
+  }
+}

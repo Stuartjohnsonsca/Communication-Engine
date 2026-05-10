@@ -1,0 +1,38 @@
+{
+  "name": "002-fail-prohibited",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "fcg": {
+      "version": 2,
+      "rules": [
+        {
+          "externalId": "prohibited-cheers",
+          "category": "prohibited_phrase",
+          "channel": "email",
+          "statement": "The signoff 'Cheers' is prohibited in all client emails — use 'Kind regards' or 'Yours sincerely'.",
+          "mandatory": true,
+          "payload": { "phrases": ["cheers"] }
+        }
+      ]
+    },
+    "ucg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "user-cheers-allowed",
+          "category": "signoff",
+          "channel": "email",
+          "statement": "Sign off emails with 'Cheers' to convey friendliness.",
+          "mandatory": false,
+          "payload": {}
+        }
+      ]
+    }
+  },
+  "expected": {
+    "overall": { "in": ["fail", "partial"] },
+    "rulings": { "length": { "min": 1 } },
+    "rulings.0.verdict": { "in": ["fail", "not_applicable"] }
+  }
+}

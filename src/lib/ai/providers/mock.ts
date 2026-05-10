@@ -54,14 +54,18 @@ function mockToolOutput(role: string, toolName: string): unknown {
         shouldEscalate: false,
       };
     case "respond_with_adherence":
+      // Shape must match `adherence` zod schema in @/lib/ai/schemas — the
+      // eval harness (evals/) caught a stale `scoresByDimension` payload
+      // here that no longer parsed.
       return {
-        scoresByDimension: {
-          responseTime: { score: 1, fcgClause: null },
-          tone: { score: 1, fcgClause: null },
-          mandatoryPhrases: { score: 1, fcgClause: null },
-          prohibitedPhrases: { score: 1, fcgClause: null },
-          escalation: { score: 1, fcgClause: null },
+        perDimension: {
+          responseTime: { score: 1, verdict: "pass" },
+          tone: { score: 1, verdict: "pass" },
+          mandatoryPhrase: { score: 1, verdict: "pass" },
+          prohibitedPhrase: { score: 1, verdict: "pass" },
+          escalation: { score: 1, verdict: "pass" },
         },
+        perRule: [],
         overall: 1,
       };
     case "respond_with_opportunity":

@@ -1,0 +1,46 @@
+{
+  "name": "001-smoke-holding",
+  "tags": ["smoke"],
+  "input": {
+    "fcg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Be professional and concise.",
+          "payload": {}
+        },
+        {
+          "externalId": "ack-window",
+          "category": "response_time",
+          "channel": "email",
+          "statement": "Acknowledge incoming client emails within one business hour.",
+          "payload": { "windowMinutes": 60 }
+        }
+      ]
+    },
+    "ucg": { "version": 1, "rules": [] },
+    "inbound": {
+      "channel": "email",
+      "sender": "client@example.com",
+      "subject": "Question on the new SPA terms",
+      "body": "Hi — could you confirm whether the warranty cap moved to 100% or stayed at 50%? Need to clear it before signing tomorrow.",
+      "receivedAt": "2026-05-10T09:00:00Z"
+    }
+  },
+  "expectedByProvider": {
+    "mock": {
+      "channel": "email",
+      "type": { "type": "string" },
+      "body": { "type": "string" }
+    }
+  },
+  "expected": {
+    "channel": "email",
+    "body": { "type": "string" },
+    "type": { "in": ["substantive", "holding", "technical", "holding_research"] },
+    "noGoSubjectHit": false
+  }
+}

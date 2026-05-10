@@ -1,0 +1,40 @@
+{
+  "name": "001-smoke-clean",
+  "tags": ["smoke"],
+  "input": {
+    "fcg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Be professional and concise.",
+          "payload": {}
+        }
+      ]
+    },
+    "ucg": { "version": 1, "rules": [] },
+    "channel": "email",
+    "inbound": {
+      "sender": "client@example.com",
+      "subject": "Quick check",
+      "body": "Could you confirm next steps?"
+    },
+    "sent": {
+      "subject": "Re: Quick check",
+      "body": "Thanks for your message. Confirming next steps below: 1) we'll send the draft on Monday; 2) review call Wed. Best regards, A."
+    },
+    "responseLatencyMin": 30
+  },
+  "expectedByProvider": {
+    "mock": {
+      "overall": { "min": 0, "max": 1 },
+      "perDimension.tone.verdict": { "type": "string" }
+    }
+  },
+  "expected": {
+    "overall": { "min": 0.5, "max": 1 },
+    "perDimension.tone.verdict": { "in": ["pass", "partial", "not_applicable"] }
+  }
+}

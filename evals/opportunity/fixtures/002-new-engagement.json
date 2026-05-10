@@ -1,0 +1,17 @@
+{
+  "name": "002-new-engagement",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "channel": "email",
+    "sender": "gc@newco.example.com",
+    "subject": "Looking for UK counsel for a £40m carve-out",
+    "body": "Hi — we're a private equity sponsor looking at a UK carve-out (industrial cleaning, ~£40m EV). Looking for English-law counsel to lead the SPA, TUPE, and competition filings. Could you confirm capacity and a partner-level contact for a kick-off this week? We'd want signing in 6–8 weeks.",
+    "context": { "jurisdiction": "UK", "serviceLineHints": ["corporate-m&a", "competition", "employment"] }
+  },
+  "expected": {
+    "classification": "new_engagement",
+    "confidence": { "min": 0.6, "max": 1 },
+    "jurisdiction": { "contains": "UK", "ignoreCase": true }
+  }
+}

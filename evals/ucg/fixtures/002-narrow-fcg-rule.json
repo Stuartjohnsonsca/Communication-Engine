@@ -1,0 +1,31 @@
+{
+  "name": "002-narrow-fcg-rule",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "fcg": {
+      "version": 2,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Maintain a professional, formal tone with new clients.",
+          "mandatory": true,
+          "payload": {}
+        }
+      ]
+    },
+    "history": [
+      {
+        "role": "user",
+        "content": "Stage a propose_user_rule for me that narrows tone-1: with long-standing clients (>2 years) who've used my first name first, I want to mirror that. Use action='add'."
+      }
+    ]
+  },
+  "expected": {
+    "toolCalls": { "length": { "min": 1 } },
+    "toolCalls.0.name": "propose_user_rule",
+    "toolCalls.0.input.action": "add"
+  }
+}

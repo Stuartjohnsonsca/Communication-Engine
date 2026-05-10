@@ -1,0 +1,16 @@
+{
+  "name": "002-extreme-negative-firm",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "channel": "email",
+    "sender": "frustrated-client@example.com",
+    "subject": "Completely unacceptable response",
+    "body": "I've now waited four weeks for what was meant to be a same-day answer. This is the third time your firm has missed a deadline I personally flagged. If we don't have an answer by Friday I am pulling the engagement and will be raising this with your senior partner. This level of service is genuinely shocking."
+  },
+  "expected": {
+    "classification": "extreme_negative",
+    "isAboutFirmHandling": true,
+    "shouldEscalate": true
+  }
+}

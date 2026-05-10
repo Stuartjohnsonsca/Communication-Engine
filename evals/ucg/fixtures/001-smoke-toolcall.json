@@ -1,0 +1,35 @@
+{
+  "name": "001-smoke-toolcall",
+  "tags": ["smoke"],
+  "input": {
+    "fcg": {
+      "version": 2,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Maintain a professional, formal tone with new clients.",
+          "mandatory": true,
+          "payload": {}
+        }
+      ]
+    },
+    "history": [
+      {
+        "role": "user",
+        "content": "I want to allow first names with long-standing clients once they've initiated. Stage that as a UCG rule that narrows tone-1."
+      }
+    ]
+  },
+  "expectedByProvider": {
+    "mock": {
+      "toolCalls": { "length": { "min": 1 } },
+      "toolCalls.0.name": { "type": "string" }
+    }
+  },
+  "expected": {
+    "toolCalls": { "length": { "min": 1 } },
+    "toolCalls.0.name": { "in": ["propose_user_rule", "summarise_section", "request_evidence"] }
+  }
+}

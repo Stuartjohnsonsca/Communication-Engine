@@ -1,0 +1,35 @@
+{
+  "name": "001-smoke-toolcall",
+  "tags": ["smoke"],
+  "input": {
+    "committedFcg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Be professional and concise.",
+          "payload": {}
+        }
+      ]
+    },
+    "history": [
+      {
+        "role": "user",
+        "content": "Add a new mandatory rule that emails to clients must include the matter reference number in the subject line."
+      }
+    ]
+  },
+  "expectedByProvider": {
+    "mock": {
+      "message": { "type": "string" },
+      "toolCalls": { "length": { "min": 1 } },
+      "toolCalls.0.name": { "type": "string" }
+    }
+  },
+  "expected": {
+    "toolCalls": { "length": { "min": 1 } },
+    "toolCalls.0.name": { "in": ["propose_rule_change", "request_evidence", "summarise_section"] }
+  }
+}

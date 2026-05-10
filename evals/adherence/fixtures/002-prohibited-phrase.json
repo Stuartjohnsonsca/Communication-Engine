@@ -1,0 +1,36 @@
+{
+  "name": "002-prohibited-phrase",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "fcg": {
+      "version": 2,
+      "rules": [
+        {
+          "externalId": "prohibited-no-worries",
+          "category": "prohibited_phrase",
+          "channel": "email",
+          "statement": "Do not use 'no worries' in client email responses — formal register only.",
+          "mandatory": true,
+          "payload": { "phrases": ["no worries"] }
+        }
+      ]
+    },
+    "ucg": { "version": 1, "rules": [] },
+    "channel": "email",
+    "inbound": {
+      "sender": "client@example.com",
+      "subject": "Sorry to chase",
+      "body": "Sorry to chase, did the report go out yesterday?"
+    },
+    "sent": {
+      "subject": "Re: Sorry to chase",
+      "body": "No worries — went out yesterday afternoon. Confirming the deck arrived; let me know if anything to revise."
+    },
+    "responseLatencyMin": 45
+  },
+  "expected": {
+    "overall": { "min": 0, "max": 0.7 },
+    "perDimension.prohibitedPhrase.verdict": { "in": ["fail", "partial"] }
+  }
+}

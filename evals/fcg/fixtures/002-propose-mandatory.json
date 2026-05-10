@@ -1,0 +1,30 @@
+{
+  "name": "002-propose-mandatory",
+  "tags": ["live"],
+  "liveOnly": true,
+  "input": {
+    "committedFcg": {
+      "version": 1,
+      "rules": [
+        {
+          "externalId": "tone-1",
+          "category": "tone",
+          "channel": "any",
+          "statement": "Be professional and concise.",
+          "payload": {}
+        }
+      ]
+    },
+    "history": [
+      {
+        "role": "user",
+        "content": "Please stage a propose_rule_change to ADD a new MANDATORY rule of category 'mandatory_phrase' applying to channel 'email' that requires every outgoing client email subject to include the matter reference number."
+      }
+    ]
+  },
+  "expected": {
+    "toolCalls": { "length": { "min": 1 } },
+    "toolCalls.0.name": "propose_rule_change",
+    "toolCalls.0.input.action": "add"
+  }
+}
