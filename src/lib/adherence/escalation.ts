@@ -1,5 +1,7 @@
 import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
+import { dispatchAdherenceEscalation } from "@/lib/notifications/immediate";
+import { reportError } from "@/lib/observability";
 
 /**
  * Backlog item 1 — adherence escalation threshold.
@@ -56,6 +58,35 @@ export async function escalateAdherenceIfPoor(input: {
       threshold: ADHERENCE_ESCALATION_THRESHOLD,
     },
   });
+
+  // Backlog item 6 — immediate notification to the sender + the FCT lane.
+  // Idempotent on adherenceId so the escalation that fires from both the
+  // drafted-then-sent path and the bypassed-send synthesis path can never
+  // double-mail. Failures are logged but don't bubble — the
+  // CommunicationAdherence row + audit event are the load-bearing artefacts.
+  const tenant = await superDb.tenant.findUnique({
+    where: { id: input.tenantId },
+    select: { slug: true },
+  });
+  if (tenant) {
+    try {
+      await dispatchAdherenceEscalation({
+        tenantId: input.tenantId,
+        tenantSlug: tenant.slug,
+        adherenceId: input.adherenceId,
+        draftId: input.draftId,
+        membershipId: input.membershipId,
+        overall: input.overall,
+        threshold: ADHERENCE_ESCALATION_THRESHOLD,
+      });
+    } catch (e) {
+      reportError(e, {
+        route: "adherence.escalate",
+        tenantId: input.tenantId,
+        extra: { adherenceId: input.adherenceId },
+      });
+    }
+  }
 
   return { escalated: true };
 }

@@ -7,6 +7,8 @@ import type {
 } from "@prisma/client";
 import { superDb, tenantDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
+import { dispatchBreachAckRequired } from "@/lib/notifications/immediate";
+import { reportError } from "@/lib/observability";
 
 /**
  * PRD §12.9 Breach Notification.
@@ -302,6 +304,36 @@ export async function dispatchNotification(
         incidentId: before.breachIncidentId,
         affectedTenantId: input.tenantId,
       },
+    });
+  }
+
+  // Backlog item 6 — immediate notification to the affected tenant's
+  // FIRM_ADMINs so the DPA acknowledgement deadline doesn't slip on a
+  // weekly cadence. Idempotent on notification.id.
+  try {
+    const incident = await superDb.breachIncident.findUnique({
+      where: { id: before.breachIncidentId },
+      select: { code: true, title: true },
+    });
+    const tenant = await superDb.tenant.findUnique({
+      where: { id: input.tenantId },
+      select: { slug: true },
+    });
+    if (incident && tenant) {
+      await dispatchBreachAckRequired({
+        tenantId: input.tenantId,
+        tenantSlug: tenant.slug,
+        notificationId: updated.id,
+        incidentCode: incident.code,
+        incidentTitle: incident.title,
+        dueAt: updated.dueAt,
+      });
+    }
+  } catch (e) {
+    reportError(e, {
+      route: "breach.dispatch",
+      tenantId: input.tenantId,
+      extra: { notificationId: updated.id },
     });
   }
 

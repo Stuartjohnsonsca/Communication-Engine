@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { classifySentiment } from "@/lib/ai/agents/sentimentAgent";
+import { dispatchSentimentEscalation } from "@/lib/notifications/immediate";
+import { reportError } from "@/lib/observability";
 
 export type ClassifyAndRecordInput = {
   tenantId: string;
@@ -99,6 +101,31 @@ export async function classifyAndRecordInbound(input: ClassifyAndRecordInput) {
         trigger: result.trigger,
       },
     });
+
+    // Backlog item 6 — immediate dispatch. Idempotent on signal.id so a
+    // re-classification on the same signal can't double-mail.
+    const tenant = await superDb.tenant.findUnique({
+      where: { id: input.tenantId },
+      select: { slug: true },
+    });
+    if (tenant) {
+      try {
+        await dispatchSentimentEscalation({
+          tenantId: input.tenantId,
+          tenantSlug: tenant.slug,
+          signalId: signal.id,
+          assignedToMembershipId: input.assignedToMembershipId,
+          trigger: result.trigger,
+          inboundSender: input.inbound.sender ?? null,
+        });
+      } catch (e) {
+        reportError(e, {
+          route: "sentiment.escalate",
+          tenantId: input.tenantId,
+          extra: { signalId: signal.id },
+        });
+      }
+    }
   }
 
   return signal;

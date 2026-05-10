@@ -37,7 +37,9 @@ DECLARE
     'TransferImpactAssessment',
     'BreachClientNotification',
     'SlaMeasurement',
-    'OnboardingChecklistItem'
+    'OnboardingChecklistItem',
+    'NotificationDispatch',
+    'NotificationInbox'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

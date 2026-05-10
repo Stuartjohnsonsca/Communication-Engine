@@ -1,0 +1,241 @@
+import { superDb } from "@/lib/db";
+import { hasPermission } from "@/lib/rbac";
+import { dispatchNotification } from "./dispatch";
+
+/**
+ * Immediate-dispatch helpers for the three event classes that the backlog
+ * called out as too time-sensitive for the weekly digest. Each helper:
+ *   - Resolves the routing audience (assignee + FCT, or FIRM_ADMINs).
+ *   - Sends one email per recipient, idempotent on the source row id.
+ *   - Returns when every dispatch has been written (success or skipped).
+ *
+ * Every helper is fire-and-forget from the trigger's perspective: failures
+ * are logged via the dispatch audit event but don't bubble up to the
+ * trigger's transaction. The send-side compliance gate, the breach inbox,
+ * and the sentiment classifier already wrote their primary rows + audit
+ * events before we get here — notifications are a downstream side effect.
+ */
+
+type Recipient = {
+  membershipId: string;
+  toEmail: string;
+  /// Includes "self" when the recipient is the action owner (User), or
+  /// "fct" when they're routed via FCT/FIRM_ADMIN governance visibility.
+  reason: "self" | "fct" | "firm_admin";
+};
+
+async function fctAndAdminRecipients(
+  tenantId: string,
+  excludeMembershipIds: string[] = [],
+): Promise<Recipient[]> {
+  // FCT_MEMBER + FIRM_ADMIN both see escalations firm-wide via members:read.
+  const rows = await superDb.membership.findMany({
+    where: {
+      tenantId,
+      status: "ACTIVE",
+      role: { in: ["FCT_MEMBER", "FIRM_ADMIN"] },
+      id: { notIn: excludeMembershipIds },
+    },
+    include: { user: { select: { email: true } } },
+  });
+  return rows
+    .filter((r) => !!r.user.email)
+    .map((r) => ({
+      membershipId: r.id,
+      toEmail: r.user.email!,
+      reason: "fct" as const,
+    }));
+}
+
+async function firmAdminRecipients(tenantId: string): Promise<Recipient[]> {
+  const rows = await superDb.membership.findMany({
+    where: {
+      tenantId,
+      status: "ACTIVE",
+      role: "FIRM_ADMIN",
+    },
+    include: { user: { select: { email: true } } },
+  });
+  return rows
+    .filter((r) => !!r.user.email)
+    .map((r) => ({
+      membershipId: r.id,
+      toEmail: r.user.email!,
+      reason: "firm_admin" as const,
+    }));
+}
+
+async function selfRecipient(
+  tenantId: string,
+  membershipId: string,
+): Promise<Recipient | null> {
+  const m = await superDb.membership.findFirst({
+    where: { id: membershipId, tenantId, status: "ACTIVE" },
+    include: { user: { select: { email: true } } },
+  });
+  if (!m || !m.user.email) return null;
+  // Validate the role still has adherence:acknowledge — anonymised /
+  // suspended memberships shouldn't receive operational mail.
+  if (!hasPermission(m.role, "adherence:read")) return null;
+  return { membershipId: m.id, toEmail: m.user.email, reason: "self" };
+}
+
+// ─── Sentiment escalation (PRD §9.3) ──────────────────────────────────────
+
+export async function dispatchSentimentEscalation(input: {
+  tenantId: string;
+  tenantSlug: string;
+  signalId: string;
+  assignedToMembershipId: string | null;
+  /// Short summary of the inbound that triggered the signal. Already in the
+  /// signal row; passed in to avoid an extra query.
+  trigger?: string | null;
+  inboundSender?: string | null;
+}): Promise<{ recipients: number }> {
+  const recipients: Recipient[] = [];
+  const exclude: string[] = [];
+  if (input.assignedToMembershipId) {
+    const self = await selfRecipient(input.tenantId, input.assignedToMembershipId);
+    if (self) {
+      recipients.push(self);
+      exclude.push(self.membershipId);
+    }
+  }
+  recipients.push(...(await fctAndAdminRecipients(input.tenantId, exclude)));
+
+  const subject = `Sentiment escalation · negative against firm handling`;
+  const summary = input.inboundSender
+    ? `From ${input.inboundSender}${input.trigger ? ` — ${input.trigger}` : ""}`
+    : input.trigger ?? "Inbound flagged extreme-negative against firm handling.";
+  const body = [
+    `An inbound communication has been classified as extreme-negative against firm handling and escalated.`,
+    "",
+    input.trigger ? `Trigger: ${input.trigger}` : null,
+    input.inboundSender ? `From: ${input.inboundSender}` : null,
+    "",
+    `Acknowledge it on /${input.tenantSlug}/sentiment.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const href = `/${input.tenantSlug}/sentiment`;
+
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: input.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "sentiment_escalation",
+      dedupeKey: input.signalId,
+      subject,
+      summary,
+      text: body,
+      href,
+      payload: {
+        signalId: input.signalId,
+        recipientReason: r.reason,
+      },
+    });
+  }
+  return { recipients: recipients.length };
+}
+
+// ─── Adherence escalation (post-PRD backlog item 1) ───────────────────────
+
+export async function dispatchAdherenceEscalation(input: {
+  tenantId: string;
+  tenantSlug: string;
+  adherenceId: string;
+  draftId: string;
+  membershipId: string;
+  overall: number;
+  threshold: number;
+}): Promise<{ recipients: number }> {
+  const recipients: Recipient[] = [];
+  const self = await selfRecipient(input.tenantId, input.membershipId);
+  const exclude: string[] = [];
+  if (self) {
+    recipients.push(self);
+    exclude.push(self.membershipId);
+  }
+  recipients.push(...(await fctAndAdminRecipients(input.tenantId, exclude)));
+
+  const overallPct = Math.round(input.overall * 100);
+  const subject = `Adherence escalation · ${overallPct}% on a recent send`;
+  const summary = `One of your sends scored ${overallPct}% against FCG / UCG (threshold ${Math.round(input.threshold * 100)}%).`;
+  const body = [
+    `A communication you sent has been scored against the FCG / UCG that were in force at the time and is below the escalation threshold.`,
+    "",
+    `Overall: ${overallPct}%`,
+    `Threshold: ${Math.round(input.threshold * 100)}%`,
+    "",
+    `Open the escalation to acknowledge: /${input.tenantSlug}/adherence/escalations`,
+    `View the sent draft: /${input.tenantSlug}/drafts/${input.draftId}`,
+  ].join("\n");
+
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: input.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "adherence_escalation",
+      dedupeKey: input.adherenceId,
+      subject,
+      summary,
+      text: body,
+      href: `/${input.tenantSlug}/adherence/escalations`,
+      payload: {
+        adherenceId: input.adherenceId,
+        draftId: input.draftId,
+        overall: input.overall,
+        threshold: input.threshold,
+        recipientReason: r.reason,
+      },
+    });
+  }
+  return { recipients: recipients.length };
+}
+
+// ─── Breach acknowledgement awaited (PRD §12.9) ───────────────────────────
+
+export async function dispatchBreachAckRequired(input: {
+  tenantId: string;
+  tenantSlug: string;
+  notificationId: string;
+  incidentCode: string;
+  incidentTitle: string;
+  dueAt: Date;
+}): Promise<{ recipients: number }> {
+  const recipients = await firmAdminRecipients(input.tenantId);
+
+  const subject = `Breach notification · ${input.incidentCode} requires acknowledgement`;
+  const summary = `${input.incidentTitle} — acknowledge by ${input.dueAt.toISOString().slice(0, 16).replace("T", " ")} UTC.`;
+  const body = [
+    `Acumon has dispatched a personal-data breach notification to your tenant under PRD §12.9. The DPA requires Firm Administrator acknowledgement of receipt.`,
+    "",
+    `Incident: ${input.incidentCode} — ${input.incidentTitle}`,
+    `Acknowledge by: ${input.dueAt.toISOString()}`,
+    "",
+    `Acknowledge on /${input.tenantSlug}/compliance/breaches.`,
+  ].join("\n");
+  const href = `/${input.tenantSlug}/compliance/breaches`;
+
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: input.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "breach_ack_required",
+      dedupeKey: input.notificationId,
+      subject,
+      summary,
+      text: body,
+      href,
+      payload: {
+        notificationId: input.notificationId,
+        incidentCode: input.incidentCode,
+        recipientReason: r.reason,
+      },
+    });
+  }
+  return { recipients: recipients.length };
+}

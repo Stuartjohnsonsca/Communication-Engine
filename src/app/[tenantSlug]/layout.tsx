@@ -4,6 +4,7 @@ import { getTenantContext } from "@/lib/tenant";
 import { signOut } from "@/lib/auth";
 import { getDpiaStatus } from "@/lib/dpia/status";
 import { hasPermission } from "@/lib/rbac";
+import { getNavBadges } from "@/lib/notifications";
 
 export default async function TenantLayout({
   children,
@@ -16,10 +17,14 @@ export default async function TenantLayout({
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
 
-  const dpia = await getDpiaStatus(ctx.tenant.id);
+  const [dpia, badges] = await Promise.all([
+    getDpiaStatus(ctx.tenant.id),
+    getNavBadges({ tenantId: ctx.tenant.id, tenantSlug, membership: ctx.membership }),
+  ]);
 
   const nav = [
     { href: `/${tenantSlug}/dashboard`, label: "Dashboard" },
+    { href: `/${tenantSlug}/notifications`, label: "Notifications" },
     { href: `/${tenantSlug}/fcg`, label: "Firm Culture Guide" },
     { href: `/${tenantSlug}/ucg`, label: "My Culture Guide" },
     { href: `/${tenantSlug}/drafts`, label: "Drafts" },
@@ -116,11 +121,23 @@ export default async function TenantLayout({
           <div className="text-xs text-ink/50">{ctx.tenant.jurisdiction}</div>
         </Link>
         <nav className="mt-6 space-y-1 text-sm">
-          {nav.map((n) => (
-            <Link key={n.href} href={n.href} className="block rounded px-2 py-1 hover:bg-ink/5">
-              {n.label}
-            </Link>
-          ))}
+          {nav.map((n) => {
+            const badge = badges.byHref[n.href] ?? 0;
+            return (
+              <Link
+                key={n.href}
+                href={n.href}
+                className="flex items-center justify-between rounded px-2 py-1 hover:bg-ink/5"
+              >
+                <span>{n.label}</span>
+                {badge > 0 && (
+                  <span className="ml-2 inline-flex min-w-[1.25rem] justify-center rounded-full bg-ink px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">
+                    {badge > 99 ? "99+" : badge}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
         </nav>
         <div className="mt-8 border-t border-ink/10 pt-4 text-xs text-ink/60">
           <div>{ctx.user.email}</div>

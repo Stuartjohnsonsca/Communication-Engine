@@ -265,6 +265,9 @@ enum AuditEventType {
   ADHERENCE_ACKNOWLEDGED
   CHANNEL_TOKEN_REFRESHED
   CHANNEL_TOKEN_REFRESH_FAILED
+  NOTIFICATION_DISPATCHED
+  NOTIFICATION_DISPATCH_FAILED
+  NOTIFICATION_DIGEST_RUN
 }
 
 enum BillingPeriodStatus {
@@ -690,6 +693,8 @@ model Tenant {
   breachNotifications   BreachClientNotification[]
   slaMeasurements       SlaMeasurement[]
   onboardingItems       OnboardingChecklistItem[]
+  notificationDispatches NotificationDispatch[]
+  notificationInbox     NotificationInbox[]
 
   @@index([status])
 }
@@ -765,6 +770,8 @@ model Membership {
   sentimentAcknowledged SentimentSignal[]        @relation("SentimentAcknowledger")
   auditEventsActor      AuditEvent[]             @relation("AuditActor")
   billingUserSnapshots  BillingUserSnapshot[]
+  notificationDispatches NotificationDispatch[]
+  notificationInbox     NotificationInbox[]
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -2319,4 +2326,73 @@ model TermsRecord {
   @@unique([tenantId, kind, version])
   @@index([tenantId, kind, status])
   @@index([tenantId, status])
+}
+
+
+// ─── Notifications (post-PRD backlog item 6) ──────────────────────────────
+
+/// Append-only log of every notification dispatch attempt. Idempotency is
+/// enforced by the unique (membershipId, kind, dedupeKey) index — for the
+/// weekly digest the dedupeKey is the ISO week ("2026-W19"), for immediate
+/// triggers it's the source-row id (sentiment signal id, breach notification
+/// id, adherence row id) so a flaky cron retry never sends the same email
+/// twice.
+///
+/// Tenant-scoped + RLS-protected like other Client governance data. The row
+/// is created whether or not the email actually went out — `status` records
+/// the outcome (DISPATCHED / FAILED / SKIPPED_NO_EMAIL_SERVER) so an audit
+/// can tell apart "no email server configured in this deploy" from "send
+/// genuinely failed".
+model NotificationDispatch {
+  id           String   @id @default(cuid())
+  tenantId     String
+  membershipId String
+  /// "weekly_digest" | "sentiment_escalation" | "breach_ack_required" | "adherence_escalation"
+  kind         String
+  dedupeKey    String
+  subject      String
+  channel      String   @default("email")
+  /// "DISPATCHED" | "FAILED" | "SKIPPED_NO_EMAIL_SERVER"
+  status       String
+  errorMessage String?
+  payload      Json
+  sentAt       DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, kind, dedupeKey])
+  @@index([tenantId, sentAt])
+}
+
+/// In-app inbox row generated alongside every immediate dispatch and every
+/// weekly digest. Drives the "Notifications" tab + per-nav-item unread
+/// badges. Tenant-scoped + RLS-protected. The same idempotency key as
+/// `NotificationDispatch` is used so an event that fires twice in a single
+/// run produces exactly one inbox row.
+model NotificationInbox {
+  id           String   @id @default(cuid())
+  tenantId     String
+  membershipId String
+  kind         String
+  dedupeKey    String
+  title        String
+  summary      String?  @db.Text
+  body         String?  @db.Text
+  /// In-tenant route to open the source artefact ("/<slug>/sentiment", etc.).
+  href         String?
+  createdAt    DateTime @default(now())
+  /// Set when the User opens the notification (or marks all as read).
+  readAt       DateTime?
+  /// Mirror of `NotificationDispatch.sentAt` if the email side actually went
+  /// out — a User can see whether the email reached them or only the in-app
+  /// row is on file.
+  emailSentAt  DateTime?
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, kind, dedupeKey])
+  @@index([tenantId, membershipId, readAt])
+  @@index([tenantId, createdAt])
 }
