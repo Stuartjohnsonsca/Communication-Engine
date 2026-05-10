@@ -236,6 +236,16 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "auth:read-own-sessions":      ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "auth:revoke-own-sessions":    ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "tenant:revoke-member-sessions": ["FIRM_ADMIN"],
+
+  // Post-PRD hardening item 14 — outbound webhook delivery. The Firm
+  // Administrator subscribes HTTPS receivers to audit-event types and
+  // receives signed POSTs whenever any matching event lands on the chain.
+  // The FCT can read for governance oversight (knowing what data leaves the
+  // platform is part of their compliance remit) but does not configure or
+  // mutate. The signing secret is shown to the FIRM_ADMIN once on creation
+  // and never read back, so even FCT visibility never exposes it.
+  "webhooks:read":      ["FIRM_ADMIN", "FCT_MEMBER"],
+  "webhooks:configure": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

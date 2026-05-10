@@ -55,6 +55,7 @@ export const enGB: Dictionary = {
     xcl: "Cross-Client Learning",
     signoff: "Sign-off questions",
     security: "Security",
+    webhooks: "Webhooks",
   },
   shell: {
     openNavigation: "Open navigation",
@@ -176,6 +177,7 @@ export type Dictionary = {
     xcl: string;
     signoff: string;
     security: string;
+    webhooks: string;
   };
   shell: {
     openNavigation: string;

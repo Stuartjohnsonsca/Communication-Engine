@@ -52,6 +52,7 @@ export const fr: Dictionary = {
     xcl: "Apprentissage inter-clients",
     signoff: "Questions de validation",
     security: "Sécurité",
+    webhooks: "Webhooks",
   },
   shell: {
     openNavigation: "Ouvrir la navigation",

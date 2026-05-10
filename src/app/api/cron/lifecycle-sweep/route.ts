@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runLifecycleSweep } from "@/lib/lifecycle";
 import { expireOverdueTias } from "@/lib/compliance/cross-border";
 import { reapStaleRateLimitBuckets, rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
+import { reapOldDeliveries } from "@/lib/webhooks";
 
 /**
  * PRD §14.3 lifecycle sweep. Idempotent — only acts on rows whose grace
@@ -36,11 +37,16 @@ export async function GET(req: Request) {
   // Reap rate-limit buckets that haven't been touched in a week. A
   // subsequent request just re-creates the row.
   const ratelimit = await reapStaleRateLimitBuckets();
+  // Reap webhook deliveries — DELIVERED rows older than 30 days, dead-
+  // lettered rows older than 90 days. Receivers shouldn't depend on the
+  // delivery log for primary state; the audit chain is the source of truth.
+  const webhooks = await reapOldDeliveries();
   return NextResponse.json({
     ok: true,
     ...result,
     tiaExpired: tia.expired,
     rateLimitBucketsReaped: ratelimit.deleted,
+    webhookDeliveriesReaped: webhooks.deleted,
   });
 }
 

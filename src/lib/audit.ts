@@ -1,8 +1,21 @@
 import { createHash } from "node:crypto";
 import { Prisma, type AuditEventType } from "@prisma/client";
 import { superDb } from "@/lib/db";
+// `webhooks/dispatch` only imports superDb + observability — no circular
+// edge back into this file. Kept as a sibling import so a future refactor
+// that adds a transitive dependency on @/lib/audit will fail loudly at the
+// dependency graph rather than silently at runtime.
+import { enqueueWebhooks } from "@/lib/webhooks/dispatch";
 
 const SEED = process.env.AUDIT_HASH_SEED ?? "acumon-genesis-2026";
+
+const WEBHOOK_SELF_EVENT_TYPES = new Set<AuditEventType>([
+  "WEBHOOK_DELIVERED",
+  "WEBHOOK_DELIVERY_FAILED",
+  "WEBHOOK_DEAD_LETTERED",
+  "WEBHOOK_REPLAYED",
+  "WEBHOOK_SUBSCRIPTION_AUTO_DISABLED",
+]);
 
 export type WriteAuditInput = {
   tenantId: string;
@@ -28,7 +41,7 @@ export type WriteAuditInput = {
  * by `tenantId` on every row and on every read query.
  */
 export async function writeAuditEvent(input: WriteAuditInput) {
-  return superDb.$transaction(async (tx) => {
+  const created = await superDb.$transaction(async (tx) => {
     const last = await tx.auditEvent.findFirst({
       where: { tenantId: input.tenantId },
       orderBy: { seq: "desc" },
@@ -65,6 +78,38 @@ export async function writeAuditEvent(input: WriteAuditInput) {
       },
     });
   });
+
+  // Outbound webhook fan-out (post-PRD hardening item 14). Runs AFTER the
+  // audit row commits — a failure here cannot roll back the chain (the
+  // commit already happened). enqueueWebhooks has its own try/catch +
+  // reportError so an exception here can't bubble. We await it (rather
+  // than fire-and-forget) so a transient enqueue failure surfaces in the
+  // request log and so tests can observe completion deterministically.
+  // For tenants with no subscriptions the cost is one indexed findMany
+  // returning []; ~1ms.
+  //
+  // Webhook-self event types are intentionally excluded so a misbehaving
+  // receiver can't recursively flood its own subscription with delivery
+  // outcomes.
+  if (!WEBHOOK_SELF_EVENT_TYPES.has(input.eventType)) {
+    await enqueueWebhooks({
+      tenantId: input.tenantId,
+      eventType: input.eventType,
+      auditEventId: created.id,
+      payload: {
+        id: created.id,
+        tenantSlug: "", // resolved by enqueueWebhooks lazily, only when it has matching subs
+        eventType: created.eventType,
+        occurredAt: created.createdAt.toISOString(),
+        subjectType: created.subjectType,
+        subjectId: created.subjectId,
+        actorMembershipId: created.actorMembershipId,
+        data: created.payload as Prisma.JsonValue,
+      },
+    });
+  }
+
+  return created;
 }
 
 function genesisHash(tenantId: string) {

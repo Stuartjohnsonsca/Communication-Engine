@@ -39,7 +39,9 @@ DECLARE
     'SlaMeasurement',
     'OnboardingChecklistItem',
     'NotificationDispatch',
-    'NotificationInbox'
+    'NotificationInbox',
+    'WebhookSubscription',
+    'WebhookDelivery'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

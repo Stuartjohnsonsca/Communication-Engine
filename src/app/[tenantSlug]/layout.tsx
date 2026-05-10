@@ -123,6 +123,11 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "tenant:configure-totp-policy")) {
     nav.push({ href: `/${tenantSlug}/admin/security`, label: t("nav.security") });
   }
+  // Post-PRD hardening item 14 — outbound webhooks. FIRM_ADMIN configures;
+  // FCT can read for governance oversight.
+  if (hasPermission(ctx.membership.role, "webhooks:read")) {
+    nav.push({ href: `/${tenantSlug}/admin/webhooks`, label: t("nav.webhooks") });
+  }
   // PRD §14.2 Sandbox — only meaningful in production tenants. The page
   // itself short-circuits when accessed from inside a sandbox tenant.
   if (

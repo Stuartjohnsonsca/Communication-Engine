@@ -278,6 +278,14 @@ enum AuditEventType {
   SESSION_REVOKED
   SESSION_REVOKED_BY_ADMIN
   SESSION_REVOKED_ALL
+  WEBHOOK_SUBSCRIPTION_CREATED
+  WEBHOOK_SUBSCRIPTION_UPDATED
+  WEBHOOK_SUBSCRIPTION_DELETED
+  WEBHOOK_SUBSCRIPTION_AUTO_DISABLED
+  WEBHOOK_DELIVERED
+  WEBHOOK_DELIVERY_FAILED
+  WEBHOOK_DEAD_LETTERED
+  WEBHOOK_REPLAYED
 }
 
 enum BillingPeriodStatus {
@@ -741,6 +749,8 @@ model Tenant {
   onboardingItems       OnboardingChecklistItem[]
   notificationDispatches NotificationDispatch[]
   notificationInbox     NotificationInbox[]
+  webhookSubscriptions  WebhookSubscription[]
+  webhookDeliveries     WebhookDelivery[]
 
   @@index([status])
 }
@@ -848,6 +858,7 @@ model Membership {
   billingUserSnapshots  BillingUserSnapshot[]
   notificationDispatches NotificationDispatch[]
   notificationInbox     NotificationInbox[]
+  webhookSubscriptions  WebhookSubscription[] @relation("WebhookSubCreatedBy")
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -2509,4 +2520,123 @@ model RateLimitBucket {
   updatedAt   DateTime @updatedAt
 
   @@index([updatedAt])
+}
+
+// ─── Outbound webhook delivery (post-PRD hardening item 14) ───────────────
+
+/// A tenant-registered webhook endpoint. The Firm Administrator subscribes
+/// a URL to a set of audit-event types and receives a signed POST whenever
+/// any matching event lands on the tenant's audit chain. Subscriptions are
+/// tenant-scoped + RLS-protected.
+///
+/// `secret` is encrypted at rest (AES-256-GCM via `src/lib/channels/crypto.ts
+/// encryptJson`) so a row-level DB leak doesn't directly hand over the HMAC
+/// signing key. The plaintext is shown once on creation and never again.
+///
+/// `eventTypes` is an array of AuditEventType enum strings or the wildcard
+/// `"*"` (subscribe to everything). The dispatch path checks membership with
+/// a simple includes() so the cost stays O(subscriptions) per event.
+///
+/// `consecutiveFailures` is bumped on every delivery that ultimately reaches
+/// the dead-letter state; the dispatcher disables a subscription once that
+/// crosses `autoDisableThreshold` (default 25 — about a day of failed
+/// deliveries at the default retry cadence). A FIRM_ADMIN can re-enable
+/// after fixing the receiver.
+model WebhookSubscription {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  /// Human-readable label shown in the admin UI. Not used for delivery.
+  name                  String
+  /// HTTPS URL of the receiver. Validated at the application layer; we
+  /// refuse loopback addresses and the schemes other than https in prod.
+  url                   String
+  /// Encrypted HMAC-SHA256 signing secret. Plaintext is shown once on
+  /// creation and never read again.
+  secretEncrypted       String   @db.Text
+  /// Either ["*"] for "every event type" or an explicit list of
+  /// AuditEventType enum strings. Storage as TEXT[] rather than the enum
+  /// because Postgres doesn't allow ALTER TYPE on a column type used in an
+  /// array column without a rewrite, and the audit-event enum changes often.
+  eventTypes            String[] @default([])
+  /// When `enabled = false`, dispatch enqueues no new deliveries to this
+  /// subscription. Toggled by the Firm Administrator OR automatically by
+  /// the dispatcher when `consecutiveFailures >= autoDisableThreshold`.
+  enabled               Boolean  @default(true)
+  /// Threshold over which the dispatcher auto-flips `enabled = false`.
+  /// Defaults to 25 — about a day of failures at the default backoff.
+  autoDisableThreshold  Int      @default(25)
+  /// Count of consecutive deliveries that ended DEAD_LETTERED. Reset to 0
+  /// on every successful delivery.
+  consecutiveFailures   Int      @default(0)
+  /// When a delivery last succeeded.
+  lastDeliveredAt       DateTime?
+  /// When a delivery last ended DEAD_LETTERED.
+  lastFailureAt         DateTime?
+  /// Last delivery's HTTP status, for at-a-glance UI.
+  lastStatusCode        Int?
+  createdByMembershipId String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy    Membership?           @relation("WebhookSubCreatedBy", fields: [createdByMembershipId], references: [id])
+  deliveries   WebhookDelivery[]
+
+  @@index([tenantId, enabled])
+  @@index([tenantId, createdAt])
+}
+
+/// One enqueued delivery of one event to one subscription. PENDING rows are
+/// picked up by the cron worker, retried with exponential backoff up to
+/// `maxAttempts`, and end in DELIVERED or DEAD_LETTERED. The audit event
+/// that triggered the delivery is referenced by `auditEventId` so a
+/// receiver can request a replay against the same canonical payload.
+///
+/// Tenant-scoped + RLS-protected so a leaked admin token from tenant A
+/// cannot read tenant B's delivery history.
+model WebhookDelivery {
+  id              String   @id @default(cuid())
+  tenantId        String
+  subscriptionId  String
+  /// AuditEventType string (not the enum — see WebhookSubscription.eventTypes
+  /// for the same rationale).
+  eventType       String
+  /// Reference back to the audit chain. Nullable so we can manually enqueue
+  /// a delivery from an admin replay even if the audit event was archived.
+  auditEventId    String?
+  /// Canonical JSON payload sent (and to-be-resent on retry — never
+  /// re-serialised) so retries are byte-stable for the receiver.
+  payload         Json
+  /// Number of times we have attempted POST. First attempt = 1.
+  attempt         Int      @default(0)
+  /// Hard cap on attempts before flipping to DEAD_LETTERED. Defaults to 5
+  /// — at the default backoff (1m, 5m, 30m, 2h, 12h) that's ~15 hours of
+  /// retries before we give up.
+  maxAttempts     Int      @default(5)
+  /// PENDING — waiting for the cron worker to pick up
+  /// IN_FLIGHT — locked by the worker for the current attempt
+  /// DELIVERED — receiver returned 2xx; terminal
+  /// DEAD_LETTERED — exceeded maxAttempts or hit a permanent failure; terminal
+  status          String   @default("PENDING")
+  /// Earliest moment the next attempt should fire. Set to now() on enqueue;
+  /// bumped by backoff on transient failures.
+  scheduledFor    DateTime @default(now())
+  /// Last attempt's HTTP status code (null if no HTTP response — DNS, TLS,
+  /// timeout, etc.).
+  lastStatusCode  Int?
+  /// First 1024 chars of the receiver's response body, for debugging.
+  lastResponseBody String? @db.Text
+  /// Last network/HTTP error message, for debugging.
+  lastError       String?  @db.Text
+  /// Set when status flips to DELIVERED or DEAD_LETTERED.
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, scheduledFor])
+  @@index([tenantId, subscriptionId, createdAt])
+  @@index([status, scheduledFor])
 }
