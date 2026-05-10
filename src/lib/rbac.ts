@@ -161,6 +161,22 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // expiry is a quarterly review item); FIRM_ADMIN records / revokes.
   "transfers:read":   ["FIRM_ADMIN", "FCT_MEMBER"],
   "transfers:manage": ["FIRM_ADMIN"],
+
+  // Breach Notification (PRD §12.9). Two surfaces:
+  //   breach:read    — every Client can read notifications addressed to
+  //                    them (FCT + FIRM_ADMIN; the FCT is included so
+  //                    governance has eyes on incidents in this tenant).
+  //   breach:notify  — Client-side acknowledgement (FIRM_ADMIN records
+  //                    that they have received and read the notice; this
+  //                    is contractually relevant under the DPA).
+  //   breach:manage  — Acumon-side incident lifecycle (record incident,
+  //                    triage, contain, resolve; dispatch notifications).
+  //                    Page handler additionally gates on tenant.slug ===
+  //                    "acumon" so even FIRM_ADMINs of other tenants
+  //                    cannot record incidents.
+  "breach:read":   ["FIRM_ADMIN", "FCT_MEMBER"],
+  "breach:notify": ["FIRM_ADMIN"],
+  "breach:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

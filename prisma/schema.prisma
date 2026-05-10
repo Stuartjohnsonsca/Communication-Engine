@@ -245,6 +245,12 @@ enum AuditEventType {
   TIA_RECORDED
   TIA_REVOKED
   TIA_EXPIRED
+  BREACH_DETECTED
+  BREACH_TRIAGED
+  BREACH_CONTAINED
+  BREACH_RESOLVED
+  BREACH_CLIENT_NOTIFIED
+  BREACH_UPDATE_PUBLISHED
 }
 
 enum BillingPeriodStatus {
@@ -410,6 +416,38 @@ enum IntegrationCategory {
   ACCOUNTING
   TASK_MANAGEMENT
   OTHER
+}
+
+/// PRD §12.9 Breach incident lifecycle. TRIAGE = operator confirming
+/// scope and impact; INVESTIGATING = root-cause work in progress; CONTAINED
+/// = exposure stopped, residual cleanup; RESOLVED = closed with full
+/// post-incident review. The 24-hour notice clock is keyed off
+/// `BreachIncident.awareAt`, not `detectedAt` — under UK GDPR the duty is
+/// triggered by Acumon's awareness, not the moment the incident technically
+/// began.
+enum BreachStatus {
+  TRIAGE
+  INVESTIGATING
+  CONTAINED
+  RESOLVED
+}
+
+enum BreachSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// PRD §12.9 client-notification lifecycle. PENDING = generated, awaiting
+/// operator dispatch; NOTIFIED = sent to the Client (within 24h SLA);
+/// ACKNOWLEDGED = the Client has acknowledged receipt; SUPERSEDED = an
+/// updated notification has been issued for the same incident.
+enum BreachNotificationStatus {
+  PENDING
+  NOTIFIED
+  ACKNOWLEDGED
+  SUPERSEDED
 }
 
 /// PRD §12.6 Transfer Impact Assessment lifecycle. RECORDED = the Client
@@ -590,6 +628,7 @@ model Tenant {
   terminationExports    TenantTerminationExport[]
   termsRecords          TermsRecord[]
   transferImpactAssessments TransferImpactAssessment[]
+  breachNotifications   BreachClientNotification[]
 
   @@index([status])
 }
@@ -1737,6 +1776,92 @@ model SubProcessor {
 
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+
+// ─── Breach Notification (PRD §12.9) ──────────────────────────────────────
+
+/// PRD §12.9 — incident record on Acumon Intelligence's side. Acumon (as
+/// processor) notifies affected Clients without undue delay and within 24
+/// hours of becoming aware of a personal data breach; notifications carry
+/// everything the Client needs to meet its 72-hour ICO/EDPB obligation.
+///
+/// Same global-data pattern as Roadmap, Risks, Sub-Processors, Integrations:
+/// no tenantId, NOT under RLS. Mutations gated to Acumon operators (FIRM_ADMIN
+/// of "acumon" or ACUMON_ADMIN). Audit events on operator's tenant chain
+/// for incident lifecycle + on each affected tenant's chain for notifications.
+model BreachIncident {
+  id                  String           @id @default(cuid())
+  /// Stable code in the form BR-YYYY-NNN — assigned at create time.
+  code                String           @unique
+  title               String
+  /// Short factual description — what happened, what data was potentially
+  /// exposed. Held in plain markdown.
+  description         String           @db.Text
+  /// When the incident is believed to have begun (best-known). May lag
+  /// awareness by hours or days.
+  detectedAt          DateTime?
+  /// When Acumon became aware. The 24-hour client-notice clock starts here.
+  awareAt             DateTime
+  severity            BreachSeverity
+  status              BreachStatus     @default(TRIAGE)
+  /// Whether this is a personal-data breach in the meaning of UK GDPR
+  /// Art. 4(12). Defaults true because the page only triggers when that
+  /// classification is plausible; operator can flip if triage clears it.
+  isPersonalData      Boolean          @default(true)
+  /// Categories of data potentially affected (e.g. "drafts", "FCG content",
+  /// "audit metadata"). Free-form strings.
+  affectedCategories  String[]         @default([])
+  /// Root-cause notes — added during INVESTIGATING.
+  rootCause           String?          @db.Text
+  /// Mitigations applied — added during CONTAINED + RESOLVED.
+  mitigations         String[]         @default([])
+  /// Total Clients with at least one notification linked to this incident.
+  affectedClientCount Int              @default(0)
+  containedAt         DateTime?
+  resolvedAt          DateTime?
+  recordedByName      String
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  notifications BreachClientNotification[]
+
+  @@index([status])
+  @@index([awareAt])
+  @@index([severity, status])
+}
+
+/// PRD §12.9 — per-affected-Client notification record. One row per
+/// (incident, tenant) pair. `dueAt = incident.awareAt + 24h` so the SLA
+/// breach is visible. Tenant-scoped + RLS-protected so each Client only
+/// sees notifications addressed to them; the Acumon operator console reads
+/// across via `superDb`.
+model BreachClientNotification {
+  id                  String                   @id @default(cuid())
+  tenantId            String
+  breachIncidentId    String
+  status              BreachNotificationStatus @default(PENDING)
+  dueAt               DateTime
+  notifiedAt          DateTime?
+  notifiedByName      String?
+  notifiedToName      String?
+  notifiedToRole      String?
+  acknowledgedAt      DateTime?
+  acknowledgedByName  String?
+  /// Snapshot of the dispatched notification body. Held in-platform so the
+  /// audit trail does not depend on an external mail store.
+  payload             String?                  @db.Text
+  notes               String?                  @db.Text
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  incident BreachIncident @relation(fields: [breachIncidentId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, breachIncidentId])
+  @@index([tenantId, status])
+  @@index([breachIncidentId])
+  @@index([dueAt])
 }
 
 

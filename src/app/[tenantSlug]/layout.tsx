@@ -35,6 +35,9 @@ export default async function TenantLayout({
     ...(hasPermission(ctx.membership.role, "transfers:read")
       ? [{ href: `/${tenantSlug}/compliance/transfers`, label: "Cross-border transfer" }]
       : []),
+    ...(hasPermission(ctx.membership.role, "breach:read")
+      ? [{ href: `/${tenantSlug}/compliance/breaches`, label: "Breach notifications" }]
+      : []),
     { href: `/${tenantSlug}/dsar`, label: "DSAR" },
     { href: `/${tenantSlug}/roadmap`, label: "Roadmap" },
     { href: `/${tenantSlug}/risks`, label: "Risks" },
