@@ -72,6 +72,16 @@ export default async function TenantLayout({
   ) {
     nav.push({ href: `/${tenantSlug}/admin/sandbox`, label: "Sandbox" });
   }
+  // PRD §14.1 onboarding. Surface for tenants still onboarding; hidden
+  // once the tenant flips to LIVE (FIRM_ADMIN can still get there directly
+  // via the URL if they want to revisit). Tenants that came in before this
+  // module was added were back-filled to LIVE in migration 26.
+  if (
+    hasPermission(ctx.membership.role, "onboarding:read") &&
+    ctx.tenant.onboardingPhase !== "LIVE"
+  ) {
+    nav.push({ href: `/${tenantSlug}/admin/onboarding`, label: "Onboarding" });
+  }
   // PRD §14.4 termination + §15.3 on-demand export. Visible to anyone who
   // can read the lifecycle status; the page gates manage actions separately.
   if (hasPermission(ctx.membership.role, "termination:read")) {

@@ -256,6 +256,10 @@ enum AuditEventType {
   LANGUAGE_ADDED
   LANGUAGE_UPDATED
   ACCESSIBILITY_STATEMENT_PUBLISHED
+  ONBOARDING_STEP_TICKED
+  ONBOARDING_STEP_UNTICKED
+  ONBOARDING_PHASE_CHANGED
+  ONBOARDING_COMPLETED
 }
 
 enum BillingPeriodStatus {
@@ -421,6 +425,21 @@ enum IntegrationCategory {
   ACCOUNTING
   TASK_MANAGEMENT
   OTHER
+}
+
+/// PRD §14.1 onboarding phase. Mirrors the six PRD stages plus a terminal
+/// LIVE state once production rollout is complete. Phases progress in
+/// strict order; reverting is allowed (e.g. Pilot → Configuration when an
+/// FCG amendment is needed) but completing requires every prior phase to
+/// have at least one ticked item.
+enum OnboardingPhase {
+  COMMERCIAL
+  TECHNICAL
+  COMPLIANCE
+  CONFIGURATION
+  PILOT
+  PRODUCTION
+  LIVE
 }
 
 /// PRD §13.1 Service Level kind. AVAILABILITY = uptime percentage;
@@ -624,6 +643,18 @@ model Tenant {
   /// readable until this date even after `terminationCompletedAt`. Null
   /// means "use the default §12.5 schedule" applied at delete time.
   terminationStatutoryRetentionUntil   DateTime?
+  /// PRD §14.1 onboarding lifecycle. `onboardingPhase` advances through
+  /// COMMERCIAL → TECHNICAL → COMPLIANCE → CONFIGURATION → PILOT →
+  /// PRODUCTION → LIVE. The page derives sub-step status from existing
+  /// data (DPIA attestations, FCG commit, sandbox provisioning, etc.) and
+  /// records manual ticks in `OnboardingChecklistItem` for items the
+  /// platform cannot detect (commercial signoff, SSO configuration, etc.).
+  onboardingPhase                      OnboardingPhase @default(COMMERCIAL)
+  onboardingStartedAt                  DateTime?
+  onboardingCompletedAt                DateTime?
+  /// Free-form per-tenant notes on the rollout — pinned commentary, links
+  /// to the onboarding plan, etc.
+  onboardingNotes                      String?      @db.Text
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 
@@ -653,6 +684,7 @@ model Tenant {
   transferImpactAssessments TransferImpactAssessment[]
   breachNotifications   BreachClientNotification[]
   slaMeasurements       SlaMeasurement[]
+  onboardingItems       OnboardingChecklistItem[]
 
   @@index([status])
 }
@@ -1800,6 +1832,38 @@ model SubProcessor {
 
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+
+// ─── Onboarding Checklist (PRD §14.1) ─────────────────────────────────────
+
+/// PRD §14.1 — per-tenant manual ticks for onboarding steps the platform
+/// cannot itself observe (commercial signoff, SSO configuration, sub-
+/// processor list acceptance, pilot conclusion, etc.). Steps the platform
+/// CAN detect (DPIA attested, FCG committed, FCT quorum present, sandbox
+/// provisioned) are computed at read time from existing data and do not
+/// need a row here. The page combines both into the consolidated checklist.
+///
+/// Tenant-scoped + RLS-protected. The `code` is a stable identifier from
+/// the canonical step list in `src/lib/onboarding/steps.ts`.
+model OnboardingChecklistItem {
+  id          String          @id @default(cuid())
+  tenantId    String
+  phase       OnboardingPhase
+  /// Stable code from the canonical step list (e.g. "commercial.msa-signed",
+  /// "technical.sso-configured", "configuration.fct-appointed").
+  code        String
+  checked     Boolean         @default(false)
+  checkedAt   DateTime?
+  checkedByName String?
+  notes       String?         @db.Text
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId, phase])
 }
 
 

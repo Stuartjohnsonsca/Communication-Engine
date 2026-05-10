@@ -194,6 +194,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // versions managed by Acumon operators.
   "accessibility:read":   ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "accessibility:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
+  // Client Onboarding (PRD §14.1). FCT can read for governance oversight
+  // (the FCT is appointed as part of the configuration phase and tracks
+  // FCG approval); only FIRM_ADMIN ticks items / advances phases. The
+  // checklist itself is per-tenant; there is no Acumon-tenant gate.
+  "onboarding:read":   ["FIRM_ADMIN", "FCT_MEMBER"],
+  "onboarding:manage": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {
