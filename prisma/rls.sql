@@ -33,7 +33,8 @@ DECLARE
     'SignOffQuestion',
     'MeetingRecord',
     'TenantTerminationExport',
-    'TermsRecord'
+    'TermsRecord',
+    'TransferImpactAssessment'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

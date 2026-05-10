@@ -242,6 +242,9 @@ enum AuditEventType {
   PROCESSING_ACTIVITY_ADDED
   PROCESSING_ACTIVITY_UPDATED
   PROCESSING_ACTIVITY_REMOVED
+  TIA_RECORDED
+  TIA_REVOKED
+  TIA_EXPIRED
 }
 
 enum BillingPeriodStatus {
@@ -407,6 +410,17 @@ enum IntegrationCategory {
   ACCOUNTING
   TASK_MANAGEMENT
   OTHER
+}
+
+/// PRD §12.6 Transfer Impact Assessment lifecycle. RECORDED = the Client
+/// has signed SCCs + a documented TIA for the third-country sub-processor;
+/// EXPIRED = the period covered has passed (TIAs are reviewed annually);
+/// REVOKED = the Client withdrew authorisation (e.g. closed the channel
+/// that depended on the sub-processor).
+enum TIAStatus {
+  RECORDED
+  EXPIRED
+  REVOKED
 }
 
 /// PRD §5.1.1 Firm Culture Scan lifecycle. PENDING = scan record created;
@@ -575,6 +589,7 @@ model Tenant {
   signOffQuestions      SignOffQuestion[]
   terminationExports    TenantTerminationExport[]
   termsRecords          TermsRecord[]
+  transferImpactAssessments TransferImpactAssessment[]
 
   @@index([status])
 }
@@ -1722,6 +1737,60 @@ model SubProcessor {
 
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+
+// ─── Cross-Border Transfer (PRD §12.6) ────────────────────────────────────
+
+/// PRD §12.6 — per-tenant Transfer Impact Assessment. The system blocks
+/// activation of any third-country sub-processor (i.e. one whose
+/// jurisdiction is outside the tenant's UK/EU lock) until SCCs and a
+/// documented TIA are in place for that tenant × sub-processor pair.
+///
+/// Tenant-scoped + RLS-protected like other Client governance data. The
+/// global SubProcessor list (§15.3) is the catalogue; this table is the
+/// per-Client authorisation layer. A sub-processor with a UK or EU
+/// jurisdiction does not need a TIA — the activation gate only fires for
+/// non-EU / non-UK rows.
+model TransferImpactAssessment {
+  id                String    @id @default(cuid())
+  tenantId          String
+  /// FK to SubProcessor.code — kept as a string FK because SubProcessor is
+  /// a global table without RLS; relational join not enforced at the schema
+  /// level (deletion of a sub-processor is rare and audited; we want the
+  /// TIA history to survive even if the row is later marked inactive).
+  subProcessorCode  String
+  status            TIAStatus @default(RECORDED)
+  /// Documented SCC reference — typically the contract id / DocuSign
+  /// envelope id of the signed Standard Contractual Clauses.
+  sccDocumentRef    String
+  /// Documented Transfer Impact Assessment reference — typically a link
+  /// into the Client's compliance system.
+  tiaDocumentRef    String
+  /// Effective dates of the TIA. `effectiveTo` defaults to +12 months at
+  /// recording; auto-flipped to EXPIRED by the §14.4 cron sweep when the
+  /// date passes.
+  effectiveFrom     DateTime
+  effectiveTo       DateTime
+  signedByName      String
+  signedByRole      String
+  /// Optional list of data categories covered by the TIA — strings lifted
+  /// from the matching SubProcessor.dataCategories.
+  dataCategories    String[]  @default([])
+  notes             String?   @db.Text
+  /// Set when the TIA is revoked (e.g. the Client closed the dependent
+  /// channel) or expired without renewal.
+  revokedAt         DateTime?
+  revokedReason     String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, subProcessorCode, effectiveFrom])
+  @@index([tenantId, status])
+  @@index([tenantId, subProcessorCode])
+  @@index([effectiveTo])
 }
 
 

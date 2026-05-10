@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runLifecycleSweep } from "@/lib/lifecycle";
+import { expireOverdueTias } from "@/lib/compliance/cross-border";
 
 /**
  * PRD §14.3 lifecycle sweep. Idempotent — only acts on rows whose grace
@@ -24,7 +25,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
   const result = await runLifecycleSweep();
-  return NextResponse.json({ ok: true, ...result });
+  // PRD §12.6 — flip TIAs whose effectiveTo has passed to EXPIRED in the
+  // same sweep so the cross-border view stays accurate without a second
+  // cron service.
+  const tia = await expireOverdueTias();
+  return NextResponse.json({ ok: true, ...result, tiaExpired: tia.expired });
 }
 
 export const POST = GET;

@@ -154,6 +154,13 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // is governance-grade content (DPO-level reading), not operational copy.
   "processing-map:read":   ["FIRM_ADMIN", "FCT_MEMBER", "ACUMON_ADMIN", "CURATOR"],
   "processing-map:manage": ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
+  // Cross-Border Transfer (PRD §12.6). Per-tenant Transfer Impact
+  // Assessments — record who signed, the SCC + TIA document references,
+  // and the effective dates. FCT can read for governance oversight (TIA
+  // expiry is a quarterly review item); FIRM_ADMIN records / revokes.
+  "transfers:read":   ["FIRM_ADMIN", "FCT_MEMBER"],
+  "transfers:manage": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

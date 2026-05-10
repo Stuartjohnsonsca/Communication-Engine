@@ -32,6 +32,9 @@ export default async function TenantLayout({
     ...(hasPermission(ctx.membership.role, "processing-map:read")
       ? [{ href: `/${tenantSlug}/compliance/processing-map`, label: "Controller / Processor" }]
       : []),
+    ...(hasPermission(ctx.membership.role, "transfers:read")
+      ? [{ href: `/${tenantSlug}/compliance/transfers`, label: "Cross-border transfer" }]
+      : []),
     { href: `/${tenantSlug}/dsar`, label: "DSAR" },
     { href: `/${tenantSlug}/roadmap`, label: "Roadmap" },
     { href: `/${tenantSlug}/risks`, label: "Risks" },
