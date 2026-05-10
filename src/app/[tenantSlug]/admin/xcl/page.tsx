@@ -182,7 +182,7 @@ function ClientCard({
         </p>
       )}
 
-      <dl className="grid grid-cols-4 gap-2 text-xs text-ink/60">
+      <dl className="grid grid-cols-2 gap-2 text-xs text-ink/60 sm:grid-cols-4">
         <div className="rounded bg-ink/5 p-2">
           <dt>Pending</dt>
           <dd className="text-base font-medium text-ink">{view.counts.PENDING}</dd>
@@ -269,7 +269,7 @@ function CuratorPanel({
           Acumon-side. PRD §11.3 anonymisation pipeline + human curator + quarterly
           re-identification testing.
         </p>
-        <dl className="mt-3 grid grid-cols-3 gap-2 text-xs text-ink/60">
+        <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-ink/60 sm:grid-cols-3">
           <div className="rounded bg-ink/5 p-2">
             <dt>Pending review</dt>
             <dd className="text-base font-medium text-ink">{view.pending.length}</dd>
