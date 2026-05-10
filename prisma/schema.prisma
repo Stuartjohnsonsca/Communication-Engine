@@ -663,6 +663,13 @@ model Tenant {
   /// Free-form per-tenant notes on the rollout — pinned commentary, links
   /// to the onboarding plan, etc.
   onboardingNotes                      String?      @db.Text
+  /// PRD §13.5 + backlog item 10. Locale (BCP-47) used by any Membership
+  /// in this tenant that has no explicit preference of its own. New tenants
+  /// default to en-GB so existing behaviour is preserved. Free-form text
+  /// rather than an FK to SupportedLanguage so renaming a row doesn't break
+  /// existing tenant preferences; the i18n loader silently falls back to
+  /// en-GB on any unknown code.
+  defaultLocale                        String       @default("en-GB")
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 
@@ -745,6 +752,10 @@ model Membership {
   // question without scraping NextAuth's Session table. Distinct from
   // `User.emailVerified`, which is set once per email.
   lastLoginAt       DateTime?
+  /// PRD §13.5 + backlog item 10. Per-User UI locale (BCP-47). Null means
+  /// "inherit tenant.defaultLocale". Free-form text — see Tenant.defaultLocale
+  /// for why we don't FK to SupportedLanguage.
+  locale            String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

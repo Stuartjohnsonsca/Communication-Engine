@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Backlog item 8 — global ⌘K command palette. Wraps the tenant-scoped
@@ -53,6 +54,7 @@ export function CommandPalette({ tenantSlug }: { tenantSlug: string }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const reqIdRef = useRef(0);
   const router = useRouter();
+  const t = useT();
 
   // Open on Ctrl/Cmd+K from anywhere in the app. Avoid swallowing the
   // keystroke when an editable element already has focus and is intercepting
@@ -204,7 +206,7 @@ export function CommandPalette({ tenantSlug }: { tenantSlug: string }) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Search"
+      aria-label={t("shell.searchLabel")}
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 px-4 pt-[10vh]"
       onClick={() => setOpen(false)}
       onKeyDown={onKeyDown}
@@ -218,7 +220,7 @@ export function CommandPalette({ tenantSlug }: { tenantSlug: string }) {
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search drafts, actions, meetings, members…"
+            placeholder={t("shell.searchPlaceholder")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink/40"
@@ -229,11 +231,10 @@ export function CommandPalette({ tenantSlug }: { tenantSlug: string }) {
         <div className="max-h-[60vh] overflow-y-auto py-1 text-sm">
           {q.trim().length < 2 ? (
             <p className="px-3 py-3 text-xs text-ink/50">
-              Type at least two characters. Tenant-scoped — only results you have
-              permission to see appear.
+              {t("shell.searchEmptyHint")}
             </p>
           ) : !loading && flatRows.length === 0 ? (
-            <p className="px-3 py-3 text-xs text-ink/50">No matches.</p>
+            <p className="px-3 py-3 text-xs text-ink/50">{t("shell.searchNoMatches")}</p>
           ) : (
             grouped.map((g) => (
               <div key={g.group} className="py-1">
@@ -274,7 +275,7 @@ export function CommandPalette({ tenantSlug }: { tenantSlug: string }) {
         </div>
 
         <div className="border-t border-ink/5 px-3 py-1.5 text-[10px] text-ink/40">
-          ↑ ↓ to navigate · Enter to open · Esc to close
+          {t("shell.searchKeyHint")}
         </div>
       </div>
     </div>
@@ -286,10 +287,11 @@ export function CommandPalette({ tenantSlug }: { tenantSlug: string }) {
  * by the mobile topbar where the keyboard shortcut isn't visible.
  */
 export function CommandPaletteButton({ className }: { className?: string }) {
+  const t = useT();
   return (
     <button
       type="button"
-      aria-label="Open search"
+      aria-label={t("shell.openSearch")}
       onClick={() => window.dispatchEvent(new CustomEvent("commandpalette:open"))}
       className={
         className ??
@@ -310,7 +312,7 @@ export function CommandPaletteButton({ className }: { className?: string }) {
         <circle cx="11" cy="11" r="7" />
         <line x1="21" y1="21" x2="16.65" y2="16.65" />
       </svg>
-      <span>Search</span>
+      <span>{t("shell.searchLabel")}</span>
       <span className="ml-1 hidden md:inline rounded bg-ink/10 px-1 text-[10px] text-ink/60">⌘K</span>
     </button>
   );

@@ -6,6 +6,8 @@ import { getDpiaStatus } from "@/lib/dpia/status";
 import { hasPermission } from "@/lib/rbac";
 import { getNavBadges } from "@/lib/notifications";
 import { NavShell } from "@/components/NavShell";
+import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
+import { getT, resolveLocale } from "@/lib/i18n";
 
 export default async function TenantLayout({
   children,
@@ -23,55 +25,58 @@ export default async function TenantLayout({
     getNavBadges({ tenantId: ctx.tenant.id, tenantSlug, membership: ctx.membership }),
   ]);
 
+  const locale = resolveLocale({ membership: ctx.membership, tenant: ctx.tenant });
+  const t = getT(locale);
+
   const nav = [
-    { href: `/${tenantSlug}/dashboard`, label: "Dashboard" },
-    { href: `/${tenantSlug}/notifications`, label: "Notifications" },
-    { href: `/${tenantSlug}/fcg`, label: "Firm Culture Guide" },
-    { href: `/${tenantSlug}/ucg`, label: "My Culture Guide" },
-    { href: `/${tenantSlug}/drafts`, label: "Drafts" },
-    { href: `/${tenantSlug}/actions`, label: "Actions" },
-    { href: `/${tenantSlug}/meetings`, label: "Meetings" },
-    { href: `/${tenantSlug}/opportunities`, label: "Opportunities" },
-    { href: `/${tenantSlug}/sentiment`, label: "Sentiment" },
-    { href: `/${tenantSlug}/dashboards`, label: "Adherence" },
+    { href: `/${tenantSlug}/dashboard`, label: t("nav.dashboard") },
+    { href: `/${tenantSlug}/notifications`, label: t("nav.notifications") },
+    { href: `/${tenantSlug}/fcg`, label: t("nav.fcg") },
+    { href: `/${tenantSlug}/ucg`, label: t("nav.ucg") },
+    { href: `/${tenantSlug}/drafts`, label: t("nav.drafts") },
+    { href: `/${tenantSlug}/actions`, label: t("nav.actions") },
+    { href: `/${tenantSlug}/meetings`, label: t("nav.meetings") },
+    { href: `/${tenantSlug}/opportunities`, label: t("nav.opportunities") },
+    { href: `/${tenantSlug}/sentiment`, label: t("nav.sentiment") },
+    { href: `/${tenantSlug}/dashboards`, label: t("nav.adherence") },
     ...(hasPermission(ctx.membership.role, "adherence:read")
-      ? [{ href: `/${tenantSlug}/adherence/escalations`, label: "Adherence escalations" }]
+      ? [{ href: `/${tenantSlug}/adherence/escalations`, label: t("nav.adherenceEscalations") }]
       : []),
-    { href: `/${tenantSlug}/dpia`, label: "DPIA" },
+    { href: `/${tenantSlug}/dpia`, label: t("nav.dpia") },
     ...(hasPermission(ctx.membership.role, "processing-map:read")
-      ? [{ href: `/${tenantSlug}/compliance/processing-map`, label: "Controller / Processor" }]
+      ? [{ href: `/${tenantSlug}/compliance/processing-map`, label: t("nav.processingMap") }]
       : []),
     ...(hasPermission(ctx.membership.role, "transfers:read")
-      ? [{ href: `/${tenantSlug}/compliance/transfers`, label: "Cross-border transfer" }]
+      ? [{ href: `/${tenantSlug}/compliance/transfers`, label: t("nav.transfers") }]
       : []),
     ...(hasPermission(ctx.membership.role, "breach:read")
-      ? [{ href: `/${tenantSlug}/compliance/breaches`, label: "Breach notifications" }]
+      ? [{ href: `/${tenantSlug}/compliance/breaches`, label: t("nav.breaches") }]
       : []),
-    { href: `/${tenantSlug}/dsar`, label: "DSAR" },
-    { href: `/${tenantSlug}/roadmap`, label: "Roadmap" },
-    { href: `/${tenantSlug}/risks`, label: "Risks" },
-    { href: `/${tenantSlug}/switching`, label: "Switching posture" },
-    { href: `/${tenantSlug}/integrations`, label: "Integrations" },
+    { href: `/${tenantSlug}/dsar`, label: t("nav.dsar") },
+    { href: `/${tenantSlug}/roadmap`, label: t("nav.roadmap") },
+    { href: `/${tenantSlug}/risks`, label: t("nav.risks") },
+    { href: `/${tenantSlug}/switching`, label: t("nav.switching") },
+    { href: `/${tenantSlug}/integrations`, label: t("nav.integrations") },
     ...(hasPermission(ctx.membership.role, "sla:read")
-      ? [{ href: `/${tenantSlug}/sla`, label: "Service levels" }]
+      ? [{ href: `/${tenantSlug}/sla`, label: t("nav.sla") }]
       : []),
     ...(hasPermission(ctx.membership.role, "accessibility:read")
-      ? [{ href: `/${tenantSlug}/accessibility`, label: "Accessibility" }]
+      ? [{ href: `/${tenantSlug}/accessibility`, label: t("nav.accessibility") }]
       : []),
     ...(hasPermission(ctx.membership.role, "languages:read")
-      ? [{ href: `/${tenantSlug}/languages`, label: "Languages" }]
+      ? [{ href: `/${tenantSlug}/languages`, label: t("nav.languages") }]
       : []),
-    { href: `/${tenantSlug}/account`, label: "My account" },
-    { href: `/${tenantSlug}/admin/adherence`, label: "Firm adherence" },
-    { href: `/${tenantSlug}/admin/audit`, label: "Audit log" },
-    { href: `/${tenantSlug}/admin/members`, label: "Members" },
-    { href: `/${tenantSlug}/admin/lifecycle`, label: "Lifecycle" },
-    { href: `/${tenantSlug}/admin/channels`, label: "Channels" },
-    { href: `/${tenantSlug}/admin/conflicts`, label: "UCG conflicts" },
-    { href: `/${tenantSlug}/admin/sales-identifier`, label: "Sales Identifier" },
+    { href: `/${tenantSlug}/account`, label: t("nav.account") },
+    { href: `/${tenantSlug}/admin/adherence`, label: t("nav.firmAdherence") },
+    { href: `/${tenantSlug}/admin/audit`, label: t("nav.auditLog") },
+    { href: `/${tenantSlug}/admin/members`, label: t("nav.members") },
+    { href: `/${tenantSlug}/admin/lifecycle`, label: t("nav.lifecycle") },
+    { href: `/${tenantSlug}/admin/channels`, label: t("nav.channels") },
+    { href: `/${tenantSlug}/admin/conflicts`, label: t("nav.ucgConflicts") },
+    { href: `/${tenantSlug}/admin/sales-identifier`, label: t("nav.salesIdentifier") },
   ];
   if (hasPermission(ctx.membership.role, "billing:read")) {
-    nav.push({ href: `/${tenantSlug}/admin/billing`, label: "Billing" });
+    nav.push({ href: `/${tenantSlug}/admin/billing`, label: t("nav.billing") });
   }
   // PRD §14.2 Sandbox — only meaningful in production tenants. The page
   // itself short-circuits when accessed from inside a sandbox tenant.
@@ -79,7 +84,7 @@ export default async function TenantLayout({
     hasPermission(ctx.membership.role, "sandbox:read") &&
     !ctx.tenant.isSandbox
   ) {
-    nav.push({ href: `/${tenantSlug}/admin/sandbox`, label: "Sandbox" });
+    nav.push({ href: `/${tenantSlug}/admin/sandbox`, label: t("nav.sandbox") });
   }
   // PRD §14.1 onboarding. Surface for tenants still onboarding; hidden
   // once the tenant flips to LIVE (FIRM_ADMIN can still get there directly
@@ -89,29 +94,29 @@ export default async function TenantLayout({
     hasPermission(ctx.membership.role, "onboarding:read") &&
     ctx.tenant.onboardingPhase !== "LIVE"
   ) {
-    nav.push({ href: `/${tenantSlug}/admin/onboarding`, label: "Onboarding" });
+    nav.push({ href: `/${tenantSlug}/admin/onboarding`, label: t("nav.onboarding") });
   }
   // PRD §14.4 termination + §15.3 on-demand export. Visible to anyone who
   // can read the lifecycle status; the page gates manage actions separately.
   if (hasPermission(ctx.membership.role, "termination:read")) {
-    nav.push({ href: `/${tenantSlug}/admin/termination`, label: "Termination" });
+    nav.push({ href: `/${tenantSlug}/admin/termination`, label: t("nav.termination") });
   }
   // PRD §15.4 Terms and Conditions persistence. FCT can read for governance
   // oversight; FIRM_ADMIN records new versions.
   if (hasPermission(ctx.membership.role, "terms:read")) {
-    nav.push({ href: `/${tenantSlug}/admin/terms`, label: "Terms" });
+    nav.push({ href: `/${tenantSlug}/admin/terms`, label: t("nav.terms") });
   }
   // PRD §11 Cross-Client Learning. Visible to anyone with xcl:read in this
   // tenant (the page itself decides whether to render the curator console
   // based on the Acumon-tenant gate).
   if (hasPermission(ctx.membership.role, "xcl:read")) {
-    nav.push({ href: `/${tenantSlug}/admin/xcl`, label: "Cross-Client Learning" });
+    nav.push({ href: `/${tenantSlug}/admin/xcl`, label: t("nav.xcl") });
   }
   // PRD §18 sign-off questions are per-tenant — every tenant has their own
   // copy and answers them for themselves. Visible to anyone with read
   // permission within this tenant.
   if (hasPermission(ctx.membership.role, "signoff:read")) {
-    nav.push({ href: `/${tenantSlug}/sign-off`, label: "Sign-off questions" });
+    nav.push({ href: `/${tenantSlug}/sign-off`, label: t("nav.signoff") });
   }
 
   const sidebar = (
@@ -150,7 +155,7 @@ export default async function TenantLayout({
           className="mt-3"
         >
           <button className="btn w-full text-xs" type="submit">
-            Sign out
+            {t("shell.signOut")}
           </button>
         </form>
       </div>
@@ -158,31 +163,33 @@ export default async function TenantLayout({
   );
 
   return (
-    <NavShell tenantSlug={tenantSlug} tenantName={ctx.tenant.name} sidebar={sidebar}>
-      {dpia.banner && (
-        <div
-          className={`mb-6 rounded border px-3 py-2 text-sm ${
-            dpia.banner.tone === "alert"
-              ? "border-red-300 bg-red-50/60 text-red-800"
-              : dpia.banner.tone === "warn"
-                ? "border-amber-300 bg-amber-50/60 text-amber-900"
-                : "border-sky-300 bg-sky-50/60 text-sky-900"
-          }`}
-        >
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
-            <div>
-              <span className="font-medium">DPIA · {dpia.state}.</span> {dpia.banner.message}
+    <LocaleProvider locale={locale}>
+      <NavShell tenantSlug={tenantSlug} tenantName={ctx.tenant.name} sidebar={sidebar}>
+        {dpia.banner && (
+          <div
+            className={`mb-6 rounded border px-3 py-2 text-sm ${
+              dpia.banner.tone === "alert"
+                ? "border-red-300 bg-red-50/60 text-red-800"
+                : dpia.banner.tone === "warn"
+                  ? "border-amber-300 bg-amber-50/60 text-amber-900"
+                  : "border-sky-300 bg-sky-50/60 text-sky-900"
+            }`}
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
+              <div>
+                <span className="font-medium">{t("dpia.label")} · {dpia.state}.</span> {dpia.banner.message}
+              </div>
+              <Link
+                href={`/${tenantSlug}/dpia`}
+                className="shrink-0 underline decoration-dotted"
+              >
+                {t("dpia.open")}
+              </Link>
             </div>
-            <Link
-              href={`/${tenantSlug}/dpia`}
-              className="shrink-0 underline decoration-dotted"
-            >
-              Open DPIA →
-            </Link>
           </div>
-        </div>
-      )}
-      {children}
-    </NavShell>
+        )}
+        {children}
+      </NavShell>
+    </LocaleProvider>
   );
 }

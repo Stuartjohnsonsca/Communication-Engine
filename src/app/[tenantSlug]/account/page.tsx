@@ -3,6 +3,14 @@ import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { revokeAccess, reauthoriseAccess, getMemberLifecycleState } from "@/lib/lifecycle";
+import {
+  SUPPORTED_LOCALES,
+  LOCALE_LABELS,
+  isSupportedLocale,
+  getT,
+  resolveLocale,
+} from "@/lib/i18n";
+import { hasPermission } from "@/lib/rbac";
 
 export default async function AccountPage({
   params,
@@ -58,6 +66,42 @@ export default async function AccountPage({
   const liveAuths = channelAuths.filter((a) => !a.revokedAt);
   const revokedAuths = channelAuths.filter((a) => a.revokedAt);
 
+  const effectiveLocale = resolveLocale({ membership: member, tenant: ctx.tenant });
+  const t = getT(effectiveLocale);
+  const canManageTenantDefault = hasPermission(ctx.membership.role, "tenant:configure-locale");
+
+  async function setMyLocaleAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    const raw = (formData.get("locale") as string | null) ?? "";
+    const next: string | null = raw === "" ? null : raw;
+    if (next !== null && !isSupportedLocale(next)) throw new Error("unsupported locale");
+    await superDb.membership.update({
+      where: { id: inner.membership.id },
+      data: { locale: next },
+    });
+    revalidatePath(`/${tenantSlug}/account`);
+    revalidatePath(`/${tenantSlug}`, "layout");
+  }
+
+  async function setTenantDefaultLocaleAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "tenant:configure-locale")) {
+      throw new Error("forbidden");
+    }
+    const raw = (formData.get("defaultLocale") as string | null) ?? "";
+    if (!isSupportedLocale(raw)) throw new Error("unsupported locale");
+    await superDb.tenant.update({
+      where: { id: inner.tenant.id },
+      data: { defaultLocale: raw },
+    });
+    revalidatePath(`/${tenantSlug}/account`);
+    revalidatePath(`/${tenantSlug}`, "layout");
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -95,6 +139,71 @@ export default async function AccountPage({
           </div>
         </dl>
       </div>
+
+      <form action={setMyLocaleAction} className="card space-y-3">
+        <h2 className="text-base font-medium">{t("account.localeHeading")}</h2>
+        <p className="text-sm text-ink/70">{t("account.localeDescription")}</p>
+        <div>
+          <label className="label" htmlFor="locale">
+            {t("account.localeHeading")}
+          </label>
+          <select
+            id="locale"
+            name="locale"
+            defaultValue={member.locale ?? ""}
+            className="input"
+          >
+            <option value="">
+              {t("account.inheritFromTenant", { locale: ctx.tenant.defaultLocale })}
+            </option>
+            {SUPPORTED_LOCALES.map((code) => (
+              <option key={code} value={code}>
+                {LOCALE_LABELS[code].nativeName} ({code})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center justify-between gap-3 text-xs text-ink/50">
+          <span>
+            Effective: <span className="font-medium text-ink/80">{effectiveLocale}</span>
+          </span>
+          <button type="submit" className="btn text-xs">
+            {t("account.save")}
+          </button>
+        </div>
+      </form>
+
+      {canManageTenantDefault && (
+        <form action={setTenantDefaultLocaleAction} className="card space-y-3">
+          <h2 className="text-base font-medium">Tenant default interface language</h2>
+          <p className="text-sm text-ink/70">
+            Sets the locale that Memberships in this tenant inherit when they have not
+            chosen one of their own. Visible to Firm Administrators only.
+          </p>
+          <div>
+            <label className="label" htmlFor="defaultLocale">
+              Tenant default
+            </label>
+            <select
+              id="defaultLocale"
+              name="defaultLocale"
+              defaultValue={ctx.tenant.defaultLocale}
+              className="input"
+            >
+              {SUPPORTED_LOCALES.map((code) => (
+                <option key={code} value={code}>
+                  {LOCALE_LABELS[code].nativeName} ({code})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end">
+            <button type="submit" className="btn text-xs">
+              {t("account.save")}
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Channel authorisations</h2>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { CommandPalette, CommandPaletteButton } from "./CommandPalette";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 export function NavShell({
   tenantSlug,
@@ -17,6 +18,7 @@ export function NavShell({
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const t = useT();
 
   useEffect(() => {
     setOpen(false);
@@ -36,7 +38,7 @@ export function NavShell({
       <header className="md:hidden sticky top-0 z-20 flex items-center gap-3 border-b border-ink/10 bg-white px-3 py-2">
         <button
           type="button"
-          aria-label="Open navigation"
+          aria-label={t("shell.openNavigation")}
           aria-controls="tenant-sidebar"
           aria-expanded={open}
           onClick={() => setOpen(true)}
@@ -67,7 +69,7 @@ export function NavShell({
       {open && (
         <button
           type="button"
-          aria-label="Close navigation"
+          aria-label={t("shell.closeNavigation")}
           onClick={() => setOpen(false)}
           className="fixed inset-0 z-30 bg-black/30 md:hidden"
         />
@@ -82,7 +84,7 @@ export function NavShell({
         <div className="mb-3 flex justify-end md:hidden">
           <button
             type="button"
-            aria-label="Close navigation"
+            aria-label={t("shell.closeNavigation")}
             onClick={() => setOpen(false)}
             className="inline-flex items-center justify-center rounded-md border border-ink/15 bg-white p-1.5"
           >

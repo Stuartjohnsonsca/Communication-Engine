@@ -136,6 +136,12 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "xcl:curate":          ["CURATOR", "ACUMON_ADMIN", "FIRM_ADMIN"],
   "tenant:provision":    ["ACUMON_ADMIN"],
 
+  // Backlog item 10 — UI internationalisation. Setting the tenant-wide
+  // default UI locale (the value Memberships inherit when they have no
+  // explicit preference) is a Firm Administrator decision; per-User
+  // preferences are not gated and are always editable on /account.
+  "tenant:configure-locale": ["FIRM_ADMIN"],
+
   // Integration Tiers (PRD §10). Same posture as the Roadmap (§16), Risks
   // (§17) and Sub-Processors (§15.3): the catalogue is published to every
   // Client per §15.3 transparency, so any signed-in role can read. Mutating
