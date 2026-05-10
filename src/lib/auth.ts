@@ -1,9 +1,37 @@
 import { randomInt } from "node:crypto";
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
+import type { Adapter } from "next-auth/adapters";
 import EmailProvider from "next-auth/providers/nodemailer";
 import { createTransport } from "nodemailer";
 import { prisma } from "@/lib/db";
+
+/**
+ * Wrap the PrismaAdapter so that any Session row with `revokedAt IS NOT NULL`
+ * is treated as signed-out. Post-PRD hardening item 13 — Users + Firm Admins
+ * can revoke individual sessions for incident response; the row is preserved
+ * for forensic history but the cookie that maps to it stops authenticating.
+ *
+ * NextAuth's session callback chain calls `getSessionAndUser(sessionToken)`
+ * on every authenticated request. Returning null here makes NextAuth treat
+ * the cookie as expired/invalid, which it does without re-creating the row.
+ */
+function revokableAdapter(): Adapter {
+  const base = PrismaAdapter(prisma);
+  return {
+    ...base,
+    async getSessionAndUser(sessionToken: string) {
+      const result = await base.getSessionAndUser!(sessionToken);
+      if (!result) return null;
+      const row = await prisma.session.findUnique({
+        where: { sessionToken },
+        select: { revokedAt: true },
+      });
+      if (row?.revokedAt) return null;
+      return result;
+    },
+  };
+}
 
 const useEmailProvider = !!process.env.EMAIL_SERVER && !!process.env.EMAIL_FROM;
 
@@ -33,7 +61,7 @@ async function sendCodeEmail(opts: { identifier: string; token: string; from: st
 }
 
 export const authConfig: NextAuthConfig = {
-  adapter: PrismaAdapter(prisma),
+  adapter: revokableAdapter(),
   session: { strategy: "database" },
   pages: { signIn: "/login", verifyRequest: "/login/verify" },
   providers: useEmailProvider

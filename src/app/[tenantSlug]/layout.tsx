@@ -10,6 +10,7 @@ import { NavShell } from "@/components/NavShell";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { getT, resolveLocale } from "@/lib/i18n";
 import { evaluateTotpGate, resolveCurrentSessionId } from "@/lib/auth/totp";
+import { touchSession, observeSessionMetadata, ipFromHeaders } from "@/lib/auth/sessions";
 
 export default async function TenantLayout({
   children,
@@ -27,12 +28,23 @@ export default async function TenantLayout({
   // verify-required state, otherwise the redirect loops (the redirect
   // target also runs this layout). The challenge page (/auth/2fa) handles
   // verification; /account hosts enrollment.
-  const requestPathname = (await headers()).get("x-pathname") ?? "";
+  const h = await headers();
+  const requestPathname = h.get("x-pathname") ?? "";
+  const sessionId = await resolveCurrentSessionId();
+  // Post-PRD hardening item 13 — touch lastSeenAt + lazy-capture UA/IP on
+  // every layout pass. Both calls are conditional UPDATEs (throttled to
+  // 1/min for lastSeenAt; first-observation-wins for UA/IP) so the write
+  // rate stays bounded even on hot tenant pages.
+  if (sessionId) {
+    await Promise.all([
+      touchSession(sessionId),
+      observeSessionMetadata(sessionId, h.get("user-agent"), ipFromHeaders(h)),
+    ]);
+  }
   const gateAllowlist =
     requestPathname === `/${tenantSlug}/account` ||
     requestPathname.startsWith(`/${tenantSlug}/auth/2fa`);
   if (!gateAllowlist) {
-    const sessionId = await resolveCurrentSessionId();
     const gate = await evaluateTotpGate({
       userId: ctx.user.id,
       sessionId,

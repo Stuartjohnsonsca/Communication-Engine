@@ -114,4 +114,16 @@ export const fr: Dictionary = {
       "Ce code ne correspond pas. Essayez le suivant affiché par votre application d'authentification.",
     rateLimitedError: "Trop de tentatives. Réessayez dans un instant.",
   },
+  sessions: {
+    heading: "Sessions actives",
+    description:
+      "Chaque appareil actuellement connecté à votre compte. Révoquez toute session que vous ne reconnaissez pas ; la révocation déconnecte cet appareil à sa prochaine requête. Votre appareil actuel ne peut pas se révoquer lui-même — utilisez plutôt la déconnexion.",
+    none: "Aucune session active.",
+    thisDevice: "Cet appareil",
+    twofaVerified: "2FA vérifié",
+    signedIn: "Connecté le",
+    lastSeen: "Vu pour la dernière fois",
+    revoke: "Révoquer",
+    revokeOthers: "Déconnecter tous les autres appareils",
+  },
 };

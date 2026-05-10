@@ -115,6 +115,18 @@ export const enGB: Dictionary = {
     badCodeError: "That code didn't match. Try the next one your authenticator displays.",
     rateLimitedError: "Too many attempts. Try again shortly.",
   },
+  sessions: {
+    heading: "Active sessions",
+    description:
+      "Every device currently signed in to your account. Revoke any session you don't recognise; revoking signs that device out on its next request. Your current device cannot revoke itself — sign out instead.",
+    none: "No active sessions.",
+    thisDevice: "This device",
+    twofaVerified: "2FA verified",
+    signedIn: "Signed in",
+    lastSeen: "Last seen",
+    revoke: "Revoke",
+    revokeOthers: "Sign out all other devices",
+  },
 };
 
 /**
@@ -214,5 +226,16 @@ export type Dictionary = {
     continueButton: string;
     badCodeError: string;
     rateLimitedError: string;
+  };
+  sessions: {
+    heading: string;
+    description: string;
+    none: string;
+    thisDevice: string;
+    twofaVerified: string;
+    signedIn: string;
+    lastSeen: string;
+    revoke: string;
+    revokeOthers: string;
   };
 };

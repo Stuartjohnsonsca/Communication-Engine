@@ -20,6 +20,12 @@ import {
   disable as disableTotp,
   resolveCurrentSessionId,
 } from "@/lib/auth/totp";
+import {
+  listSessionsForUser,
+  revokeSession,
+  revokeAllSessionsForUser,
+  maskIp,
+} from "@/lib/auth/sessions";
 import { rateLimit } from "@/lib/ratelimit";
 import { TwoFactorCard } from "./TwoFactorCard";
 
@@ -32,7 +38,8 @@ export default async function AccountPage({
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
 
-  const [member, channelAuths, totpStatus] = await Promise.all([
+  const currentSessionId = await resolveCurrentSessionId();
+  const [member, channelAuths, totpStatus, sessions] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
     }),
@@ -42,6 +49,7 @@ export default async function AccountPage({
       orderBy: { createdAt: "desc" },
     }),
     getEnrollmentStatus(ctx.user.id),
+    listSessionsForUser({ userId: ctx.user.id, currentSessionId, includeRevoked: false }),
   ]);
   if (!member) redirect("/login");
 
@@ -174,6 +182,56 @@ export default async function AccountPage({
     revalidatePath(`/${tenantSlug}/account`);
     revalidatePath(`/${tenantSlug}`, "layout");
     return { ok: true as const };
+  }
+
+  async function revokeOwnSessionAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "auth:revoke-own-sessions")) {
+      throw new Error("forbidden");
+    }
+    const sessionId = (formData.get("sessionId") as string | null)?.trim();
+    if (!sessionId) throw new Error("missing sessionId");
+    // Refuse to revoke a session that doesn't belong to the actor — the
+    // shared revoke path enforces it too, but a tight ownership check here
+    // is cheaper than a row read inside revokeSession.
+    const owner = await superDb.session.findUnique({
+      where: { id: sessionId },
+      select: { userId: true },
+    });
+    if (!owner || owner.userId !== inner.user.id) throw new Error("forbidden");
+    await revokeSession({
+      sessionId,
+      reason: "user-self",
+      ctx: {
+        tenantId: inner.tenant.id,
+        actorMembershipId: inner.membership.id,
+        actorUserId: inner.user.id,
+      },
+    });
+    revalidatePath(`/${tenantSlug}/account`);
+  }
+
+  async function revokeAllOtherSessionsAction() {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "auth:revoke-own-sessions")) {
+      throw new Error("forbidden");
+    }
+    const keepSessionId = await resolveCurrentSessionId();
+    await revokeAllSessionsForUser({
+      targetUserId: inner.user.id,
+      reason: "user-self",
+      ctx: {
+        tenantId: inner.tenant.id,
+        actorMembershipId: inner.membership.id,
+        actorUserId: inner.user.id,
+      },
+      excludeSessionId: keepSessionId,
+    });
+    revalidatePath(`/${tenantSlug}/account`);
   }
 
   async function setTenantDefaultLocaleAction(formData: FormData) {
@@ -327,6 +385,61 @@ export default async function AccountPage({
           never: t("twofa.never"),
         }}
       />
+
+      <div className="card space-y-3">
+        <h2 className="text-base font-medium">{t("sessions.heading")}</h2>
+        <p className="text-sm text-ink/70">{t("sessions.description")}</p>
+        {sessions.length === 0 ? (
+          <p className="text-sm text-ink/60">{t("sessions.none")}</p>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {sessions.map((s) => (
+              <li
+                key={s.id}
+                className="flex flex-col gap-2 border-t border-ink/5 pt-2 first:border-0 first:pt-0 sm:flex-row sm:items-start sm:justify-between"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{s.device.label}</span>
+                    {s.isCurrent && (
+                      <span className="tag bg-emerald-50 text-emerald-800">
+                        {t("sessions.thisDevice")}
+                      </span>
+                    )}
+                    {s.totpVerifiedAt && (
+                      <span className="tag bg-sky-50 text-sky-800">
+                        {t("sessions.twofaVerified")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-xs text-ink/60">
+                    {t("sessions.signedIn")} {s.createdAt.toISOString().slice(0, 16).replace("T", " ")}
+                    {" · "}
+                    {t("sessions.lastSeen")} {s.lastSeenAt.toISOString().slice(0, 16).replace("T", " ")}
+                    {" · "}
+                    IP {maskIp(s.ipAddress)}
+                  </div>
+                </div>
+                {!s.isCurrent && (
+                  <form action={revokeOwnSessionAction}>
+                    <input type="hidden" name="sessionId" value={s.id} />
+                    <button type="submit" className="btn text-xs">
+                      {t("sessions.revoke")}
+                    </button>
+                  </form>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {sessions.filter((s) => !s.isCurrent).length > 0 && (
+          <form action={revokeAllOtherSessionsAction} className="flex justify-end pt-1">
+            <button type="submit" className="btn text-xs">
+              {t("sessions.revokeOthers")}
+            </button>
+          </form>
+        )}
+      </div>
 
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Channel authorisations</h2>

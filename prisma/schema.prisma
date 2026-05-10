@@ -275,6 +275,9 @@ enum AuditEventType {
   TOTP_VERIFICATION_FAILED
   TOTP_RECOVERY_CODE_USED
   TENANT_TOTP_REQUIREMENT_CHANGED
+  SESSION_REVOKED
+  SESSION_REVOKED_BY_ADMIN
+  SESSION_REVOKED_ALL
 }
 
 enum BillingPeriodStatus {
@@ -563,7 +566,23 @@ model Session {
   /// UserTotp but the active Session has no totpVerifiedAt. Reset on every
   /// new session (sign-in produces a fresh Session row).
   totpVerifiedAt DateTime?
+  /// Post-PRD hardening item 13 — session management. Metadata captured the
+  /// first time the layout observes this session (no good hook in the
+  /// PrismaAdapter createSession path, so we lazy-populate). Used by the
+  /// /account session list + admin tenant view for incident response.
+  createdAt      DateTime  @default(now())
+  lastSeenAt     DateTime  @default(now())
+  userAgent      String?
+  ipAddress      String?
+  /// When set, the wrapped PrismaAdapter treats this session as signed out
+  /// and the cookie is invalid. Row is preserved for forensic history.
+  revokedAt      DateTime?
+  revokedById    String?
+  revokedReason  String?
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([revokedAt])
 }
 
 model VerificationToken {

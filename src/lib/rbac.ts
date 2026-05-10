@@ -224,6 +224,18 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // — 2FA is universal-baseline; tenant policy is a per-tenant decision.
   "auth:configure-totp":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "tenant:configure-totp-policy": ["FIRM_ADMIN"],
+
+  // Post-PRD hardening item 13 — session management. Every Membership can
+  // list and revoke their own sessions (universal). FIRM_ADMINs of a tenant
+  // can additionally see and revoke any session belonging to a User who has
+  // an ACTIVE membership in that tenant — incident-response handle when a
+  // member's credentials are compromised or their laptop walks out. The
+  // affected User is the one whose User.id owns the Session row, regardless
+  // of which tenant they were viewing when the session was created; sessions
+  // are per-User not per-Membership.
+  "auth:read-own-sessions":      ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "auth:revoke-own-sessions":    ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+  "tenant:revoke-member-sessions": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {
