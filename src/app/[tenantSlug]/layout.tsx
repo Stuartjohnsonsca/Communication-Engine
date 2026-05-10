@@ -158,7 +158,7 @@ export default async function TenantLayout({
   );
 
   return (
-    <NavShell tenantName={ctx.tenant.name} sidebar={sidebar}>
+    <NavShell tenantSlug={tenantSlug} tenantName={ctx.tenant.name} sidebar={sidebar}>
       {dpia.banner && (
         <div
           className={`mb-6 rounded border px-3 py-2 text-sm ${

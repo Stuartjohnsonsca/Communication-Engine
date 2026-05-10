@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { CommandPalette, CommandPaletteButton } from "./CommandPalette";
 
 export function NavShell({
+  tenantSlug,
   tenantName,
   sidebar,
   children,
 }: {
+  tenantSlug: string;
   tenantName: string;
   sidebar: React.ReactNode;
   children: React.ReactNode;
@@ -56,6 +59,9 @@ export function NavShell({
           </svg>
         </button>
         <span className="truncate text-sm font-semibold">{tenantName}</span>
+        <div className="ml-auto">
+          <CommandPaletteButton />
+        </div>
       </header>
 
       {open && (
@@ -96,12 +102,17 @@ export function NavShell({
             </svg>
           </button>
         </div>
+        <div className="mb-3 hidden md:block">
+          <CommandPaletteButton className="inline-flex w-full items-center gap-2 rounded-md border border-ink/15 bg-white px-2 py-1.5 text-xs text-ink/60 hover:bg-ink/5" />
+        </div>
         {sidebar}
       </aside>
 
       <main className="min-w-0 flex-1 overflow-y-auto p-4 md:p-8">
         {children}
       </main>
+
+      <CommandPalette tenantSlug={tenantSlug} />
     </div>
   );
 }
