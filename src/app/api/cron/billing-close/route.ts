@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { closeAllDueBillingPeriods } from "@/lib/billing";
+import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * PRD §15.1 monthly close. Closes the previous calendar month's
@@ -16,6 +17,9 @@ import { closeAllDueBillingPeriods } from "@/lib/billing";
  * The hour offset from the lifecycle sweep avoids contention.
  */
 export async function GET(req: Request) {
+  const rl = await rateLimitByIp(req, "cron", 6, 60);
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });

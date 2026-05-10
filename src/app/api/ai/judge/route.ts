@@ -5,6 +5,7 @@ import { superDb } from "@/lib/db";
 import { judgeUcg } from "@/lib/ai/agents/judgeAgent";
 import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
+import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -19,6 +20,11 @@ export async function POST(req: Request) {
   const ctx = await getTenantContext(parsed.data.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   requirePermission(ctx.membership.role, "ucg:write:self");
+
+  const rl = await rateLimitByMembership(
+    ctx.membership.id, ctx.tenant.id, "ai-judge", 20, 60 * 60,
+  );
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
 
   const ucg = await superDb.userCultureGuide.findFirst({
     where: { id: parsed.data.ucgId, tenantId: ctx.tenant.id, membershipId: ctx.membership.id },

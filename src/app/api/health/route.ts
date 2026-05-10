@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { superDb } from "@/lib/db";
+import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 
-export async function GET() {
+export async function GET(req: Request) {
+  // Public, scrapable. Cap per-IP so a single source can't pin the DB
+  // ping on this surface.
+  const rl = await rateLimitByIp(req, "health", 60, 60);
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
   try {
     await superDb.$queryRaw`SELECT 1`;
     return NextResponse.json({

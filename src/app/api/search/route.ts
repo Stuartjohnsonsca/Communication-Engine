@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getTenantContext } from "@/lib/tenant";
 import { runSearch } from "@/lib/search";
 import { reportError } from "@/lib/observability";
+import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * Backlog item 8 — global ⌘K palette backend. Returns up to 40 hits across
@@ -21,6 +22,13 @@ export async function GET(req: Request) {
   if (!ctx) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
+
+  // Search fans out to 10 concurrent DB queries — cap per-Membership QPS
+  // so a stuck client (or a runaway debounce) can't pin a tenant's slot.
+  const rl = await rateLimitByMembership(
+    ctx.membership.id, ctx.tenant.id, "search", 60, 60,
+  );
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
 
   try {
     const result = await runSearch({

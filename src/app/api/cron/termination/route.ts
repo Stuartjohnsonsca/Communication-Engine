@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runHardDeletionSweep } from "@/lib/termination";
+import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * PRD §14.4 hard-deletion sweep. Idempotent — only acts on tenants whose
@@ -17,6 +18,9 @@ import { runHardDeletionSweep } from "@/lib/termination";
  * retention period elapses (default 6 years).
  */
 export async function GET(req: Request) {
+  const rl = await rateLimitByIp(req, "cron", 6, 60);
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });

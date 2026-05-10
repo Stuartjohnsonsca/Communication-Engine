@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { runLifecycleSweep } from "@/lib/lifecycle";
 import { expireOverdueTias } from "@/lib/compliance/cross-border";
+import { reapStaleRateLimitBuckets, rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * PRD §14.3 lifecycle sweep. Idempotent — only acts on rows whose grace
@@ -13,6 +14,9 @@ import { expireOverdueTias } from "@/lib/compliance/cross-border";
  * Returns counts so the scheduler log shows what moved.
  */
 export async function GET(req: Request) {
+  const rl = await rateLimitByIp(req, "cron", 6, 60);
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json(
@@ -29,7 +33,15 @@ export async function GET(req: Request) {
   // same sweep so the cross-border view stays accurate without a second
   // cron service.
   const tia = await expireOverdueTias();
-  return NextResponse.json({ ok: true, ...result, tiaExpired: tia.expired });
+  // Reap rate-limit buckets that haven't been touched in a week. A
+  // subsequent request just re-creates the row.
+  const ratelimit = await reapStaleRateLimitBuckets();
+  return NextResponse.json({
+    ok: true,
+    ...result,
+    tiaExpired: tia.expired,
+    rateLimitBucketsReaped: ratelimit.deleted,
+  });
 }
 
 export const POST = GET;

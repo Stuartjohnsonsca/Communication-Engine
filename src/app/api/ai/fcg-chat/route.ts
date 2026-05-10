@@ -5,6 +5,7 @@ import { superDb } from "@/lib/db";
 import { fcgChatTurn } from "@/lib/ai/agents/fcgAgent";
 import type { ChatMessage } from "@/lib/ai/providers/types";
 import { requirePermission } from "@/lib/rbac";
+import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -20,6 +21,11 @@ export async function POST(req: Request) {
   const ctx = await getTenantContext(parsed.data.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   requirePermission(ctx.membership.role, "fcg:propose");
+
+  const rl = await rateLimitByMembership(
+    ctx.membership.id, ctx.tenant.id, "draft", 60, 60 * 60,
+  );
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
 
   // Load committed FCG (most recent COMMITTED), or null on first run
   const committed = await superDb.firmCultureGuide.findFirst({

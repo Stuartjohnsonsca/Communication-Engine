@@ -8,6 +8,7 @@ import { writeAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/rbac";
 import { getMemberLifecycleState, isDraftingPermitted } from "@/lib/lifecycle";
 import { reportError } from "@/lib/observability";
+import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -35,6 +36,14 @@ export async function POST(req: Request) {
   const ctx = await getTenantContext(parsed.data.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   requirePermission(ctx.membership.role, "draft:create");
+
+  // LLM endpoints are token-cost surfaces — cap per-Membership generation
+  // even before lifecycle / FCG checks. 30 drafts/hour absorbs heavy real
+  // use; sustained higher rates are almost certainly a runaway client.
+  const rl = await rateLimitByMembership(
+    ctx.membership.id, ctx.tenant.id, "draft", 30, 60 * 60,
+  );
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
 
   // PRD §14.3: drafting halts on revocation or while leaver-frozen. The
   // member can still hit /account to re-authorise during the 30-day grace.

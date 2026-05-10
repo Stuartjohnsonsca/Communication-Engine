@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runWeeklyDigest } from "@/lib/notifications";
+import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * Backlog item 6 — weekly notification digest.
@@ -14,6 +15,12 @@ import { runWeeklyDigest } from "@/lib/notifications";
  *        https://<host>/api/cron/digest
  */
 export async function GET(req: Request) {
+  // Belt + braces — the Bearer check below is the primary gate, but a
+  // per-IP cap means a leaked secret can't be brute-forced against a
+  // hot-path digest run.
+  const rl = await rateLimitByIp(req, "cron", 6, 60);
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json(

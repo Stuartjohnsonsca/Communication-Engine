@@ -4,6 +4,7 @@ import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
 import { verifyOAuthState } from "@/lib/channels/oauth-state";
 import { writeAuditEvent } from "@/lib/audit";
+import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * Generic OAuth 2.0 authorization-code callback.
@@ -17,6 +18,12 @@ import { writeAuditEvent } from "@/lib/audit";
  * and synthesise-from-outbound silently skipped every send.
  */
 export async function GET(req: Request) {
+  // Pre-tenant-resolution surface — the only identity we have is the IP.
+  // 20/min per IP comfortably absorbs legitimate retries while caging
+  // an attacker who's brute-forcing channel ids + state guesses.
+  const rl = await rateLimitByIp(req, "oauth-callback", 20, 60);
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const stateRaw = url.searchParams.get("state") ?? "";

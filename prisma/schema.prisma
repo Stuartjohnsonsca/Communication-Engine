@@ -268,6 +268,7 @@ enum AuditEventType {
   NOTIFICATION_DISPATCHED
   NOTIFICATION_DISPATCH_FAILED
   NOTIFICATION_DIGEST_RUN
+  RATE_LIMIT_EXCEEDED
 }
 
 enum BillingPeriodStatus {
@@ -2406,4 +2407,42 @@ model NotificationInbox {
   @@unique([membershipId, kind, dedupeKey])
   @@index([tenantId, membershipId, readAt])
   @@index([tenantId, createdAt])
+}
+
+/// Post-PRD hardening — rate-limiting bucket for API abuse protection.
+///
+/// One row per (scope, identity) tuple — see `src/lib/ratelimit/index.ts` for
+/// the key shape. Identities are typically:
+///   - "ip:<addr>:<scope>"           — unauthenticated/public endpoints
+///   - "membership:<id>:<scope>"     — authenticated per-User endpoints
+///   - "tenant:<id>:<scope>"         — tenant-wide ceiling
+///   - "auth:<email>:<scope>"        — sign-in / OTP-verify per email
+///
+/// Fixed-window counter: when (now - windowStart) >= windowSeconds, the
+/// upsert resets the bucket to count=1; otherwise it increments. The whole
+/// transition runs in a single atomic Postgres UPDATE so concurrent requests
+/// can't both pass through under load. The row is intentionally GLOBAL (not
+/// tenant-scoped, not in `tenant_tables`) — the most important limits gate
+/// pre-tenant-resolution endpoints (sign-in, public /status, OAuth callback)
+/// and there's no Membership/Tenant context yet to scope by.
+///
+/// Stale rows are reaped by the lifecycle-sweep cron — once a key has been
+/// untouched for 7 days it's safe to delete; a fresh request just re-creates it.
+model RateLimitBucket {
+  id          String   @id @default(cuid())
+  /// Composite namespace string. Format: "<identity-kind>:<identity>:<scope>".
+  /// See `RateLimitScope` literals in `src/lib/ratelimit/index.ts`.
+  key         String   @unique
+  /// Start of the current fixed window. The next request whose `now` is
+  /// `>= windowStart + windowSeconds` resets the bucket.
+  windowStart DateTime
+  /// Hits within the current window.
+  count       Int
+  /// Last time `RATE_LIMIT_EXCEEDED` was written for this key. Throttles
+  /// audit-event spam — we record the first overflow per hour, not every
+  /// individual rejected request.
+  lastAuditAt DateTime?
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedAt])
 }

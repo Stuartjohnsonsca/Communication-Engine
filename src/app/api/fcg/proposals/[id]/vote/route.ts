@@ -9,6 +9,7 @@ import { evaluate } from "@/lib/voting/state-machine";
 import { eligibleVoterIds } from "@/lib/voting/quorum";
 import { flagConflictsAfterFcgCommit } from "@/lib/ucg/propagation";
 import { reportError } from "@/lib/observability";
+import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -25,6 +26,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const ctx = await getTenantContext(parsed.data.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   requirePermission(ctx.membership.role, "fcg:vote");
+
+  const rl = await rateLimitByMembership(
+    ctx.membership.id, ctx.tenant.id, "vote", 30, 60,
+  );
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
 
   const proposal = await superDb.fCGProposal.findFirst({
     where: { id, tenantId: ctx.tenant.id },

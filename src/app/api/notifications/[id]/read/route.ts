@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTenantContext } from "@/lib/tenant";
 import { tenantDb } from "@/lib/db";
+import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
 
 /**
  * Mark a single inbox row as read. Tenant-scoped via `tenantDb` so RLS
@@ -21,6 +22,11 @@ export async function POST(
   }
   const ctx = await getTenantContext(body.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "unauthorised" }, { status: 401 });
+
+  const rl = await rateLimitByMembership(
+    ctx.membership.id, ctx.tenant.id, "notifications", 120, 60,
+  );
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
 
   const db = tenantDb(ctx.tenant.id);
   const row = await db.notificationInbox.findFirst({
