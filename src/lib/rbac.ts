@@ -276,6 +276,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // visible to anyone who reaches /admin/security, which itself is
   // already FIRM_ADMIN-only.
   "tenant:configure-ip-allowlist": ["FIRM_ADMIN"],
+
+  // Post-PRD hardening item 19 — admin-initiated TOTP reset for
+  // locked-out members. Only FIRM_ADMIN can clear another User's
+  // 2FA enrollment. The action is step-up gated and audited; the
+  // affected User is also notified (email + in-app inbox) so a
+  // FIRM_ADMIN cannot quietly disable a colleague's 2FA without
+  // them noticing.
+  "tenant:reset-member-totp": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

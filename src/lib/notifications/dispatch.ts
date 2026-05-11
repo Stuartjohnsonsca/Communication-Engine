@@ -39,7 +39,8 @@ export type NotificationKind =
   | "weekly_digest"
   | "sentiment_escalation"
   | "breach_ack_required"
-  | "adherence_escalation";
+  | "adherence_escalation"
+  | "totp_reset_by_admin";
 
 export type DispatchResult = {
   alreadySent: boolean;

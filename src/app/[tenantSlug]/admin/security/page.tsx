@@ -17,7 +17,7 @@ import {
   MAX_ABSOLUTE_TIMEOUT_MINUTES,
 } from "@/lib/auth/sessions";
 import { updateTenantAllowlist, AllowlistValidationError } from "@/lib/auth/ip-allowlist";
-import { requireStepUp, resolveCurrentSessionId, StepUpRequired } from "@/lib/auth/totp";
+import { requireStepUp, resolveCurrentSessionId, StepUpRequired, resetTotpForUser } from "@/lib/auth/totp";
 
 /**
  * Tenant-wide 2FA policy. The Firm Administrator can require every active
@@ -33,7 +33,7 @@ export default async function SecurityPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string }>;
-  searchParams?: Promise<{ allowlistSaved?: string; allowlistError?: string }>;
+  searchParams?: Promise<{ allowlistSaved?: string; allowlistError?: string; totpResetOk?: string; totpResetError?: string }>;
 }) {
   const { tenantSlug } = await params;
   const sp = (await searchParams) ?? {};
@@ -43,6 +43,7 @@ export default async function SecurityPage({
     redirect(`/${tenantSlug}/dashboard`);
   }
   const canConfigureAllowlist = hasPermission(ctx.membership.role, "tenant:configure-ip-allowlist");
+  const canResetMemberTotp = hasPermission(ctx.membership.role, "tenant:reset-member-totp");
 
   const [memberships, tenantSessions] = await Promise.all([
     superDb.membership.findMany({
@@ -223,6 +224,39 @@ export default async function SecurityPage({
     }
     revalidatePath(`/${tenantSlug}/admin/security`);
     redirect(`/${tenantSlug}/admin/security?allowlistSaved=1`);
+  }
+
+  async function resetMemberTotpAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    requirePermission(inner.membership.role, "tenant:reset-member-totp");
+    // Step-up gate before the destructive action — same pattern as the
+    // other security mutations on this page.
+    await gateStepUp("member-totp-reset");
+    const targetUserId = (formData.get("userId") as string | null)?.trim();
+    if (!targetUserId) throw new Error("missing userId");
+    // Refuse self-reset — the prompt is unambiguously about LOCKED-OUT
+    // members; the admin who is currently signed in can use the normal
+    // /account "Disable 2FA" + re-enroll path. Self-reset via this
+    // button would also be a strange UX because the very same session
+    // just had to step-up using the TOTP we'd be about to clear.
+    if (targetUserId === inner.user.id) {
+      throw new Error("cannot reset your own TOTP via the admin path");
+    }
+    const result = await resetTotpForUser({
+      tenantId: inner.tenant.id,
+      targetUserId,
+      actorMembershipId: inner.membership.id,
+    });
+    revalidatePath(`/${tenantSlug}/admin/security`);
+    if (!result.ok && result.reason === "no-membership") {
+      redirect(`/${tenantSlug}/admin/security?totpResetError=${encodeURIComponent("Target user has no active membership in this tenant")}`);
+    }
+    if (!result.ok && result.reason === "no-enrollment") {
+      redirect(`/${tenantSlug}/admin/security?totpResetError=${encodeURIComponent("Target user has no TOTP enrollment to reset")}`);
+    }
+    redirect(`/${tenantSlug}/admin/security?totpResetOk=1`);
   }
 
   async function toggleAction(formData: FormData) {
@@ -463,20 +497,41 @@ export default async function SecurityPage({
 
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Member enrollment</h2>
+        {canResetMemberTotp && (
+          <p className="text-xs text-ink/60">
+            If a member has lost their authenticator AND all recovery
+            codes, click <strong>Reset 2FA</strong> to clear their
+            enrollment so they can re-enroll on next sign-in. The
+            reset is recorded on the audit chain and the affected
+            member is notified by email + in-app inbox. Step-up
+            authentication is required to initiate.
+          </p>
+        )}
+        {sp.totpResetOk && (
+          <div className="rounded border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-800">
+            Member TOTP reset. They have been notified.
+          </div>
+        )}
+        {sp.totpResetError && (
+          <div className="rounded border border-red-300 bg-red-50/60 px-3 py-2 text-xs text-red-800">
+            {sp.totpResetError}
+          </div>
+        )}
         <ul className="space-y-1 text-sm">
           {memberships.map((m) => {
             const t = m.user.totp;
             const isEnrolled = !!t?.verifiedAt && !t.disabledAt;
+            const isSelf = m.user.id === ctx.user.id;
             return (
               <li
                 key={m.id}
-                className="flex items-baseline justify-between border-t border-ink/5 pt-1 first:border-0 first:pt-0"
+                className="flex flex-wrap items-baseline justify-between gap-2 border-t border-ink/5 pt-1 first:border-0 first:pt-0"
               >
                 <div className="flex items-center gap-2">
                   <span className="tag">{m.role}</span>
                   <span>{m.user.email}</span>
                 </div>
-                <div className="text-xs">
+                <div className="flex items-center gap-3 text-xs">
                   {isEnrolled ? (
                     <span className="text-emerald-700">
                       Enrolled
@@ -484,6 +539,14 @@ export default async function SecurityPage({
                     </span>
                   ) : (
                     <span className="text-amber-700">Not enrolled</span>
+                  )}
+                  {canResetMemberTotp && isEnrolled && !isSelf && (
+                    <form action={resetMemberTotpAction}>
+                      <input type="hidden" name="userId" value={m.user.id} />
+                      <button type="submit" className="btn text-xs">
+                        Reset 2FA
+                      </button>
+                    </form>
                   )}
                 </div>
               </li>

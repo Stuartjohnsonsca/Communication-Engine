@@ -1,0 +1,41 @@
+-- Post-PRD hardening item 19: admin-initiated TOTP reset for locked-out
+-- members.
+--
+-- Currently a User who loses both their TOTP device AND every recovery
+-- code (~1 in 100 Users every two years if I trust the support-ticket
+-- data from comparable SaaS) has no remedy: they can never reach a
+-- tenant page again. The FIRM_ADMIN can revoke the User's membership
+-- as a workaround but that loses their UCG + history; what they
+-- actually need is a TOTP reset so the User can re-enroll from
+-- /account on next sign-in.
+--
+-- The reset is synchronous + audited + notified:
+--   1. FIRM_ADMIN clicks "Reset 2FA" on the target Member's row in
+--      /admin/security.
+--   2. Step-up (item 18) is required — admin must have verified TOTP
+--      within the freshness window. This prevents drive-by abuse from a
+--      stolen open session.
+--   3. The lib clears `UserTotp.verifiedAt` + `recoveryCodesHashed` +
+--      sets `disabledAt` so the gate treats it as no-enrollment; the
+--      next layout-pass for the affected User will redirect them to
+--      /account to re-enroll (if tenant `requireTotp = true`).
+--   4. Audit event `TOTP_RESET_BY_ADMIN` on the actor's tenant chain
+--      with target user id + email in payload.
+--   5. Email notification + in-app inbox row to the affected User on
+--      the same tenant so they know their 2FA was reset by an admin
+--      and didn't just spontaneously break.
+--
+-- Schema-wise this is one new audit-event type. No new model — we
+-- reuse `UserTotp` columns (verifiedAt=null, disabledAt=now,
+-- recoveryCodesHashed=[]) so the gate immediately treats the User as
+-- not-enrolled, AND the prior enrollment row is preserved as a
+-- forensic trail rather than deleted outright. The act of re-enrolling
+-- overwrites it.
+--
+-- Notification-kind storage is TEXT (no enum migration needed);
+-- "totp_reset_by_admin" joins "sentiment_escalation" / etc. The
+-- mailer dedupe key is the reset event's audit row id so a duplicate
+-- form submission within the same second is a no-op rather than
+-- spamming the affected User.
+
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'TOTP_RESET_BY_ADMIN';

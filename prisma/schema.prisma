@@ -295,6 +295,7 @@ enum AuditEventType {
   TENANT_IP_ALLOWLIST_CHANGED
   IP_ALLOWLIST_DENIED
   STEP_UP_VERIFIED
+  TOTP_RESET_BY_ADMIN
 }
 
 enum BillingPeriodStatus {

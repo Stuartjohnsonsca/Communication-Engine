@@ -25,6 +25,8 @@ export {
 export { evaluateTotpGate, resolveSessionId, resolveCurrentSessionId } from "./gate";
 export type { GateOutcome } from "./gate";
 export type { EnrollmentInitiation } from "./store";
+export { resetTotpForUser } from "./admin-reset";
+export type { ResetResult } from "./admin-reset";
 export {
   evaluateStepUp,
   resolveEffectiveStepUpWindow,
