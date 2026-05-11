@@ -32,7 +32,10 @@ export type CreateSubscriptionResult = {
   secret: string;
 };
 
-export type PublicSubscription = Omit<WebhookSubscription, "secretEncrypted">;
+export type PublicSubscription = Omit<
+  WebhookSubscription,
+  "secretEncrypted" | "secretEncryptedPrev"
+>;
 
 export class WebhookValidationError extends Error {
   status = 400;
@@ -279,6 +282,141 @@ export async function getSubscriptionSecret(
   return decryptJson<string>(row.secretEncrypted);
 }
 
+/**
+ * Item 46 — return BOTH the current secret and, when a rotation grace
+ * window is in flight, the previous secret. Past `secretPrevRetiresAt`
+ * the previous is suppressed even if the column still holds the blob;
+ * lifecycle-sweep clears it lazily.
+ */
+export type SubscriptionSecrets = {
+  current: string;
+  /// Set only when `secretPrevRetiresAt > now`. The dispatcher signs
+  /// with both, in the order [current, previous].
+  previous: string | null;
+};
+
+export async function getSubscriptionSecrets(
+  tenantId: string,
+  subscriptionId: string,
+  asOf: Date = new Date(),
+): Promise<SubscriptionSecrets | null> {
+  const row = await superDb.webhookSubscription.findFirst({
+    where: { id: subscriptionId, tenantId },
+    select: {
+      secretEncrypted: true,
+      secretEncryptedPrev: true,
+      secretPrevRetiresAt: true,
+    },
+  });
+  if (!row) return null;
+  const current = decryptJson<string>(row.secretEncrypted);
+  const prevActive =
+    row.secretEncryptedPrev != null &&
+    row.secretPrevRetiresAt != null &&
+    row.secretPrevRetiresAt > asOf;
+  return {
+    current,
+    previous: prevActive ? decryptJson<string>(row.secretEncryptedPrev!) : null,
+  };
+}
+
+export type RotateSecretInput = {
+  tenantId: string;
+  subscriptionId: string;
+  actorMembershipId: string;
+  /// Hours the previous secret stays valid. Clamped to [1, 168] (1 hour
+  /// to 1 week). Default 24h — enough for receivers to roll their
+  /// configured secret without scrambling.
+  graceWindowHours?: number;
+};
+
+export type RotateSecretResult = {
+  subscription: PublicSubscription;
+  /// Plaintext NEW secret — shown to the operator once, never recoverable.
+  secret: string;
+  /// Wall-clock instant after which the previous secret stops being
+  /// included in the signature header.
+  prevRetiresAt: Date;
+};
+
+const ROTATE_GRACE_MIN_HOURS = 1;
+const ROTATE_GRACE_MAX_HOURS = 7 * 24;
+const ROTATE_GRACE_DEFAULT_HOURS = 24;
+
+/**
+ * Generate a fresh signing secret + move the existing one into the
+ * "previous" slot with a grace window. The dispatcher signs with both
+ * until `prevRetiresAt`, after which only the new secret is used.
+ *
+ * Plaintext is returned exactly once. The audit event records the
+ * grace window + retire timestamp but NEVER the secret material.
+ *
+ * Idempotency: if a rotation is already in flight (prev still active),
+ * calling again replaces the in-flight prev with the current secret and
+ * generates yet another new secret. That's a reasonable interpretation
+ * of "rotate again" — the new prev becomes the freshly-rotated value
+ * and the older prev is discarded. Operators rotating in a panic don't
+ * end up with a three-secret window.
+ */
+export async function rotateSubscriptionSecret(
+  input: RotateSecretInput,
+): Promise<RotateSecretResult> {
+  const existing = await assertOwnedByTenant(input.tenantId, input.subscriptionId);
+  const raw = input.graceWindowHours ?? ROTATE_GRACE_DEFAULT_HOURS;
+  const hours = Math.max(ROTATE_GRACE_MIN_HOURS, Math.min(ROTATE_GRACE_MAX_HOURS, Math.trunc(raw)));
+  const now = new Date();
+  const prevRetiresAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
+  const newSecret = generateSecret();
+  const updated = await superDb.webhookSubscription.update({
+    where: { id: existing.id },
+    data: {
+      secretEncrypted: encryptJson(newSecret),
+      // The CURRENT secret becomes the previous slot. If a rotation was
+      // already in flight, the in-flight prev is discarded — see the
+      // function-level note above.
+      secretEncryptedPrev: existing.secretEncrypted,
+      secretPrevRetiresAt: prevRetiresAt,
+    },
+  });
+  await writeAuditEvent({
+    tenantId: input.tenantId,
+    eventType: "WEBHOOK_SUBSCRIPTION_SECRET_ROTATED",
+    actorMembershipId: input.actorMembershipId,
+    subjectType: "WebhookSubscription",
+    subjectId: existing.id,
+    payload: {
+      graceWindowHours: hours,
+      prevRetiresAt: prevRetiresAt.toISOString(),
+    },
+  });
+  return {
+    subscription: stripSecret(updated),
+    secret: newSecret,
+    prevRetiresAt,
+  };
+}
+
+/**
+ * Lifecycle-sweep helper — clear the previous-secret slot on
+ * subscriptions whose grace window has passed. Safe to call without
+ * the lifecycle cron: the dispatcher already short-circuits on a
+ * retired `secretPrevRetiresAt`, so this is housekeeping only (keeps
+ * the encrypted blob out of `pg_dump` after the window).
+ */
+export async function clearRetiredPreviousSecrets(asOf: Date = new Date()): Promise<{ cleared: number }> {
+  const result = await superDb.webhookSubscription.updateMany({
+    where: {
+      secretEncryptedPrev: { not: null },
+      secretPrevRetiresAt: { lt: asOf },
+    },
+    data: {
+      secretEncryptedPrev: null,
+      secretPrevRetiresAt: null,
+    },
+  });
+  return { cleared: result.count };
+}
+
 async function assertOwnedByTenant(
   tenantId: string,
   subscriptionId: string,
@@ -293,9 +431,12 @@ async function assertOwnedByTenant(
 }
 
 function stripSecret(row: WebhookSubscription): PublicSubscription {
-  // Hide the encrypted blob from API surfaces. Even encrypted, exposing it
-  // gives an attacker who later finds ENCRYPTION_KEY a free recovery path.
-  const { secretEncrypted: _omit, ...rest } = row;
+  // Hide BOTH the current and the previous (rotation grace window)
+  // encrypted blobs from API surfaces. Even encrypted, exposing them
+  // gives an attacker who later finds ENCRYPTION_KEY a free recovery
+  // path; the previous-secret column is no different.
+  const { secretEncrypted: _omit, secretEncryptedPrev: _omitPrev, ...rest } = row;
   void _omit;
+  void _omitPrev;
   return rest;
 }

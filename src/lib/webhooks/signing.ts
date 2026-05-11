@@ -32,9 +32,38 @@ export function signBody(input: {
   /** Defaults to now(); overridable for testability. */
   timestampSeconds?: number;
 }): string {
+  return signBodyMulti({
+    secrets: [input.secret],
+    body: input.body,
+    timestampSeconds: input.timestampSeconds,
+  });
+}
+
+/**
+ * Multi-secret signing for the rotation grace window (item 46). When a
+ * subscription has both a current and a previous secret, the dispatcher
+ * sends one signature per secret in the same `t=…` header — receivers
+ * iterate the `v1=` segments and accept the first valid match. Stripe's
+ * convention; backward compatible with single-sig receivers who only
+ * inspect the first `v1=` (they'll just see the current secret's
+ * signature, which is what they want).
+ *
+ * Order matters: the CURRENT secret's signature comes first. A receiver
+ * that hasn't been updated yet still works during the grace window
+ * because we ALSO emit the previous secret's signature in a second
+ * `v1=` segment.
+ */
+export function signBodyMulti(input: {
+  secrets: string[];
+  body: string;
+  timestampSeconds?: number;
+}): string {
+  if (input.secrets.length === 0) {
+    throw new Error("signBodyMulti: at least one secret required");
+  }
   const t = input.timestampSeconds ?? Math.floor(Date.now() / 1000);
-  const v1 = computeV1(input.secret, t, input.body);
-  return `t=${t},v1=${v1}`;
+  const sigs = input.secrets.map((s) => `v1=${computeV1(s, t, input.body)}`);
+  return `t=${t},${sigs.join(",")}`;
 }
 
 function computeV1(secret: string, t: number, body: string): string {
@@ -55,22 +84,30 @@ export function verifySignature(input: {
 }): boolean {
   const parts = parseHeader(input.header);
   if (!parts) return false;
-  const expected = computeV1(input.secret, parts.t, input.body);
-  const expectedBuf = Buffer.from(expected, "hex");
-  const givenBuf = Buffer.from(parts.v1, "hex");
-  if (expectedBuf.length !== givenBuf.length) return false;
-  if (!timingSafeEqual(expectedBuf, givenBuf)) return false;
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const tolerance = input.toleranceSeconds ?? 5 * 60;
   if (Math.abs(now - parts.t) > tolerance) return false;
-  return true;
+  const expected = computeV1(input.secret, parts.t, input.body);
+  const expectedBuf = Buffer.from(expected, "hex");
+  // Iterate every `v1=` segment so a receiver that only knows one of
+  // the rotation pair's secrets still accepts the body during the
+  // grace window. Constant-time compare against each candidate;
+  // exit early on the first match.
+  for (const candidate of parts.v1s) {
+    const givenBuf = Buffer.from(candidate, "hex");
+    if (expectedBuf.length !== givenBuf.length) continue;
+    if (timingSafeEqual(expectedBuf, givenBuf)) return true;
+  }
+  return false;
 }
 
-function parseHeader(header: string): { t: number; v1: string } | null {
-  // Format: "t=<int>,v1=<hex>" — small, fixed grammar; no need for a parser.
+function parseHeader(header: string): { t: number; v1s: string[] } | null {
+  // Format: "t=<int>,v1=<hex>[,v1=<hex>...]" — small, fixed grammar.
+  // Multiple v1 segments are produced during a rotation grace window
+  // (item 46); receivers should accept any one of them.
   const segments = header.split(",").map((s) => s.trim());
   let t: number | undefined;
-  let v1: string | undefined;
+  const v1s: string[] = [];
   for (const seg of segments) {
     const eq = seg.indexOf("=");
     if (eq < 1) continue;
@@ -80,10 +117,9 @@ function parseHeader(header: string): { t: number; v1: string } | null {
       const parsed = Number.parseInt(v, 10);
       if (Number.isFinite(parsed)) t = parsed;
     } else if (k === "v1") {
-      v1 = v;
+      if (/^[0-9a-f]+$/i.test(v)) v1s.push(v);
     }
   }
-  if (t === undefined || !v1) return null;
-  if (!/^[0-9a-f]+$/i.test(v1)) return null;
-  return { t, v1 };
+  if (t === undefined || v1s.length === 0) return null;
+  return { t, v1s };
 }

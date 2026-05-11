@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { runLifecycleSweep } from "@/lib/lifecycle";
 import { expireOverdueTias } from "@/lib/compliance/cross-border";
 import { reapStaleRateLimitBuckets, rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
-import { reapOldDeliveries } from "@/lib/webhooks";
+import { reapOldDeliveries, clearRetiredPreviousSecrets } from "@/lib/webhooks";
 import { sweepExpiredSessions } from "@/lib/auth/sessions";
 import {
   sweepInactiveOrExpiredApiKeys,
@@ -68,6 +68,12 @@ export async function GET(req: Request) {
     // bounded by the partial-index on expiresAt so this scales with the
     // expired-row count, not the live key count.
     const idempotency = await purgeExpiredIdempotencyKeys();
+    // Post-PRD hardening item 46 — drop the encrypted previous-secret
+    // blob from any WebhookSubscription whose rotation grace window
+    // has passed. The dispatcher already short-circuits on a retired
+    // `secretPrevRetiresAt`, so this is housekeeping: keeps the dead
+    // blob out of `pg_dump` after the cutover.
+    const webhookSecrets = await clearRetiredPreviousSecrets();
     return {
       ...result,
       tiaExpired: tia.expired,
@@ -80,6 +86,7 @@ export async function GET(req: Request) {
       subprocessorChangesConsidered: subprocessors.considered,
       subprocessorChangesConfirmed: subprocessors.confirmed,
       idempotencyKeysPurged: idempotency.deleted,
+      webhookSecretPrevCleared: webhookSecrets.cleared,
     };
   });
   return NextResponse.json({ ok: true, ...payload });

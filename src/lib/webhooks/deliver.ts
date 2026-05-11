@@ -4,7 +4,7 @@ import { superDb, superDbWith } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { decryptJson } from "@/lib/channels/crypto";
 import { reportError, log } from "@/lib/observability";
-import { signBody, SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER } from "./signing";
+import { signBodyMulti, SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER } from "./signing";
 import { assertEgressAllowed, readBodyWithCap } from "./ssrf";
 
 type DnsLookup = (hostname: string) => Promise<{ address: string; family: number }>;
@@ -151,7 +151,19 @@ async function attemptDelivery(
     await finaliseDeadLetter(row.id, row.attempt + 1, "subscription disabled", null, null, row.tenantId, subscription.id);
     return "dead-lettered";
   }
-  const secret = decryptJson<string>(subscription.secretEncrypted);
+  const currentSecret = decryptJson<string>(subscription.secretEncrypted);
+  // Item 46 — rotation grace window. Sign with BOTH current + previous
+  // secrets while `secretPrevRetiresAt > now`; the dispatcher emits a
+  // `t=…,v1=<new>,v1=<old>` header and the receiver accepts either.
+  const asOf = ctx.now();
+  const prevActive =
+    subscription.secretEncryptedPrev != null &&
+    subscription.secretPrevRetiresAt != null &&
+    subscription.secretPrevRetiresAt > asOf;
+  const previousSecret = prevActive
+    ? decryptJson<string>(subscription.secretEncryptedPrev!)
+    : null;
+  const secrets = previousSecret ? [currentSecret, previousSecret] : [currentSecret];
   const body = JSON.stringify(row.payload);
   const attempt = row.attempt + 1;
 
@@ -206,7 +218,11 @@ async function attemptDelivery(
     // chatter forever.
   } else {
     try {
-      const signed = signBody({ secret, body, timestampSeconds: Math.floor(ctx.now().getTime() / 1000) });
+      const signed = signBodyMulti({
+        secrets,
+        body,
+        timestampSeconds: Math.floor(ctx.now().getTime() / 1000),
+      });
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {

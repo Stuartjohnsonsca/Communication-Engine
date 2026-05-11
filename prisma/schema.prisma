@@ -308,6 +308,10 @@ enum AuditEventType {
   WEBHOOK_SUBSCRIPTION_UPDATED
   WEBHOOK_SUBSCRIPTION_DELETED
   WEBHOOK_SUBSCRIPTION_AUTO_DISABLED
+  /// Post-PRD hardening item 46 — operator rotated the signing secret on
+  /// a WebhookSubscription. Payload carries `{ graceWindowHours,
+  /// prevRetiresAt }`. The plaintext secret is never recorded.
+  WEBHOOK_SUBSCRIPTION_SECRET_ROTATED
   WEBHOOK_DELIVERED
   WEBHOOK_DELIVERY_FAILED
   WEBHOOK_DEAD_LETTERED
@@ -2817,6 +2821,20 @@ model WebhookSubscription {
   /// Encrypted HMAC-SHA256 signing secret. Plaintext is shown once on
   /// creation and never read again.
   secretEncrypted       String    @db.Text
+  /// Post-PRD hardening item 46 — secret rotation with grace window.
+  /// When set, the dispatcher signs payloads with BOTH `secretEncrypted`
+  /// (primary) and this previous secret until `secretPrevRetiresAt`. The
+  /// signature header carries two `v1=…` segments so receivers can verify
+  /// against either while they migrate to the new secret. After the
+  /// retire timestamp the dispatcher stops signing with the previous
+  /// secret; the lifecycle-sweep cron clears the column lazily on read
+  /// is unnecessary because deliver.ts already short-circuits on stale
+  /// retire.
+  secretEncryptedPrev   String?   @db.Text
+  /// Wall-clock instant after which `secretEncryptedPrev` stops being
+  /// included in the signature header. Clamped to [+1h, +7d] at write
+  /// time by `rotateSubscriptionSecret`.
+  secretPrevRetiresAt   DateTime?
   /// Either ["*"] for "every event type" or an explicit list of
   /// AuditEventType enum strings. Storage as TEXT[] rather than the enum
   /// because Postgres doesn't allow ALTER TYPE on a column type used in an

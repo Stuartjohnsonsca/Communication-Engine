@@ -4,7 +4,14 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { hasPermission, requirePermission } from "@/lib/rbac";
 import { superDb } from "@/lib/db";
-import { getSubscription, replayDelivery, fireTestEvent, getDeliveryStats } from "@/lib/webhooks";
+import {
+  getSubscription,
+  replayDelivery,
+  fireTestEvent,
+  getDeliveryStats,
+  rotateSubscriptionSecret,
+} from "@/lib/webhooks";
+import { requireStepUp, resolveCurrentSessionId, StepUpRequired } from "@/lib/auth/totp";
 
 /**
  * Per-subscription detail. Shows recent deliveries (PENDING + IN_FLIGHT +
@@ -19,7 +26,17 @@ export default async function WebhookDetailPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; id: string }>;
-  searchParams?: Promise<{ testFired?: string; testError?: string; testDeliveryId?: string }>;
+  searchParams?: Promise<{
+    testFired?: string;
+    testError?: string;
+    testDeliveryId?: string;
+    /// One-shot plaintext display of the freshly-rotated secret. The page
+    /// strips it on the next render — same posture as the create flow.
+    rotated?: string;
+    rotatedSecret?: string;
+    rotatedRetiresAt?: string;
+    rotateError?: string;
+  }>;
 }) {
   const { tenantSlug, id } = await params;
   const sp = (await searchParams) ?? {};
@@ -73,6 +90,60 @@ export default async function WebhookDetailPage({
     if (!deliveryId) throw new Error("missing deliveryId");
     await replayDelivery({ tenantId: inner.tenant.id, deliveryId });
     revalidatePath(`/${tenantSlug}/admin/webhooks/${id}`);
+  }
+
+  async function rotateAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    requirePermission(inner.membership.role, "webhooks:configure");
+    // Rotating the signing secret is a sensitive operation — receivers
+    // depend on the secret for authenticity, and a stolen open session
+    // should not be able to issue a new one. Step-up like create.
+    const sessionId = await resolveCurrentSessionId();
+    try {
+      await requireStepUp({
+        sessionId,
+        userId: inner.user.id,
+        tenantStepUpMaxAgeMinutes: inner.tenant.stepUpMaxAgeMinutes,
+        nextUrl: `/${tenantSlug}/admin/webhooks/${id}`,
+        opKey: "webhook-subscription-rotate-secret",
+      });
+    } catch (err) {
+      if (err instanceof StepUpRequired) {
+        redirect(
+          `/${tenantSlug}/auth/2fa?stepUp=1&op=${encodeURIComponent(err.opKey)}&next=${encodeURIComponent(err.nextUrl)}`,
+        );
+      }
+      throw err;
+    }
+    const hoursRaw = (formData.get("graceWindowHours") as string | null)?.trim();
+    const graceWindowHours = hoursRaw ? Number.parseInt(hoursRaw, 10) : undefined;
+    // Keep `redirect()` calls OUT of the try block — Next.js signals
+    // redirects by throwing a sentinel, and a generic catch would
+    // swallow it.
+    let success: { secret: string; prevRetiresAt: Date } | null = null;
+    let errorMessage: string | null = null;
+    try {
+      const result = await rotateSubscriptionSecret({
+        tenantId: inner.tenant.id,
+        subscriptionId: id,
+        actorMembershipId: inner.membership.id,
+        graceWindowHours,
+      });
+      success = { secret: result.secret, prevRetiresAt: result.prevRetiresAt };
+    } catch (err) {
+      errorMessage = err instanceof Error ? err.message : "rotation failed";
+    }
+    revalidatePath(`/${tenantSlug}/admin/webhooks/${id}`);
+    if (success) {
+      redirect(
+        `/${tenantSlug}/admin/webhooks/${id}?rotated=1&rotatedSecret=${encodeURIComponent(success.secret)}&rotatedRetiresAt=${encodeURIComponent(success.prevRetiresAt.toISOString())}`,
+      );
+    }
+    redirect(
+      `/${tenantSlug}/admin/webhooks/${id}?rotateError=${encodeURIComponent(errorMessage ?? "rotation failed")}`,
+    );
   }
 
   async function testFireAction(formData: FormData) {
@@ -205,6 +276,73 @@ export default async function WebhookDetailPage({
           </div>
         )}
       </div>
+
+      {canConfigure && (
+        <div className="card space-y-3">
+          <div>
+            <h2 className="text-base font-medium">Signing secret</h2>
+            <p className="mt-1 text-sm text-ink/70">
+              Rotate the HMAC signing secret without recreating the
+              subscription. The dispatcher signs payloads with both the
+              new and the old secret during a grace window, so receivers
+              can roll their stored secret over without dropping
+              deliveries.
+            </p>
+          </div>
+          {sub.secretPrevRetiresAt && sub.secretPrevRetiresAt > new Date() && (
+            <div className="rounded border border-amber-300 bg-amber-50/60 px-3 py-2 text-sm text-amber-900">
+              Rotation grace window active — previous secret retires{" "}
+              {sub.secretPrevRetiresAt.toISOString().slice(0, 16).replace("T", " ")} UTC.
+              Receivers should be running on the new secret by then.
+            </div>
+          )}
+          {sp.rotated === "1" && sp.rotatedSecret && (
+            <div className="rounded border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
+              <div className="font-medium">New signing secret generated.</div>
+              <p className="mt-1 text-xs">
+                Copy this now — it will not be shown again. The previous
+                secret stays valid until{" "}
+                {sp.rotatedRetiresAt
+                  ? sp.rotatedRetiresAt.slice(0, 16).replace("T", " ") + " UTC"
+                  : "the grace window expires"}
+                .
+              </p>
+              <pre className="mt-2 overflow-x-auto rounded bg-ink/5 px-2 py-1 font-mono text-xs">
+                {sp.rotatedSecret}
+              </pre>
+              <Link
+                href={`/${tenantSlug}/admin/webhooks/${id}`}
+                className="mt-2 inline-block text-xs underline"
+              >
+                I have saved it — hide
+              </Link>
+            </div>
+          )}
+          {sp.rotateError && (
+            <div className="rounded border border-red-300 bg-red-50/60 px-3 py-2 text-sm text-red-800">
+              Rotation failed: {sp.rotateError}
+            </div>
+          )}
+          <form action={rotateAction} className="space-y-2">
+            <label className="block text-sm">
+              <span className="block text-xs uppercase text-ink/50">
+                Grace window (hours, 1–168 — default 24)
+              </span>
+              <input
+                type="number"
+                name="graceWindowHours"
+                min={1}
+                max={168}
+                defaultValue={24}
+                className="mt-1 w-32 rounded border border-ink/10 px-2 py-1 text-sm"
+              />
+            </label>
+            <button type="submit" className="btn text-sm">
+              Rotate signing secret
+            </button>
+          </form>
+        </div>
+      )}
 
       {canConfigure && (
         <div className="card space-y-3">
