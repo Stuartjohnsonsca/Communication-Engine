@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { requirePermission } from "@/lib/rbac";
 import { generateExportPackage } from "@/lib/termination";
+import { safeApiError } from "@/lib/observability";
 
 const inputSchema = z.object({ tenantSlug: z.string() });
 
@@ -41,6 +42,6 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/termination/export" } });
   }
 }

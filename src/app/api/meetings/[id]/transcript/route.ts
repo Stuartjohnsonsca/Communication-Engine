@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { requirePermission } from "@/lib/rbac";
 import { ingestTranscript } from "@/lib/meetings/minutes";
+import { safeApiError } from "@/lib/observability";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -35,6 +36,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
     return NextResponse.json({ meeting: updated });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/meetings/[id]/transcript" } });
   }
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { requirePermission } from "@/lib/rbac";
 import { isAcumonOperator, reviewCandidate } from "@/lib/xcl";
+import { safeApiError } from "@/lib/observability";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -44,6 +45,6 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     });
     return NextResponse.json({ candidate });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/xcl/candidates/[id]" } });
   }
 }

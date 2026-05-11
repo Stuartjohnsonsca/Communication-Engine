@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { requirePermission } from "@/lib/rbac";
 import { activateTerms, amendTerms } from "@/lib/terms";
+import { safeApiError } from "@/lib/observability";
 
 const activateSchema = z.object({
   tenantSlug: z.string(),
@@ -74,6 +75,6 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     });
     return NextResponse.json({ record });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/terms/[id]" } });
   }
 }

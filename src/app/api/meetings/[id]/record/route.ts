@@ -11,6 +11,7 @@ import {
   draftRecord,
   editRecord,
 } from "@/lib/meetings/minutes";
+import { safeApiError } from "@/lib/observability";
 
 const KIND = z.enum(["SUMMARY", "MINUTES"]);
 
@@ -66,7 +67,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
     return NextResponse.json({ record });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/meetings/[id]/record" } });
   }
 }
 
@@ -99,7 +100,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     });
     return NextResponse.json({ record });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/meetings/[id]/record" } });
   }
 }
 
@@ -142,6 +143,6 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
           });
     return NextResponse.json({ record });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    return safeApiError(err, { ctx: { route: "api/meetings/[id]/record" } });
   }
 }
