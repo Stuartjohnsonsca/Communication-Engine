@@ -3,6 +3,7 @@ import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { encryptJson, decryptJson } from "@/lib/channels/crypto";
 import { generateSecret } from "./signing";
+import { isBlockedHostname } from "./ssrf";
 
 /**
  * CRUD for WebhookSubscription. RLS is enforced when reads happen via
@@ -60,26 +61,18 @@ export function validateUrl(url: string): void {
       ALLOW_HTTP ? "URL must be http:// or https://" : "URL must be https://",
     );
   }
-  // Block loopback + link-local + RFC1918 by hostname pattern. Not a
-  // full SSRF defence (the receiver's DNS could still resolve to RFC1918)
-  // but catches the obvious mistakes a Firm Administrator might make
-  // when copy-pasting a localhost endpoint into production.
-  if (process.env.NODE_ENV === "production") {
-    const host = parsed.hostname.toLowerCase();
-    if (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "::1" ||
-      host.endsWith(".localhost") ||
-      host.startsWith("10.") ||
-      host.startsWith("192.168.") ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-      /^169\.254\./.test(host)
-    ) {
-      throw new WebhookValidationError(
-        "URL must not target a private/loopback host",
-      );
-    }
+  // Hostname-level block: rejects localhost, *.localhost, *.local,
+  // *.internal, cloud-metadata literals, and bare IP literals that fall
+  // in any private/loopback/link-local/CGNAT/benchmark/multicast range
+  // (v4 + v6). Defence in depth — delivery-time `assertEgressAllowed`
+  // also re-checks via DNS to close the DNS-rebinding window.
+  //
+  // Allowed in dev/test so the integration suite can keep posting at
+  // 127.0.0.1; in prod this is the wall that catches the typo case
+  // (copy-pasted localhost URL) before it ever reaches a delivery
+  // attempt.
+  if (process.env.NODE_ENV === "production" && isBlockedHostname(parsed.hostname)) {
+    throw new WebhookValidationError("URL must not target a private/loopback host");
   }
   if (parsed.username || parsed.password) {
     throw new WebhookValidationError("URL must not embed credentials");
