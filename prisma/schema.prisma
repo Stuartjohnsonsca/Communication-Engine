@@ -614,15 +614,15 @@ model VerificationToken {
 // ─── Core ──────────────────────────────────────────────────────────────────
 
 model Tenant {
-  id                                   String       @id @default(cuid())
-  slug                                 String       @unique
+  id                                   String          @id @default(cuid())
+  slug                                 String          @unique
   name                                 String
-  jurisdiction                         Jurisdiction @default(UK)
-  status                               TenantStatus @default(ACTIVE)
-  isSandbox                            Boolean      @default(false)
+  jurisdiction                         Jurisdiction    @default(UK)
+  status                               TenantStatus    @default(ACTIVE)
+  isSandbox                            Boolean         @default(false)
   parentTenantId                       String?
-  parentTenant                         Tenant?      @relation("SandboxOf", fields: [parentTenantId], references: [id])
-  sandboxes                            Tenant[]     @relation("SandboxOf")
+  parentTenant                         Tenant?         @relation("SandboxOf", fields: [parentTenantId], references: [id])
+  sandboxes                            Tenant[]        @relation("SandboxOf")
   /// PRD §14.2 sandbox lifecycle. Only meaningful when `isSandbox = true`.
   /// The window is provisioned for `sandboxCohortLimit` users (default 10)
   /// over `sandboxClosesAt - sandboxOpenedAt` days (default 30). On
@@ -630,31 +630,31 @@ model Tenant {
   /// DECLINED) and, when promoted, the FCG that was lifted into the parent.
   sandboxOpenedAt                      DateTime?
   sandboxClosesAt                      DateTime?
-  sandboxCohortLimit                   Int          @default(10)
-  sandboxOutcome                       SandboxOutcome @default(PENDING)
+  sandboxCohortLimit                   Int             @default(10)
+  sandboxOutcome                       SandboxOutcome  @default(PENDING)
   sandboxOutcomeAt                     DateTime?
   sandboxOutcomeByName                 String?
-  sandboxOutcomeNotes                  String?      @db.Text
+  sandboxOutcomeNotes                  String?         @db.Text
   /// FCG (in this sandbox tenant) chosen as the candidate for promotion.
   sandboxPromotedFcgId                 String?
   /// FCGProposal id created on the parent tenant when promoting — the
   /// candidate is staged via the parent's normal §6 governance, not
   /// committed silently.
   sandboxPromotedProposalId            String?
-  retentionDays                        Int          @default(2555)
-  quorumPct                            Int          @default(50) // simple majority of total membership
-  votingWindowDays                     Int          @default(5)
+  retentionDays                        Int             @default(2555)
+  quorumPct                            Int             @default(50) // simple majority of total membership
+  votingWindowDays                     Int             @default(5)
   // Sales Identifier (PRD §8) — opt-in add-on. Enabling is a DPIA-relevant
   // scope change and is gated on a separate lawful-basis attestation by the
   // Firm Administrator (PRD §8.5: mining counterparty correspondence to
   // identify revenue is a separate processing purpose). The detector and
   // the reviewer console refuse to run unless `salesIdentifierEnabled`
   // is true and the lawful-basis acknowledgement is on file.
-  salesIdentifierEnabled               Boolean      @default(false)
+  salesIdentifierEnabled               Boolean         @default(false)
   salesIdentifierEnabledAt             DateTime?
   salesIdentifierLawfulBasisAttestedAt DateTime?
   salesIdentifierLawfulBasisAttestedBy String?
-  salesIdentifierLawfulBasisNote       String?      @db.Text
+  salesIdentifierLawfulBasisNote       String?         @db.Text
   // PRD §15.1 pricing structure. Currency + base licence per active User per
   // month, plus the Sales Identifier add-on (with the Acumon-default-Partner
   // discount and the Cross-Client Learning opt-in discount stacking on top),
@@ -662,13 +662,13 @@ model Tenant {
   // get the first 30 days free per §15.1; `sandboxBillingFreeUntil` snapshots
   // that window so it remains stable if the tenant exits sandbox mid-month.
   // All money is stored in minor units (e.g. pence) to avoid floating point.
-  pricingCurrency                      String       @default("GBP")
-  pricingBaseMinor                     Int          @default(5000)
-  pricingSalesIdMinor                  Int          @default(2000)
-  pricingSalesIdPartnerDefault         Boolean      @default(true)
-  pricingSalesIdPartnerDiscountPct     Int          @default(25)
-  pricingCrossClientLearningOptIn      Boolean      @default(false)
-  pricingCclDiscountPct                Int          @default(10)
+  pricingCurrency                      String          @default("GBP")
+  pricingBaseMinor                     Int             @default(5000)
+  pricingSalesIdMinor                  Int             @default(2000)
+  pricingSalesIdPartnerDefault         Boolean         @default(true)
+  pricingSalesIdPartnerDiscountPct     Int             @default(25)
+  pricingCrossClientLearningOptIn      Boolean         @default(false)
+  pricingCclDiscountPct                Int             @default(10)
   /// PRD §11.2 Cross-Client Learning (XCL) attestation. Opt-in is a separate
   /// addendum to the Order Form — record who signed, when, and a reference to
   /// the document. The boolean above (`pricingCrossClientLearningOptIn`)
@@ -679,9 +679,9 @@ model Tenant {
   crossClientLearningOptedInByName     String?
   crossClientLearningAddendumRef       String?
   crossClientLearningOptedOutAt        DateTime?
-  crossClientLearningOptedOutReason    String?      @db.Text
-  pricingCmkEnabled                    Boolean      @default(false)
-  pricingCmkMinor                      Int          @default(50000)
+  crossClientLearningOptedOutReason    String?         @db.Text
+  pricingCmkEnabled                    Boolean         @default(false)
+  pricingCmkMinor                      Int             @default(50000)
   sandboxBillingFreeUntil              DateTime?
   /// PRD §14.4 termination lifecycle. `terminationNoticeAt` is when the
   /// Client (or Acumon, on Client request) noticed termination; status
@@ -691,7 +691,7 @@ model Tenant {
   /// to TERMINATED. The notice can be reversed any time before completion.
   terminationNoticeAt                  DateTime?
   terminationByName                    String?
-  terminationReason                    String?      @db.Text
+  terminationReason                    String?         @db.Text
   terminationEffectiveAt               DateTime?
   terminationCompletedAt               DateTime?
   /// Reference to the most recent export package generated for the wind-down.
@@ -712,21 +712,21 @@ model Tenant {
   onboardingCompletedAt                DateTime?
   /// Free-form per-tenant notes on the rollout — pinned commentary, links
   /// to the onboarding plan, etc.
-  onboardingNotes                      String?      @db.Text
+  onboardingNotes                      String?         @db.Text
   /// PRD §13.5 + backlog item 10. Locale (BCP-47) used by any Membership
   /// in this tenant that has no explicit preference of its own. New tenants
   /// default to en-GB so existing behaviour is preserved. Free-form text
   /// rather than an FK to SupportedLanguage so renaming a row doesn't break
   /// existing tenant preferences; the i18n loader silently falls back to
   /// en-GB on any unknown code.
-  defaultLocale                        String       @default("en-GB")
+  defaultLocale                        String          @default("en-GB")
   /// Post-PRD hardening item 12. When true, every active Membership in this
   /// tenant must have a verified `UserTotp` before reaching tenant routes;
   /// the layout redirects un-enrolled users to /account to enroll. Per-User
   /// enrollment is always self-service via /account regardless of this flag —
   /// the flag governs whether enrollment is *required*, not whether it is
   /// *permitted*.
-  requireTotp                          Boolean      @default(false)
+  requireTotp                          Boolean         @default(false)
   /// Post-PRD hardening item 15 — session idle/absolute timeouts. Null on
   /// either column means "inherit the platform default" (60 minutes idle,
   /// 1440 minutes / 24h absolute). When a User has memberships across
@@ -745,7 +745,7 @@ model Tenant {
   /// Free-form TEXT[] in Postgres; the page handler validates CIDR
   /// shape before persisting so malformed entries can't reach the
   /// runtime matcher. Both IPv4 and IPv6 are supported.
-  allowedIpCidrs                       String[]     @default([])
+  allowedIpCidrs                       String[]        @default([])
   /// Post-PRD hardening item 18 — step-up authentication freshness
   /// window. Null = inherit platform default (5 minutes). Cross-tenant
   /// Users get the strictest non-null value across their active
@@ -756,41 +756,41 @@ model Tenant {
   /// than this window is redirected to `/auth/2fa?stepUp=1` to
   /// re-challenge before the operation proceeds.
   stepUpMaxAgeMinutes                  Int?
-  createdAt                            DateTime     @default(now())
-  updatedAt                            DateTime     @updatedAt
+  createdAt                            DateTime        @default(now())
+  updatedAt                            DateTime        @updatedAt
 
-  memberships           Membership[]
-  fcgs                  FirmCultureGuide[]
-  fcgProposals          FCGProposal[]
-  cultureScans          FirmCultureScan[]
-  ucgs                  UserCultureGuide[]
-  drafts                Draft[]
-  actions               Action[]
-  auditEvents           AuditEvent[]
-  channels              Channel[]
-  ingestedMessages      IngestedMessage[]
-  meetings              Meeting[]
-  opportunityCandidates OpportunityCandidate[]
-  sentimentSignals      SentimentSignal[]
-  adherenceScores       AdherenceScore[]
-  commAdherence         CommunicationAdherence[]
-  dpiaAttestations      DPIAAttestation[]
-  dsarRequests          DSARequest[]
-  noGoSubjects          NoGoSubject[]
-  billingPeriods        BillingPeriod[]
-  billingUserSnapshots  BillingUserSnapshot[]
-  signOffQuestions      SignOffQuestion[]
-  terminationExports    TenantTerminationExport[]
-  termsRecords          TermsRecord[]
+  memberships               Membership[]
+  fcgs                      FirmCultureGuide[]
+  fcgProposals              FCGProposal[]
+  cultureScans              FirmCultureScan[]
+  ucgs                      UserCultureGuide[]
+  drafts                    Draft[]
+  actions                   Action[]
+  auditEvents               AuditEvent[]
+  channels                  Channel[]
+  ingestedMessages          IngestedMessage[]
+  meetings                  Meeting[]
+  opportunityCandidates     OpportunityCandidate[]
+  sentimentSignals          SentimentSignal[]
+  adherenceScores           AdherenceScore[]
+  commAdherence             CommunicationAdherence[]
+  dpiaAttestations          DPIAAttestation[]
+  dsarRequests              DSARequest[]
+  noGoSubjects              NoGoSubject[]
+  billingPeriods            BillingPeriod[]
+  billingUserSnapshots      BillingUserSnapshot[]
+  signOffQuestions          SignOffQuestion[]
+  terminationExports        TenantTerminationExport[]
+  termsRecords              TermsRecord[]
   transferImpactAssessments TransferImpactAssessment[]
-  breachNotifications   BreachClientNotification[]
-  slaMeasurements       SlaMeasurement[]
-  onboardingItems       OnboardingChecklistItem[]
-  notificationDispatches NotificationDispatch[]
-  notificationInbox     NotificationInbox[]
-  webhookSubscriptions  WebhookSubscription[]
-  webhookDeliveries     WebhookDelivery[]
-  apiKeys               ApiKey[]
+  breachNotifications       BreachClientNotification[]
+  slaMeasurements           SlaMeasurement[]
+  onboardingItems           OnboardingChecklistItem[]
+  notificationDispatches    NotificationDispatch[]
+  notificationInbox         NotificationInbox[]
+  webhookSubscriptions      WebhookSubscription[]
+  webhookDeliveries         WebhookDelivery[]
+  apiKeys                   ApiKey[]
 
   @@index([status])
 }
@@ -875,32 +875,32 @@ model Membership {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  ucgs                  UserCultureGuide[]
-  cultureScansInitiated FirmCultureScan[]        @relation("FCGScanAuthor")
-  proposalsAuthored     FCGProposal[]            @relation("ProposalAuthor")
-  votesCast             FCGVote[]                @relation("Voter")
-  votesCastAlternate    FCGVote[]                @relation("Alternate")
-  drafts                Draft[]
-  actions               Action[]
-  channelAuths          ChannelAuth[]
-  meetingsAsPaperAuthor Meeting[]
-  meetingsCreated       Meeting[]                @relation("MeetingCreator")
-  meetingsAsChair       Meeting[]                @relation("MeetingChair")
-  opportunitiesAssigned OpportunityCandidate[]   @relation("OpportunityReviewer")
-  opportunitiesDecided  OpportunityCandidate[]   @relation("OpportunityDecider")
-  opportunityComments   OpportunityComment[]     @relation("OpportunityCommentAuthor")
-  adherenceScores       AdherenceScore[]
-  commAdherence         CommunicationAdherence[]
-  adherenceAcknowledged CommunicationAdherence[] @relation("AdherenceAcknowledger")
-  sentimentAssigned     SentimentSignal[]        @relation("SentimentAssignee")
-  sentimentAcknowledged SentimentSignal[]        @relation("SentimentAcknowledger")
-  auditEventsActor      AuditEvent[]             @relation("AuditActor")
-  billingUserSnapshots  BillingUserSnapshot[]
+  ucgs                   UserCultureGuide[]
+  cultureScansInitiated  FirmCultureScan[]        @relation("FCGScanAuthor")
+  proposalsAuthored      FCGProposal[]            @relation("ProposalAuthor")
+  votesCast              FCGVote[]                @relation("Voter")
+  votesCastAlternate     FCGVote[]                @relation("Alternate")
+  drafts                 Draft[]
+  actions                Action[]
+  channelAuths           ChannelAuth[]
+  meetingsAsPaperAuthor  Meeting[]
+  meetingsCreated        Meeting[]                @relation("MeetingCreator")
+  meetingsAsChair        Meeting[]                @relation("MeetingChair")
+  opportunitiesAssigned  OpportunityCandidate[]   @relation("OpportunityReviewer")
+  opportunitiesDecided   OpportunityCandidate[]   @relation("OpportunityDecider")
+  opportunityComments    OpportunityComment[]     @relation("OpportunityCommentAuthor")
+  adherenceScores        AdherenceScore[]
+  commAdherence          CommunicationAdherence[]
+  adherenceAcknowledged  CommunicationAdherence[] @relation("AdherenceAcknowledger")
+  sentimentAssigned      SentimentSignal[]        @relation("SentimentAssignee")
+  sentimentAcknowledged  SentimentSignal[]        @relation("SentimentAcknowledger")
+  auditEventsActor       AuditEvent[]             @relation("AuditActor")
+  billingUserSnapshots   BillingUserSnapshot[]
   notificationDispatches NotificationDispatch[]
-  notificationInbox     NotificationInbox[]
-  webhookSubscriptions  WebhookSubscription[] @relation("WebhookSubCreatedBy")
-  apiKeysCreated        ApiKey[]                 @relation("ApiKeyCreatedBy")
-  apiKeysRevoked        ApiKey[]                 @relation("ApiKeyRevokedBy")
+  notificationInbox      NotificationInbox[]
+  webhookSubscriptions   WebhookSubscription[]    @relation("WebhookSubCreatedBy")
+  apiKeysCreated         ApiKey[]                 @relation("ApiKeyCreatedBy")
+  apiKeysRevoked         ApiKey[]                 @relation("ApiKeyRevokedBy")
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -1149,46 +1149,46 @@ model ComplianceRuling {
 // ─── Drafting ──────────────────────────────────────────────────────────────
 
 model Draft {
-  id                     String      @id @default(cuid())
-  tenantId               String
-  membershipId           String
-  ingestedMessageId      String?
-  kind                   DraftKind   @default(EMAIL)
-  status                 DraftStatus @default(PROPOSED)
-  channel                CommChannel @default(EMAIL)
-  language               String      @default("en-GB")
-  subject                String?
-  body                   String      @db.Text
-  citations              Json?
-  holdingRequired        Boolean     @default(false)
-  holdingReason          String?
-  fcgWindowDeadline      DateTime?
-  noGoSubjectHit         Boolean     @default(false)
-  researchTaskRequired   Boolean     @default(false)
-  modelRunId             String?
-  fcgVersionUsed         Int?
-  ucgVersionUsed         Int?
+  id                            String           @id @default(cuid())
+  tenantId                      String
+  membershipId                  String
+  ingestedMessageId             String?
+  kind                          DraftKind        @default(EMAIL)
+  status                        DraftStatus      @default(PROPOSED)
+  channel                       CommChannel      @default(EMAIL)
+  language                      String           @default("en-GB")
+  subject                       String?
+  body                          String           @db.Text
+  citations                     Json?
+  holdingRequired               Boolean          @default(false)
+  holdingReason                 String?
+  fcgWindowDeadline             DateTime?
+  noGoSubjectHit                Boolean          @default(false)
+  researchTaskRequired          Boolean          @default(false)
+  modelRunId                    String?
+  fcgVersionUsed                Int?
+  ucgVersionUsed                Int?
   // Snapshot of the inbound that triggered this draft, persisted so the
   // /drafts/[id] page can offer Regenerate for both manual-paste and
   // ingestion-driven flows. For ingestion drafts these mirror IngestedMessage;
   // for manual-paste they are the only record.
-  inboundChannel         String?
-  inboundSender          String?
-  inboundSubject         String?
-  inboundBody            String?     @db.Text
+  inboundChannel                String?
+  inboundSender                 String?
+  inboundSubject                String?
+  inboundBody                   String?          @db.Text
   // Lineage: when a draft is regenerated we DISCARD the prior version and
   // create a new row pointing back via parentId so the audit and UI can
   // surface the prior attempt without clobbering history.
-  parentId               String?
-  parent                 Draft?      @relation("DraftLineage", fields: [parentId], references: [id])
-  children               Draft[]     @relation("DraftLineage")
-  createdAt              DateTime    @default(now())
-  sentMarkedAt           DateTime?
+  parentId                      String?
+  parent                        Draft?           @relation("DraftLineage", fields: [parentId], references: [id])
+  children                      Draft[]          @relation("DraftLineage")
+  createdAt                     DateTime         @default(now())
+  sentMarkedAt                  DateTime?
   // PRD §9.1 — adherence is measured against what was actually sent, not
   // the system's draft. Captured at mark-sent: the user's final text and
   // (if a holding deadline applied) how late they sent relative to it.
-  sentText               String?     @db.Text
-  sentResponseLatencyMin Int?
+  sentText                      String?          @db.Text
+  sentResponseLatencyMin        Int?
   // Backlog item 1 — bypassed-send detection. When the channel ingest
   // observes an OUT message that matches an existing SENT draft (verbatim
   // body match), we link the OUT IngestedMessage here. When no match is
@@ -1196,9 +1196,9 @@ model Draft {
   // `synthesisedFromOutboundIngest = true` and link the same OUT message.
   // Either way every observed outbound corresponds to one Draft — that's
   // what makes the "every send is scored" invariant survive bypass.
-  outboundIngestedMessageId     String?  @unique
+  outboundIngestedMessageId     String?          @unique
   outboundIngestedMessage       IngestedMessage? @relation("DraftOutbound", fields: [outboundIngestedMessageId], references: [id])
-  synthesisedFromOutboundIngest Boolean  @default(false)
+  synthesisedFromOutboundIngest Boolean          @default(false)
 
   tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   membership      Membership              @relation(fields: [membershipId], references: [id])
@@ -1568,17 +1568,17 @@ model AdherenceScore {
 /// Per-communication adherence score (PRD §9.1). One row per sent draft.
 /// Aggregated up into AdherenceScore monthly for the FCT-facing dashboard.
 model CommunicationAdherence {
-  id             String   @id @default(cuid())
-  tenantId       String
-  draftId        String   @unique
-  membershipId   String
-  fcgVersionUsed Int
-  ucgVersionUsed Int?
-  overall        Float // 0..1
-  perDimension   Json // { responseTime, tone, mandatoryPhrase, prohibitedPhrase, escalation } -> {score, verdict, evidence}
-  perRule        Json // [{ ruleExternalId, source: "fcg"|"ucg", verdict, explanation }]
-  modelRunId     String?
-  createdAt      DateTime @default(now())
+  id               String    @id @default(cuid())
+  tenantId         String
+  draftId          String    @unique
+  membershipId     String
+  fcgVersionUsed   Int
+  ucgVersionUsed   Int?
+  overall          Float // 0..1
+  perDimension     Json // { responseTime, tone, mandatoryPhrase, prohibitedPhrase, escalation } -> {score, verdict, evidence}
+  perRule          Json // [{ ruleExternalId, source: "fcg"|"ucg", verdict, explanation }]
+  modelRunId       String?
+  createdAt        DateTime  @default(now())
   // Backlog item 1 — adherence escalation. When `overall` is below the
   // threshold the row is escalated to the assignee (= `membership`) AND
   // the FCT for governance, mirroring sentiment escalation.
@@ -1872,22 +1872,22 @@ model SignOffQuestion {
 /// defaults. The auto-redaction log lists every replacement so the human
 /// curator can sanity-check the pipeline.
 model XclCandidate {
-  id                  String              @id @default(cuid())
+  id                  String             @id @default(cuid())
   sourceTenantId      String
   /// Source subject for traceability (e.g. FCGProposal id, OpportunityCandidate id).
   sourceSubjectType   String
   sourceSubjectId     String
   kind                XclInsightKind
-  status              XclCandidateStatus  @default(PENDING)
-  originalText        String              @db.Text
-  redactedText        String              @db.Text
+  status              XclCandidateStatus @default(PENDING)
+  originalText        String             @db.Text
+  redactedText        String             @db.Text
   /// Array of { kind, original, replacement } records — what the auto-pipeline stripped.
   redactionLog        Json
   /// Curator who reviewed (Acumon-tenant membership). Set on review.
   curatorMembershipId String?
   curatorTenantId     String?
   curatorDecidedAt    DateTime?
-  curatorNotes        String?             @db.Text
+  curatorNotes        String?            @db.Text
   committedAt         DateTime?
   /// Set on COMMITTED — the operator who promoted the insight into defaults
   /// (may differ from the curator). Free-form name string for human display.
@@ -1896,10 +1896,10 @@ model XclCandidate {
   /// decline a specific committed update (PRD §11.4 "Clients can review and
   /// decline specific updates"). Stored as a JSON array so the decline list
   /// doesn't pull a separate model into the schema for a v1 surface.
-  declines            Json                @default("[]")
+  declines            Json               @default("[]")
   modelRunId          String?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
   @@index([status])
   @@index([sourceTenantId])
@@ -1925,7 +1925,6 @@ model XclReidentificationTest {
 
   @@index([conductedAt])
 }
-
 
 // ─── Tenant Termination Export (PRD §14.4) ────────────────────────────────
 
@@ -1958,7 +1957,6 @@ model TenantTerminationExport {
 
   @@index([tenantId, generatedAt])
 }
-
 
 // ─── Sub-Processor List (PRD §15.3) ───────────────────────────────────────
 
@@ -1995,7 +1993,6 @@ model SubProcessor {
   @@index([ordinal])
 }
 
-
 // ─── Onboarding Checklist (PRD §14.1) ─────────────────────────────────────
 
 /// PRD §14.1 — per-tenant manual ticks for onboarding steps the platform
@@ -2008,25 +2005,24 @@ model SubProcessor {
 /// Tenant-scoped + RLS-protected. The `code` is a stable identifier from
 /// the canonical step list in `src/lib/onboarding/steps.ts`.
 model OnboardingChecklistItem {
-  id          String          @id @default(cuid())
-  tenantId    String
-  phase       OnboardingPhase
+  id            String          @id @default(cuid())
+  tenantId      String
+  phase         OnboardingPhase
   /// Stable code from the canonical step list (e.g. "commercial.msa-signed",
   /// "technical.sso-configured", "configuration.fct-appointed").
-  code        String
-  checked     Boolean         @default(false)
-  checkedAt   DateTime?
+  code          String
+  checked       Boolean         @default(false)
+  checkedAt     DateTime?
   checkedByName String?
-  notes       String?         @db.Text
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  notes         String?         @db.Text
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, code])
   @@index([tenantId, phase])
 }
-
 
 // ─── Service Levels + Localisation + Accessibility (PRD §13) ──────────────
 
@@ -2039,27 +2035,27 @@ model OnboardingChecklistItem {
 /// ProcessingActivity: no tenantId, NOT under RLS, mutations gated to
 /// Acumon operators. Audit events on the operator's chain.
 model SlaTarget {
-  id           String   @id @default(cuid())
+  id          String   @id @default(cuid())
   /// Stable code (e.g. "availability-overall", "drafting-latency-short").
-  code         String   @unique
-  ordinal      Int
-  name         String
-  kind         SlaKind
+  code        String   @unique
+  ordinal     Int
+  name        String
+  kind        SlaKind
   /// Numeric threshold. For AVAILABILITY this is a percentage (e.g. 99.9).
   /// For LATENCY this is the seconds limit (e.g. 5 for a ≤5s short-draft
   /// median). The display layer renders units from `kind`.
-  threshold    Float
+  threshold   Float
   /// Unit hint shown in the UI ("%" or "s" or "× audio duration").
-  unit         String
+  unit        String
   /// Aggregation rule for measurements: "median" | "p95" | "monthly_pct".
-  aggregation  String
+  aggregation String
   /// PRD scope ("business hours 07:00–19:00 local", "overall", "at UCG commit").
-  scope        String
+  scope       String
   /// Free-form operator commentary.
-  notes        String?  @db.Text
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  notes       String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   measurements SlaMeasurement[]
 
@@ -2073,22 +2069,22 @@ model SlaTarget {
 /// targets from `ModelRun`; availability requires operator input from
 /// external uptime monitoring.
 model SlaMeasurement {
-  id           String     @id @default(cuid())
-  tenantId     String
-  targetId     String
+  id             String     @id @default(cuid())
+  tenantId       String
+  targetId       String
   /// "YYYY-MM"
-  period       String
+  period         String
   /// The actual measured value, in the same unit as the target.
-  observed     Float?
-  outcome      SlaOutcome @default(INSUFFICIENT_DATA)
+  observed       Float?
+  outcome        SlaOutcome @default(INSUFFICIENT_DATA)
   /// Sample count behind the measurement (latency targets) or hours of
   /// observed coverage (availability targets).
-  sampleN      Int        @default(0)
+  sampleN        Int        @default(0)
   /// JSON payload for additional dimensions: {p95, max, perDimension, ...}.
-  payload      Json?
+  payload        Json?
   /// Operator note (e.g. for a missed period, what mitigation was applied).
-  note         String?    @db.Text
-  recordedAt   DateTime   @default(now())
+  note           String?    @db.Text
+  recordedAt     DateTime   @default(now())
   recordedByName String?
 
   tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -2156,7 +2152,6 @@ model AccessibilityStatement {
   @@index([version])
 }
 
-
 // ─── Breach Notification (PRD §12.9) ──────────────────────────────────────
 
 /// PRD §12.9 — incident record on Acumon Intelligence's side. Acumon (as
@@ -2169,38 +2164,38 @@ model AccessibilityStatement {
 /// of "acumon" or ACUMON_ADMIN). Audit events on operator's tenant chain
 /// for incident lifecycle + on each affected tenant's chain for notifications.
 model BreachIncident {
-  id                  String           @id @default(cuid())
+  id                  String         @id @default(cuid())
   /// Stable code in the form BR-YYYY-NNN — assigned at create time.
-  code                String           @unique
+  code                String         @unique
   title               String
   /// Short factual description — what happened, what data was potentially
   /// exposed. Held in plain markdown.
-  description         String           @db.Text
+  description         String         @db.Text
   /// When the incident is believed to have begun (best-known). May lag
   /// awareness by hours or days.
   detectedAt          DateTime?
   /// When Acumon became aware. The 24-hour client-notice clock starts here.
   awareAt             DateTime
   severity            BreachSeverity
-  status              BreachStatus     @default(TRIAGE)
+  status              BreachStatus   @default(TRIAGE)
   /// Whether this is a personal-data breach in the meaning of UK GDPR
   /// Art. 4(12). Defaults true because the page only triggers when that
   /// classification is plausible; operator can flip if triage clears it.
-  isPersonalData      Boolean          @default(true)
+  isPersonalData      Boolean        @default(true)
   /// Categories of data potentially affected (e.g. "drafts", "FCG content",
   /// "audit metadata"). Free-form strings.
-  affectedCategories  String[]         @default([])
+  affectedCategories  String[]       @default([])
   /// Root-cause notes — added during INVESTIGATING.
-  rootCause           String?          @db.Text
+  rootCause           String?        @db.Text
   /// Mitigations applied — added during CONTAINED + RESOLVED.
-  mitigations         String[]         @default([])
+  mitigations         String[]       @default([])
   /// Total Clients with at least one notification linked to this incident.
-  affectedClientCount Int              @default(0)
+  affectedClientCount Int            @default(0)
   containedAt         DateTime?
   resolvedAt          DateTime?
   recordedByName      String
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   notifications BreachClientNotification[]
 
@@ -2215,23 +2210,23 @@ model BreachIncident {
 /// sees notifications addressed to them; the Acumon operator console reads
 /// across via `superDb`.
 model BreachClientNotification {
-  id                  String                   @id @default(cuid())
-  tenantId            String
-  breachIncidentId    String
-  status              BreachNotificationStatus @default(PENDING)
-  dueAt               DateTime
-  notifiedAt          DateTime?
-  notifiedByName      String?
-  notifiedToName      String?
-  notifiedToRole      String?
-  acknowledgedAt      DateTime?
-  acknowledgedByName  String?
+  id                 String                   @id @default(cuid())
+  tenantId           String
+  breachIncidentId   String
+  status             BreachNotificationStatus @default(PENDING)
+  dueAt              DateTime
+  notifiedAt         DateTime?
+  notifiedByName     String?
+  notifiedToName     String?
+  notifiedToRole     String?
+  acknowledgedAt     DateTime?
+  acknowledgedByName String?
   /// Snapshot of the dispatched notification body. Held in-platform so the
   /// audit trail does not depend on an external mail store.
-  payload             String?                  @db.Text
-  notes               String?                  @db.Text
-  createdAt           DateTime                 @default(now())
-  updatedAt           DateTime                 @updatedAt
+  payload            String?                  @db.Text
+  notes              String?                  @db.Text
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
 
   tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   incident BreachIncident @relation(fields: [breachIncidentId], references: [id], onDelete: Cascade)
@@ -2241,7 +2236,6 @@ model BreachClientNotification {
   @@index([breachIncidentId])
   @@index([dueAt])
 }
-
 
 // ─── Cross-Border Transfer (PRD §12.6) ────────────────────────────────────
 
@@ -2256,37 +2250,37 @@ model BreachClientNotification {
 /// jurisdiction does not need a TIA — the activation gate only fires for
 /// non-EU / non-UK rows.
 model TransferImpactAssessment {
-  id                String    @id @default(cuid())
-  tenantId          String
+  id               String    @id @default(cuid())
+  tenantId         String
   /// FK to SubProcessor.code — kept as a string FK because SubProcessor is
   /// a global table without RLS; relational join not enforced at the schema
   /// level (deletion of a sub-processor is rare and audited; we want the
   /// TIA history to survive even if the row is later marked inactive).
-  subProcessorCode  String
-  status            TIAStatus @default(RECORDED)
+  subProcessorCode String
+  status           TIAStatus @default(RECORDED)
   /// Documented SCC reference — typically the contract id / DocuSign
   /// envelope id of the signed Standard Contractual Clauses.
-  sccDocumentRef    String
+  sccDocumentRef   String
   /// Documented Transfer Impact Assessment reference — typically a link
   /// into the Client's compliance system.
-  tiaDocumentRef    String
+  tiaDocumentRef   String
   /// Effective dates of the TIA. `effectiveTo` defaults to +12 months at
   /// recording; auto-flipped to EXPIRED by the §14.4 cron sweep when the
   /// date passes.
-  effectiveFrom     DateTime
-  effectiveTo       DateTime
-  signedByName      String
-  signedByRole      String
+  effectiveFrom    DateTime
+  effectiveTo      DateTime
+  signedByName     String
+  signedByRole     String
   /// Optional list of data categories covered by the TIA — strings lifted
   /// from the matching SubProcessor.dataCategories.
-  dataCategories    String[]  @default([])
-  notes             String?   @db.Text
+  dataCategories   String[]  @default([])
+  notes            String?   @db.Text
   /// Set when the TIA is revoked (e.g. the Client closed the dependent
   /// channel) or expired without renewal.
-  revokedAt         DateTime?
-  revokedReason     String?   @db.Text
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  revokedAt        DateTime?
+  revokedReason    String?   @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -2295,7 +2289,6 @@ model TransferImpactAssessment {
   @@index([tenantId, subProcessorCode])
   @@index([effectiveTo])
 }
-
 
 // ─── Controller / Processor Map (PRD §12.1) ───────────────────────────────
 
@@ -2313,31 +2306,31 @@ model TransferImpactAssessment {
 /// We do NOT store applicability per-tenant — the controller/processor model
 /// is the same for every Client, only the activated subset varies.
 model ProcessingActivity {
-  id                  String   @id @default(cuid())
+  id                String   @id @default(cuid())
   /// Stable code (e.g. "core", "xcl", "si-intra", "si-third-party", "auth", "voice").
-  code                String   @unique
-  ordinal             Int
+  code              String   @unique
+  ordinal           Int
   /// Display label, lifted from the PRD column.
-  label               String
+  label             String
   /// Controller designation — free-form to match PRD ("Client", "Acumon
   /// Intelligence (independent controller)", "Client + third party (joint)").
-  controller          String
+  controller        String
   /// Processor designation — same pattern. May be "—" for activities where
   /// Acumon is itself the controller (e.g. XCL).
-  processor           String
+  processor         String
   /// Lawful basis classification (e.g. "legitimate interests", "consent",
   /// "contract", "legal obligation"). Free-form because some rows combine
   /// bases per A2 in PRD §1.2.
-  lawfulBasis         String?
+  lawfulBasis       String?
   /// Contract / addendum that governs the row. Free-form to match the PRD
   /// "Notes" column ("Standard DPA, EU/UK SCCs not required (in-region)",
   /// "Tripartite agreement", "Listed sub-processor", etc.).
-  contract            String?
+  contract          String?
   /// Whether this activity processes personal data — almost all rows do, but
   /// future additions (e.g. anonymous analytics) may not.
-  processesPersonal   Boolean  @default(true)
+  processesPersonal Boolean  @default(true)
   /// Whether this activity processes special-category data per UK GDPR Art. 9.
-  processesSpecial    Boolean  @default(false)
+  processesSpecial  Boolean  @default(false)
   /// Per-tenant feature flag that activates this row. Read from the
   /// Tenant column at view time. Null means "always applies".
   ///   "always"                       — every Client (default)
@@ -2346,14 +2339,13 @@ model ProcessingActivity {
   ///   "crossClientLearningOptedIn"   — only when XCL is on
   ///   "voiceAuthorised"              — only when a Voice channel is active
   ///   "ssoConfigured"                — only when SAML/OIDC is active
-  applicabilityFlag   String?
-  notes               String?  @db.Text
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  applicabilityFlag String?
+  notes             String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([ordinal])
 }
-
 
 // ─── Integration Tiers (PRD §10) ──────────────────────────────────────────
 
@@ -2370,53 +2362,52 @@ model ProcessingActivity {
 /// catalogue read-only to every tenant; each tenant's actually-authorised
 /// surface is `/admin/channels`.
 model IntegrationTarget {
-  id                     String              @id @default(cuid())
+  id             String              @id @default(cuid())
   /// Stable code (e.g. "m365", "google-workspace", "slack"). Used in URLs,
   /// audit payloads, and as the FK from `Channel.kind` for v1 targets.
-  code                   String              @unique
-  ordinal                Int
-  name                   String
-  vendor                 String?
-  tier                   IntegrationTier
-  category               IntegrationCategory
-  status                 IntegrationStatus   @default(PLANNED)
+  code           String              @unique
+  ordinal        Int
+  name           String
+  vendor         String?
+  tier           IntegrationTier
+  category       IntegrationCategory
+  status         IntegrationStatus   @default(PLANNED)
   /// Channel.kind value emitted when a tenant authorises this target
   /// (e.g. "M365", "GOOGLE", "SLACK"). Null for SDK / non-Channel targets
   /// (DocuSign event triggers, practice-management bridges).
-  channelKind            String?
+  channelKind    String?
   /// OAuth + permission mechanism — "oauth2", "api_key", "saml", "webhook".
   /// Free-form because the integrations matrix is too varied for an enum.
-  authMechanism          String              @default("oauth2")
+  authMechanism  String              @default("oauth2")
   /// Array of scope strings the target requires. Documented per PRD §10.4
   /// "All integrations inherit the source system's permissions model".
-  requiredScopes         String[]            @default([])
+  requiredScopes String[]            @default([])
   /// Surfaces this integration produces inside the platform — array of
   /// strings like "drafts", "minutes", "actions", "follow-ups". Drives the
   /// /integrations catalog without hard-coding per-target rendering.
-  capabilities           String[]            @default([])
+  capabilities   String[]            @default([])
   /// Short human-readable role (e.g. "Email + calendar + chat", "Document
   /// management for legal").
-  role                   String?
+  role           String?
   /// Operator commentary — limitations, prerequisite addenda, etc.
-  notes                  String?             @db.Text
+  notes          String?             @db.Text
   /// Lifecycle timestamps. `targetGaAt` is the date this target is committed
   /// to be GA; `availableSince` is when it actually shipped. These are
   /// independent because Tier 2 targets have a 6-month-from-GA SLO that
   /// outlives the parent product GA date.
-  targetGaAt             DateTime?
-  availableSince         DateTime?
-  deprecatedAt           DateTime?
+  targetGaAt     DateTime?
+  availableSince DateTime?
+  deprecatedAt   DateTime?
   /// Whether this target hooks the §14.4 export schema directly, the §10.4
   /// SDK adaptor pattern, or neither — informational only.
-  export                 String?
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
+  export         String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
 
   @@index([tier, ordinal])
   @@index([category, status])
   @@index([status])
 }
-
 
 // ─── Terms and Conditions persistence (PRD §15.4) ─────────────────────────
 
@@ -2456,7 +2447,6 @@ model TermsRecord {
   @@index([tenantId, kind, status])
   @@index([tenantId, status])
 }
-
 
 // ─── Notifications (post-PRD backlog item 6) ──────────────────────────────
 
@@ -2500,17 +2490,17 @@ model NotificationDispatch {
 /// `NotificationDispatch` is used so an event that fires twice in a single
 /// run produces exactly one inbox row.
 model NotificationInbox {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   tenantId     String
   membershipId String
   kind         String
   dedupeKey    String
   title        String
-  summary      String?  @db.Text
-  body         String?  @db.Text
+  summary      String?   @db.Text
+  body         String?   @db.Text
   /// In-tenant route to open the source artefact ("/<slug>/sentiment", etc.).
   href         String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
   /// Set when the User opens the notification (or marks all as read).
   readAt       DateTime?
   /// Mirror of `NotificationDispatch.sentAt` if the email side actually went
@@ -2546,10 +2536,10 @@ model NotificationInbox {
 /// Stale rows are reaped by the lifecycle-sweep cron — once a key has been
 /// untouched for 7 days it's safe to delete; a fresh request just re-creates it.
 model RateLimitBucket {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   /// Composite namespace string. Format: "<identity-kind>:<identity>:<scope>".
   /// See `RateLimitScope` literals in `src/lib/ratelimit/index.ts`.
-  key         String   @unique
+  key         String    @unique
   /// Start of the current fixed window. The next request whose `now` is
   /// `>= windowStart + windowSeconds` resets the bucket.
   windowStart DateTime
@@ -2559,7 +2549,7 @@ model RateLimitBucket {
   /// audit-event spam — we record the first overflow per hour, not every
   /// individual rejected request.
   lastAuditAt DateTime?
-  updatedAt   DateTime @updatedAt
+  updatedAt   DateTime  @updatedAt
 
   @@index([updatedAt])
 }
@@ -2585,7 +2575,7 @@ model RateLimitBucket {
 /// deliveries at the default retry cadence). A FIRM_ADMIN can re-enable
 /// after fixing the receiver.
 model WebhookSubscription {
-  id                    String   @id @default(cuid())
+  id                    String    @id @default(cuid())
   tenantId              String
   /// Human-readable label shown in the admin UI. Not used for delivery.
   name                  String
@@ -2594,22 +2584,22 @@ model WebhookSubscription {
   url                   String
   /// Encrypted HMAC-SHA256 signing secret. Plaintext is shown once on
   /// creation and never read again.
-  secretEncrypted       String   @db.Text
+  secretEncrypted       String    @db.Text
   /// Either ["*"] for "every event type" or an explicit list of
   /// AuditEventType enum strings. Storage as TEXT[] rather than the enum
   /// because Postgres doesn't allow ALTER TYPE on a column type used in an
   /// array column without a rewrite, and the audit-event enum changes often.
-  eventTypes            String[] @default([])
+  eventTypes            String[]  @default([])
   /// When `enabled = false`, dispatch enqueues no new deliveries to this
   /// subscription. Toggled by the Firm Administrator OR automatically by
   /// the dispatcher when `consecutiveFailures >= autoDisableThreshold`.
-  enabled               Boolean  @default(true)
+  enabled               Boolean   @default(true)
   /// Threshold over which the dispatcher auto-flips `enabled = false`.
   /// Defaults to 25 — about a day of failures at the default backoff.
-  autoDisableThreshold  Int      @default(25)
+  autoDisableThreshold  Int       @default(25)
   /// Count of consecutive deliveries that ended DEAD_LETTERED. Reset to 0
   /// on every successful delivery.
-  consecutiveFailures   Int      @default(0)
+  consecutiveFailures   Int       @default(0)
   /// When a delivery last succeeded.
   lastDeliveredAt       DateTime?
   /// When a delivery last ended DEAD_LETTERED.
@@ -2617,12 +2607,12 @@ model WebhookSubscription {
   /// Last delivery's HTTP status, for at-a-glance UI.
   lastStatusCode        Int?
   createdByMembershipId String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy    Membership?           @relation("WebhookSubCreatedBy", fields: [createdByMembershipId], references: [id])
-  deliveries   WebhookDelivery[]
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  Membership?       @relation("WebhookSubCreatedBy", fields: [createdByMembershipId], references: [id])
+  deliveries WebhookDelivery[]
 
   @@index([tenantId, enabled])
   @@index([tenantId, createdAt])
@@ -2637,43 +2627,43 @@ model WebhookSubscription {
 /// Tenant-scoped + RLS-protected so a leaked admin token from tenant A
 /// cannot read tenant B's delivery history.
 model WebhookDelivery {
-  id              String   @id @default(cuid())
-  tenantId        String
-  subscriptionId  String
+  id               String    @id @default(cuid())
+  tenantId         String
+  subscriptionId   String
   /// AuditEventType string (not the enum — see WebhookSubscription.eventTypes
   /// for the same rationale).
-  eventType       String
+  eventType        String
   /// Reference back to the audit chain. Nullable so we can manually enqueue
   /// a delivery from an admin replay even if the audit event was archived.
-  auditEventId    String?
+  auditEventId     String?
   /// Canonical JSON payload sent (and to-be-resent on retry — never
   /// re-serialised) so retries are byte-stable for the receiver.
-  payload         Json
+  payload          Json
   /// Number of times we have attempted POST. First attempt = 1.
-  attempt         Int      @default(0)
+  attempt          Int       @default(0)
   /// Hard cap on attempts before flipping to DEAD_LETTERED. Defaults to 5
   /// — at the default backoff (1m, 5m, 30m, 2h, 12h) that's ~15 hours of
   /// retries before we give up.
-  maxAttempts     Int      @default(5)
+  maxAttempts      Int       @default(5)
   /// PENDING — waiting for the cron worker to pick up
   /// IN_FLIGHT — locked by the worker for the current attempt
   /// DELIVERED — receiver returned 2xx; terminal
   /// DEAD_LETTERED — exceeded maxAttempts or hit a permanent failure; terminal
-  status          String   @default("PENDING")
+  status           String    @default("PENDING")
   /// Earliest moment the next attempt should fire. Set to now() on enqueue;
   /// bumped by backoff on transient failures.
-  scheduledFor    DateTime @default(now())
+  scheduledFor     DateTime  @default(now())
   /// Last attempt's HTTP status code (null if no HTTP response — DNS, TLS,
   /// timeout, etc.).
-  lastStatusCode  Int?
+  lastStatusCode   Int?
   /// First 1024 chars of the receiver's response body, for debugging.
-  lastResponseBody String? @db.Text
+  lastResponseBody String?   @db.Text
   /// Last network/HTTP error message, for debugging.
-  lastError       String?  @db.Text
+  lastError        String?   @db.Text
   /// Set when status flips to DELIVERED or DEAD_LETTERED.
-  completedAt     DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
@@ -2742,8 +2732,8 @@ model ApiKey {
   createdByMembershipId String
   createdAt             DateTime  @default(now())
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy Membership @relation("ApiKeyCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Cascade)
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy Membership  @relation("ApiKeyCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Cascade)
   revokedBy Membership? @relation("ApiKeyRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
 
   @@index([tenantId, revokedAt])
