@@ -53,6 +53,7 @@ export type RateLimitScope =
   | "totp-enroll"
   | "totp-disable"
   | "totp-challenge"
+  | "api-key-auth"
   | "default";
 
 export type RateLimitOpts = {

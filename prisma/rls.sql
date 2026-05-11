@@ -41,7 +41,8 @@ DECLARE
     'NotificationDispatch',
     'NotificationInbox',
     'WebhookSubscription',
-    'WebhookDelivery'
+    'WebhookDelivery',
+    'ApiKey'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

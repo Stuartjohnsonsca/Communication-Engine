@@ -287,6 +287,11 @@ enum AuditEventType {
   WEBHOOK_DEAD_LETTERED
   WEBHOOK_REPLAYED
   TENANT_SESSION_TIMEOUT_CHANGED
+  API_KEY_CREATED
+  API_KEY_REVOKED
+  API_KEY_AUTH_FAILED
+  API_KEY_AUTO_REVOKED
+  API_KEY_USED
 }
 
 enum BillingPeriodStatus {
@@ -760,6 +765,7 @@ model Tenant {
   notificationInbox     NotificationInbox[]
   webhookSubscriptions  WebhookSubscription[]
   webhookDeliveries     WebhookDelivery[]
+  apiKeys               ApiKey[]
 
   @@index([status])
 }
@@ -868,6 +874,8 @@ model Membership {
   notificationDispatches NotificationDispatch[]
   notificationInbox     NotificationInbox[]
   webhookSubscriptions  WebhookSubscription[] @relation("WebhookSubCreatedBy")
+  apiKeysCreated        ApiKey[]                 @relation("ApiKeyCreatedBy")
+  apiKeysRevoked        ApiKey[]                 @relation("ApiKeyRevokedBy")
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -2648,4 +2656,72 @@ model WebhookDelivery {
   @@index([tenantId, status, scheduledFor])
   @@index([tenantId, subscriptionId, createdAt])
   @@index([status, scheduledFor])
+}
+
+/// Post-PRD hardening item 16 — programmatic API access. Tenant-scoped,
+/// RLS-protected. Issued as `ack_<prefix>_<secret>` (32 chars after the
+/// brand) where `prefix` is the lookup index and the remainder is hashed
+/// at rest via HMAC-SHA256(prefix||"."||secret, ENCRYPTION_KEY). The
+/// plaintext is shown to the creator exactly once and never read back —
+/// same posture as `UserTotp.recoveryCodesHashed` and
+/// `WebhookSubscription.secretEncrypted`.
+///
+/// Authentication shape: caller sends `Authorization: Bearer <key>` to
+/// any `/api/v1/*` route. The auth middleware:
+///   1. parses the brand and prefix from the header,
+///   2. looks up the row by prefix (UNIQUE index),
+///   3. timing-safe-compares the recomputed hash,
+///   4. checks `revokedAt IS NULL` AND `expiresAt > now()`,
+///   5. resolves the creator-Membership's role + intersects with `scopes`.
+/// The intersection — not the underlying role — gates the request.
+///
+/// `lastUsedAt` is updated conditionally (only when older than 60s) so a
+/// hot integrator polling once per second writes at most once per minute.
+/// Same write-throttling pattern as `Session.lastSeenAt` (item 13).
+model ApiKey {
+  id                    String    @id @default(cuid())
+  tenantId              String
+  /// Human-readable label shown in the admin UI, e.g. "Datadog SIEM
+  /// audit ingest". Not used for auth.
+  name                  String
+  /// First 12 chars of the issued key (e.g. "ack_jbswy3"). Plaintext +
+  /// UNIQUE — the lookup column. Safe to log: it carries no entropy past
+  /// the lookup itself; the secret half is what authenticates.
+  prefix                String    @unique
+  /// HMAC-SHA256(prefix || "." || secret, ENCRYPTION_KEY). Hex-encoded.
+  /// Verifies the secret half without ever storing it.
+  hash                  String
+  /// Subset of canonical scope strings (see
+  /// `src/lib/auth/api-keys/scopes.ts`). Empty array = no scopes (rejected
+  /// at auth); `["*"]` = every scope the creator-Membership's role grants.
+  /// Stored as TEXT[] (not enum) so the canonical scope list can evolve
+  /// without an enum migration.
+  scopes                String[]  @default([])
+  /// Hard expiry. Null = never expires. Always still revocable manually.
+  expiresAt             DateTime?
+  /// When the key last authenticated successfully. Throttled to >=60s
+  /// between writes to keep traffic bounded.
+  lastUsedAt            DateTime?
+  /// Last IP that authenticated with this key (best-effort, behind a
+  /// proxy). For incident response — distinguishing the SIEM's IP from
+  /// an unexpected source. Same masking applied as Session.ipAddress on
+  /// display.
+  lastUsedIp            String?
+  /// Revocation bookkeeping. Row is preserved for forensic history.
+  revokedAt             DateTime?
+  revokedById           String?
+  revokedReason         String?
+  /// The Membership that created the key. Authorisation derives from
+  /// this Membership's role; auto-revoke fires when this Membership
+  /// transitions to an inactive status.
+  createdByMembershipId String
+  createdAt             DateTime  @default(now())
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy Membership @relation("ApiKeyCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Cascade)
+  revokedBy Membership? @relation("ApiKeyRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, revokedAt])
+  @@index([createdByMembershipId])
+  @@index([expiresAt])
 }

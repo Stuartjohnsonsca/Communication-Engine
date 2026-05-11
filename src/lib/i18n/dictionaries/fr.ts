@@ -53,6 +53,7 @@ export const fr: Dictionary = {
     signoff: "Questions de validation",
     security: "Sécurité",
     webhooks: "Webhooks",
+    apiKeys: "Clés d'API",
   },
   shell: {
     openNavigation: "Ouvrir la navigation",

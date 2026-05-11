@@ -4,6 +4,7 @@ import { expireOverdueTias } from "@/lib/compliance/cross-border";
 import { reapStaleRateLimitBuckets, rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 import { reapOldDeliveries } from "@/lib/webhooks";
 import { sweepExpiredSessions } from "@/lib/auth/sessions";
+import { sweepInactiveOrExpiredApiKeys } from "@/lib/auth/api-keys";
 
 /**
  * PRD §14.3 lifecycle sweep. Idempotent — only acts on rows whose grace
@@ -48,6 +49,14 @@ export async function GET(req: Request) {
   // whose User never came back (laptop closed, browser tab abandoned)
   // so the row is genuinely revoked rather than just rejected next visit.
   const sessions = await sweepExpiredSessions();
+  // Post-PRD hardening item 16 — auto-revoke API keys whose creator-
+  // Membership has gone INACTIVE, or whose `expiresAt` has passed.
+  // The auth path also rejects these (creator-Membership status is
+  // checked on every request) but a stale row in the table is a leaky
+  // abstraction: an admin reviewing keys should see only currently-valid
+  // ones unless they explicitly toggle "include revoked". This sweep
+  // keeps the table reflective of reality.
+  const apiKeys = await sweepInactiveOrExpiredApiKeys();
   return NextResponse.json({
     ok: true,
     ...result,
@@ -56,6 +65,8 @@ export async function GET(req: Request) {
     webhookDeliveriesReaped: webhooks.deleted,
     sessionsTimedOut: sessions.revoked,
     sessionsTimedOutByReason: sessions.reasons,
+    apiKeysRevokedForInactivity: apiKeys.revokedForInactivity,
+    apiKeysRevokedForExpiry: apiKeys.revokedForExpiry,
   });
 }
 

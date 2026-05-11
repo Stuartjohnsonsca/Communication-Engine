@@ -251,6 +251,23 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // and never read back, so even FCT visibility never exposes it.
   "webhooks:read":      ["FIRM_ADMIN", "FCT_MEMBER"],
   "webhooks:configure": ["FIRM_ADMIN"],
+
+  // Post-PRD hardening item 16 — programmatic API keys. Issuing a key
+  // binds the integrator caller to the issuing Membership's role at
+  // request time (intersected with the key's scopes), so the act of
+  // issuing one is a controllership decision: limited to FIRM_ADMIN.
+  // The FCT can read the list (knowing what programmatic credentials
+  // exist is part of their governance remit, same posture as
+  // `webhooks:read`) but cannot create or revoke. Every Membership
+  // can read AND revoke keys IT created — `apikeys:manage-own` —
+  // because a key inherits its creator's permissions and revocation
+  // by the creator is symmetric with creation. FIRM_ADMIN
+  // additionally can revoke any key in the tenant (incident response
+  // when a key is suspected leaked).
+  "apikeys:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
+  "apikeys:create":      ["FIRM_ADMIN"],
+  "apikeys:revoke-any":  ["FIRM_ADMIN"],
+  "apikeys:manage-own":  ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

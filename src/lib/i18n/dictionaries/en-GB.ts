@@ -56,6 +56,7 @@ export const enGB: Dictionary = {
     signoff: "Sign-off questions",
     security: "Security",
     webhooks: "Webhooks",
+    apiKeys: "API keys",
   },
   shell: {
     openNavigation: "Open navigation",
@@ -178,6 +179,7 @@ export type Dictionary = {
     signoff: string;
     security: string;
     webhooks: string;
+    apiKeys: string;
   };
   shell: {
     openNavigation: string;
