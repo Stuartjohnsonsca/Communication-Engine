@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { runWeeklyDigest } from "@/lib/notifications";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
+import { withCronHeartbeat } from "@/lib/cron-health";
 
 /**
  * Backlog item 6 — weekly notification digest.
@@ -32,7 +33,7 @@ export async function GET(req: Request) {
   if (auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
-  const result = await runWeeklyDigest();
+  const result = await withCronHeartbeat("digest", () => runWeeklyDigest());
   return NextResponse.json({ ok: true, ...result });
 }
 

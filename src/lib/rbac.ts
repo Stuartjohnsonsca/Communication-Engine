@@ -284,6 +284,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // FIRM_ADMIN cannot quietly disable a colleague's 2FA without
   // them noticing.
   "tenant:reset-member-totp": ["FIRM_ADMIN"],
+
+  // Post-PRD hardening item 22 — cron heartbeat monitoring. The
+  // /admin/health page is Acumon-side only (cron schedules are
+  // platform-wide, not per-tenant); the page handler additionally
+  // gates on `tenant.slug === "acumon"` so even FIRM_ADMINs of
+  // other tenants cannot view operator infrastructure status.
+  // Read-only — there are no mutating actions on the page.
+  "system:cron-health:read": ["FIRM_ADMIN", "ACUMON_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

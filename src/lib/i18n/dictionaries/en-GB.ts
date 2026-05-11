@@ -57,6 +57,7 @@ export const enGB: Dictionary = {
     security: "Security",
     webhooks: "Webhooks",
     apiKeys: "API keys",
+    systemHealth: "System health",
   },
   shell: {
     openNavigation: "Open navigation",
@@ -213,6 +214,7 @@ export type Dictionary = {
     security: string;
     webhooks: string;
     apiKeys: string;
+    systemHealth: string;
   };
   shell: {
     openNavigation: string;

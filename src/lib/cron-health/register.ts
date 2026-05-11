@@ -1,0 +1,66 @@
+/**
+ * Registered platform crons + their expected schedule interval (minutes).
+ *
+ * Hardcoded — these are platform-wide schedules controlled by Railway cron
+ * configuration. If the Railway cron cadence changes, update this file
+ * alongside the schedule.
+ *
+ * `expectedIntervalMinutes` informs stall detection: a cron is flagged as
+ * stalled when `lastSuccessAt < now - 2 × interval`. The 2× margin absorbs
+ * normal jitter (a cron whose interval is "every 1 minute" can legitimately
+ * be 90s late on a hot host).
+ *
+ * Adding a new cron to the platform:
+ *   1. Add the entry here.
+ *   2. Wrap its handler with `withCronHeartbeat(name, async () => ...)`.
+ *   3. The health-check worker picks it up automatically on its next pass.
+ */
+export type RegisteredCron = {
+  cronName: string;
+  expectedIntervalMinutes: number;
+  /// One-line description for the /admin/health page.
+  description: string;
+};
+
+export const REGISTERED_CRONS: RegisteredCron[] = [
+  {
+    cronName: "lifecycle-sweep",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "PRD §14.3 lifecycle sweep — anonymisation grace, TIA expiry, session timeout, API-key auto-revoke, rate-limit reaper, webhook delivery reaper.",
+  },
+  {
+    cronName: "billing-close",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "PRD §15.1–§15.2 monthly billing period close. Idempotent — only acts on the last day of the month.",
+  },
+  {
+    cronName: "termination",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "PRD §14.4 termination lifecycle — generates export packages, runs hard-deletion sweep after grace window.",
+  },
+  {
+    cronName: "digest",
+    expectedIntervalMinutes: 7 * 24 * 60,
+    description:
+      "Backlog item 6 — weekly notification digest. Dedupes per ISO week so a flaky retry within the week is a no-op.",
+  },
+  {
+    cronName: "webhooks-deliver",
+    expectedIntervalMinutes: 1,
+    description:
+      "Backlog item 14 — outbound webhook delivery worker. Drains PENDING WebhookDelivery rows with exponential-backoff retry.",
+  },
+  {
+    cronName: "health-check",
+    expectedIntervalMinutes: 15,
+    description:
+      "This worker — periodically evaluates every other cron's heartbeat and emits CRON_STALLED audit + notifications.",
+  },
+];
+
+export function registeredCron(cronName: string): RegisteredCron | undefined {
+  return REGISTERED_CRONS.find((c) => c.cronName === cronName);
+}

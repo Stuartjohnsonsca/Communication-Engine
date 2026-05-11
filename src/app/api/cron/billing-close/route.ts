@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { closeAllDueBillingPeriods } from "@/lib/billing";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
+import { withCronHeartbeat } from "@/lib/cron-health";
 
 /**
  * PRD §15.1 monthly close. Closes the previous calendar month's
@@ -28,7 +29,9 @@ export async function GET(req: Request) {
   if (auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
-  const result = await closeAllDueBillingPeriods();
+  const result = await withCronHeartbeat("billing-close", () =>
+    closeAllDueBillingPeriods(),
+  );
   return NextResponse.json({ ok: true, ...result });
 }
 

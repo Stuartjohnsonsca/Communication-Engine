@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { runWebhookDeliveryBatch } from "@/lib/webhooks";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
+import { withCronHeartbeat } from "@/lib/cron-health";
 
 /**
  * Post-PRD hardening item 14 — outbound webhook delivery worker.
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
   if (auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
-  const result = await runWebhookDeliveryBatch();
+  const result = await withCronHeartbeat("webhooks-deliver", () => runWebhookDeliveryBatch());
   return NextResponse.json({ ok: true, ...result });
 }
 

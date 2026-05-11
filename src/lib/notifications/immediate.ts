@@ -289,3 +289,88 @@ export async function dispatchSignInNewDevice(input: {
   });
   return { recipients: 1 };
 }
+
+// ─── Cron stalled (post-PRD hardening item 22) ────────────────────────────
+
+/**
+ * Notify Acumon operators that a platform cron has stopped succeeding.
+ *
+ * Recipients = every ACTIVE FIRM_ADMIN + ACUMON_ADMIN of the Acumon
+ * operator tenant. The dedupe key is the cronName + an ISO-minute slice
+ * of `stalledNotifiedAt` (which the alert module advances per stall
+ * window) so a single stall window produces exactly one notification
+ * per recipient, but a subsequent stall window can re-alert.
+ */
+export async function dispatchCronStalled(input: {
+  tenantId: string;
+  cronName: string;
+  state: "stalled" | "failing" | "never-run" | "ok";
+  lastSuccessAt: Date | null;
+  lastErrorMessage: string | null;
+  consecutiveFailures: number;
+  expectedIntervalMinutes: number;
+}): Promise<{ recipients: number }> {
+  // Acumon-side recipients: FIRM_ADMIN + ACUMON_ADMIN with an ACTIVE
+  // membership in the operator tenant. Use the operator-recipients helper
+  // by intersecting with role-based query directly here (we can't reuse
+  // firmAdminRecipients because ACUMON_ADMIN is also load-bearing).
+  const rows = await superDb.membership.findMany({
+    where: {
+      tenantId: input.tenantId,
+      status: "ACTIVE",
+      role: { in: ["FIRM_ADMIN", "ACUMON_ADMIN"] },
+    },
+    include: { user: { select: { email: true } } },
+  });
+  const recipients = rows.filter((r) => !!r.user.email);
+  if (recipients.length === 0) return { recipients: 0 };
+
+  // Dedupe key uses a 1-minute slice so concurrent racers within the same
+  // health-check pass land on the same key. The alert path's atomic
+  // updateMany guards against double-firing across passes, but the
+  // dispatch table's unique constraint adds belt-and-braces idempotency.
+  const dedupeSlice = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
+  const dedupeKey = `${input.cronName}:${dedupeSlice}`;
+
+  const subject = `Platform cron stalled: ${input.cronName}`;
+  const summary =
+    input.state === "failing"
+      ? `${input.cronName} — ${input.consecutiveFailures} consecutive failures`
+      : `${input.cronName} — no successful run in the last ${input.expectedIntervalMinutes * 2} minutes`;
+  const body = [
+    `An Acumon platform cron has stopped succeeding and requires operator attention.`,
+    "",
+    `Cron: ${input.cronName}`,
+    `State: ${input.state}`,
+    `Expected interval: every ${input.expectedIntervalMinutes} minute(s)`,
+    `Last success: ${input.lastSuccessAt ? input.lastSuccessAt.toISOString() : "never"}`,
+    `Consecutive failures: ${input.consecutiveFailures}`,
+    input.lastErrorMessage ? `Last error: ${input.lastErrorMessage}` : null,
+    "",
+    `Open /<tenant>/admin/health for the full status grid.`,
+    `Check Railway cron logs and CRON_SECRET configuration if the schedule looks healthy.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: input.tenantId,
+      membershipId: r.id,
+      toEmail: r.user.email!,
+      kind: "cron_stalled",
+      dedupeKey,
+      subject,
+      summary,
+      text: body,
+      // href omitted — recipient resolves to the operator's own /admin/health
+      // via their tenant URL; we don't know which tenant slug they'll use.
+      payload: {
+        cronName: input.cronName,
+        state: input.state,
+        consecutiveFailures: input.consecutiveFailures,
+      },
+    });
+  }
+  return { recipients: recipients.length };
+}

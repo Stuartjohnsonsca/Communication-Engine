@@ -297,6 +297,8 @@ enum AuditEventType {
   STEP_UP_VERIFIED
   TOTP_RESET_BY_ADMIN
   SIGN_IN_NEW_DEVICE
+  CRON_RUN_FAILED
+  CRON_STALLED
 }
 
 enum BillingPeriodStatus {
@@ -2553,6 +2555,45 @@ model RateLimitBucket {
   updatedAt   DateTime  @updatedAt
 
   @@index([updatedAt])
+}
+
+// ─── Cron heartbeat monitoring (post-PRD hardening item 22) ────────────────
+
+/// One row per registered platform cron. Upserted by `withCronHeartbeat` on
+/// every run; read by `/admin/health` (Acumon-only) and by the periodic
+/// `runHealthCheck()` worker that writes `CRON_STALLED` audit events on the
+/// Acumon operator tenant chain when a cron's `lastSuccessAt` has drifted
+/// past its expected interval.
+///
+/// Global (no tenantId) — cron schedules are platform-wide, not per-tenant.
+/// Excluded from `prisma/rls.sql tenant_tables`.
+model CronHeartbeat {
+  cronName                String    @id
+  /// Expected schedule interval in minutes; informs stall detection
+  /// (`lastSuccessAt < now - 2 × interval` flags the cron as stalled).
+  /// Hardcoded in `src/lib/cron-health/register.ts`; update there if the
+  /// Railway cron schedule changes.
+  expectedIntervalMinutes Int
+  /// Set unconditionally at the start of every run (success or failure).
+  lastRunAt               DateTime?
+  /// Set on successful completion. The primary signal — `consecutiveFailures`
+  /// resets to 0 alongside this stamp.
+  lastSuccessAt           DateTime?
+  /// Set when the wrapped fn throws. `lastErrorMessage` captures the first
+  /// 500 chars of `err.message` for the operator dashboard.
+  lastFailureAt           DateTime?
+  lastErrorMessage        String?
+  lastDurationMs          Int?
+  consecutiveFailures     Int       @default(0)
+  /// Dedupe stamp for `CRON_STALLED` audit + notification. Re-alert only
+  /// after `expectedIntervalMinutes` has elapsed since the last alert, so
+  /// an operator sees one alert per genuine stall window — not one every
+  /// 15 minutes (the health-check cadence).
+  stalledNotifiedAt       DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  @@index([lastSuccessAt])
 }
 
 // ─── Outbound webhook delivery (post-PRD hardening item 14) ───────────────

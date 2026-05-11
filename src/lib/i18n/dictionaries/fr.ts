@@ -54,6 +54,7 @@ export const fr: Dictionary = {
     security: "Sécurité",
     webhooks: "Webhooks",
     apiKeys: "Clés d'API",
+    systemHealth: "Santé système",
   },
   shell: {
     openNavigation: "Ouvrir la navigation",

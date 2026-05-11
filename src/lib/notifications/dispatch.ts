@@ -41,7 +41,8 @@ export type NotificationKind =
   | "breach_ack_required"
   | "adherence_escalation"
   | "totp_reset_by_admin"
-  | "sign_in_new_device";
+  | "sign_in_new_device"
+  | "cron_stalled";
 
 export type DispatchResult = {
   alreadySent: boolean;

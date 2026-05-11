@@ -185,6 +185,18 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "apikeys:read")) {
     nav.push({ href: `/${tenantSlug}/admin/api-keys`, label: t("nav.apiKeys") });
   }
+  // Post-PRD hardening item 22 — cron heartbeat monitoring. Acumon-side
+  // only (cron schedules are platform-wide). The page handler also gates
+  // on tenant.slug === "acumon" so even FIRM_ADMINs of other tenants
+  // can't view operator infrastructure status. Hide the nav entry
+  // entirely outside the operator tenant — there's nothing for non-Acumon
+  // FIRM_ADMINs to do on this page.
+  if (
+    hasPermission(ctx.membership.role, "system:cron-health:read") &&
+    ctx.tenant.slug === "acumon"
+  ) {
+    nav.push({ href: `/${tenantSlug}/admin/health`, label: t("nav.systemHealth") });
+  }
   // PRD §14.2 Sandbox — only meaningful in production tenants. The page
   // itself short-circuits when accessed from inside a sandbox tenant.
   if (
