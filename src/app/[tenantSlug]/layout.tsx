@@ -16,6 +16,7 @@ import {
   ipFromHeaders,
   enforceSessionTimeout,
 } from "@/lib/auth/sessions";
+import { evaluateIpAllowlist } from "@/lib/auth/ip-allowlist";
 
 export default async function TenantLayout({
   children,
@@ -55,9 +56,28 @@ export default async function TenantLayout({
       observeSessionMetadata(sessionId, h.get("user-agent"), ipFromHeaders(h)),
     ]);
   }
+  // Post-PRD hardening item 17 — tenant IP allowlist. Evaluated BEFORE
+  // the TOTP gate so a misconfigured IP shows the same access-denied
+  // page regardless of 2FA state. Allowlist `/access-denied` itself so
+  // the denial page can render without re-tripping the check. Empty
+  // allowlist is unrestricted (default for every tenant).
+  const onAccessDeniedPage = requestPathname === `/${tenantSlug}/access-denied`;
+  if (!onAccessDeniedPage) {
+    const ipDecision = await evaluateIpAllowlist({
+      tenantId: ctx.tenant.id,
+      ip: ipFromHeaders(h) ?? "unknown",
+      surface: "session",
+      membershipId: ctx.membership.id,
+    });
+    if (!ipDecision.allowed) {
+      redirect(`/${tenantSlug}/access-denied?reason=${encodeURIComponent(ipDecision.reason ?? "ip-not-allowed")}`);
+    }
+  }
+
   const gateAllowlist =
     requestPathname === `/${tenantSlug}/account` ||
-    requestPathname.startsWith(`/${tenantSlug}/auth/2fa`);
+    requestPathname.startsWith(`/${tenantSlug}/auth/2fa`) ||
+    onAccessDeniedPage;
   if (!gateAllowlist) {
     const gate = await evaluateTotpGate({
       userId: ctx.user.id,

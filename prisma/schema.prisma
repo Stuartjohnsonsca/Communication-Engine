@@ -292,6 +292,8 @@ enum AuditEventType {
   API_KEY_AUTH_FAILED
   API_KEY_AUTO_REVOKED
   API_KEY_USED
+  TENANT_IP_ALLOWLIST_CHANGED
+  IP_ALLOWLIST_DENIED
 }
 
 enum BillingPeriodStatus {
@@ -731,6 +733,17 @@ model Tenant {
   /// is to take the smallest non-null configured value.
   sessionIdleTimeoutMinutes            Int?
   sessionAbsoluteTimeoutMinutes        Int?
+  /// Post-PRD hardening item 17 — tenant-wide IP allowlist. Empty array
+  /// (the default) means "no restriction"; current behaviour preserved
+  /// for every tenant that hasn't configured this. Non-empty means the
+  /// caller's IP must match at least one entry to authenticate. Applies
+  /// to BOTH session-based access (layout-level enforcement) and
+  /// API-key access (`withApiKey` wrapper).
+  ///
+  /// Free-form TEXT[] in Postgres; the page handler validates CIDR
+  /// shape before persisting so malformed entries can't reach the
+  /// runtime matcher. Both IPv4 and IPv6 are supported.
+  allowedIpCidrs                       String[]     @default([])
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 

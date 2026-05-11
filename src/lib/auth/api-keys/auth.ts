@@ -4,6 +4,7 @@ import { clientIpFromHeaders, rateLimit, tooManyRequestsResponse } from "@/lib/r
 import { parseApiKey } from "./secret";
 import { authenticateApiKey, recordAuthFailure, type AuthenticatedApiKey } from "./store";
 import { scopeAllows, type ApiScope } from "./scopes";
+import { evaluateIpAllowlist } from "@/lib/auth/ip-allowlist";
 
 /**
  * Handler wrapper that authenticates an incoming request via the
@@ -89,6 +90,23 @@ export function withApiKey(opts: WithApiKeyOptions, handler: ApiKeyHandler) {
       // audit write — there's no tenant chain to write to. The
       // per-IP rate limit above provides the brute-force defence.
       return unauthorised("invalid api key");
+    }
+
+    // Post-PRD hardening item 17 — tenant IP allowlist. Evaluated
+    // AFTER authentication so we know the tenant id without trusting
+    // a request-side hint. A denial here writes IP_ALLOWLIST_DENIED
+    // to the tenant chain (throttled) and returns 403 — the
+    // integrator's IP isn't the kind of thing they can fix via
+    // retrying with different headers, so 403 conveys "intent
+    // received, policy rejects" better than 401 would.
+    const ipDecision = await evaluateIpAllowlist({
+      tenantId: auth.membership.tenantId,
+      ip,
+      surface: "api-key",
+      apiKeyId: auth.apiKey.id,
+    });
+    if (!ipDecision.allowed) {
+      return forbidden(ipDecision.reason ?? "source IP not in tenant allowlist");
     }
 
     if (!scopeAllows(auth.apiKey.scopes, auth.membership.role, opts.scope)) {

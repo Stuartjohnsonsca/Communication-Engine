@@ -268,6 +268,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "apikeys:create":      ["FIRM_ADMIN"],
   "apikeys:revoke-any":  ["FIRM_ADMIN"],
   "apikeys:manage-own":  ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
+
+  // Post-PRD hardening item 17 — tenant IP allowlist. Restricting
+  // authenticated access to specific networks is a procurement-driven
+  // posture decision, kept to the Firm Administrator. There is no
+  // read gate beyond the page-level FIRM_ADMIN check — the list is
+  // visible to anyone who reaches /admin/security, which itself is
+  // already FIRM_ADMIN-only.
+  "tenant:configure-ip-allowlist": ["FIRM_ADMIN"],
 };
 
 export function hasPermission(role: Role, action: string): boolean {

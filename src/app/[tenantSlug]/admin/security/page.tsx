@@ -16,6 +16,7 @@ import {
   MIN_ABSOLUTE_TIMEOUT_MINUTES,
   MAX_ABSOLUTE_TIMEOUT_MINUTES,
 } from "@/lib/auth/sessions";
+import { updateTenantAllowlist, AllowlistValidationError } from "@/lib/auth/ip-allowlist";
 
 /**
  * Tenant-wide 2FA policy. The Firm Administrator can require every active
@@ -28,15 +29,19 @@ import {
 
 export default async function SecurityPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ tenantSlug: string }>;
+  searchParams?: Promise<{ allowlistSaved?: string; allowlistError?: string }>;
 }) {
   const { tenantSlug } = await params;
+  const sp = (await searchParams) ?? {};
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
   if (!hasPermission(ctx.membership.role, "tenant:configure-totp-policy")) {
     redirect(`/${tenantSlug}/dashboard`);
   }
+  const canConfigureAllowlist = hasPermission(ctx.membership.role, "tenant:configure-ip-allowlist");
 
   const [memberships, tenantSessions] = await Promise.all([
     superDb.membership.findMany({
@@ -165,6 +170,30 @@ export default async function SecurityPage({
     revalidatePath(`/${tenantSlug}/admin/security`);
   }
 
+  async function updateAllowlistAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    requirePermission(inner.membership.role, "tenant:configure-ip-allowlist");
+    const raw = (formData.get("allowedIpCidrs") as string | null) ?? "";
+    // Split on newline OR comma so admins can paste either format.
+    const lines = raw.split(/[\n,]/);
+    try {
+      await updateTenantAllowlist({
+        tenantId: inner.tenant.id,
+        actorMembershipId: inner.membership.id,
+        lines,
+      });
+    } catch (err) {
+      if (err instanceof AllowlistValidationError) {
+        redirect(`/${tenantSlug}/admin/security?allowlistError=${encodeURIComponent(err.errors.join("; "))}`);
+      }
+      throw err;
+    }
+    revalidatePath(`/${tenantSlug}/admin/security`);
+    redirect(`/${tenantSlug}/admin/security?allowlistSaved=1`);
+  }
+
   async function toggleAction(formData: FormData) {
     "use server";
     const inner = await getTenantContext(tenantSlug);
@@ -251,6 +280,54 @@ export default async function SecurityPage({
             Save timeouts
           </button>
         </div>
+      </form>
+
+      <form action={updateAllowlistAction} className="card space-y-3">
+        <h2 className="text-base font-medium">IP allowlist</h2>
+        <p className="text-xs text-ink/60">
+          Restrict authenticated access to specific networks. Applies to
+          BOTH browser sessions (this layout enforces) and API keys
+          (<code>/api/v1/*</code> calls). Leave empty for no restriction.
+          One CIDR per line — also accepts comma-separated lists from a
+          paste. IPv4 and IPv6 are both supported; single hosts can be
+          written without a slash (auto-expanded to /32 or /128).
+        </p>
+        {sp.allowlistError && (
+          <div className="rounded border border-red-300 bg-red-50/60 px-3 py-2 text-xs text-red-800">
+            {sp.allowlistError}
+          </div>
+        )}
+        {sp.allowlistSaved && !sp.allowlistError && (
+          <div className="rounded border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-800">
+            Allowlist saved.
+          </div>
+        )}
+        <label className="block text-sm">
+          <span className="block text-xs uppercase tracking-wider text-ink/50">
+            Allowed networks (one per line)
+          </span>
+          <textarea
+            name="allowedIpCidrs"
+            rows={6}
+            defaultValue={ctx.tenant.allowedIpCidrs.join("\n")}
+            disabled={!canConfigureAllowlist}
+            placeholder={"192.0.2.0/24\n203.0.113.5\n2001:db8::/32"}
+            className="mt-1 w-full rounded border border-ink/15 px-2 py-1 font-mono text-xs disabled:bg-ink/5"
+          />
+        </label>
+        <p className="text-[11px] text-ink/50">
+          <strong>Warning:</strong> a misconfigured list can lock every
+          member out — including the Firm Administrator. The platform
+          will not reach in and clear it; recovery requires direct DB
+          access. Test from a candidate network before relying on this.
+        </p>
+        {canConfigureAllowlist && (
+          <div className="flex justify-end">
+            <button type="submit" className="btn btn-primary text-sm">
+              Save allowlist
+            </button>
+          </div>
+        )}
       </form>
 
       <form action={toggleAction} className="card space-y-3">
