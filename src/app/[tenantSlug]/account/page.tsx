@@ -9,6 +9,8 @@ import {
   isSupportedLocale,
   getT,
   resolveLocale,
+  type TFunction,
+  type DictionaryPath,
 } from "@/lib/i18n";
 import { hasPermission } from "@/lib/rbac";
 import {
@@ -27,6 +29,12 @@ import {
   maskIp,
 } from "@/lib/auth/sessions";
 import { rateLimit } from "@/lib/ratelimit";
+import {
+  OPT_OUTABLE_KINDS,
+  listPreferences,
+  setEmailEnabled,
+  type OptOutableKind,
+} from "@/lib/notifications";
 import { TwoFactorCard } from "./TwoFactorCard";
 
 export default async function AccountPage({
@@ -39,7 +47,7 @@ export default async function AccountPage({
   if (!ctx) redirect("/login");
 
   const currentSessionId = await resolveCurrentSessionId();
-  const [member, channelAuths, totpStatus, sessions] = await Promise.all([
+  const [member, channelAuths, totpStatus, sessions, notificationPrefs] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
     }),
@@ -50,6 +58,7 @@ export default async function AccountPage({
     }),
     getEnrollmentStatus(ctx.user.id),
     listSessionsForUser({ userId: ctx.user.id, currentSessionId, includeRevoked: false }),
+    listPreferences(ctx.membership.id),
   ]);
   if (!member) redirect("/login");
 
@@ -249,6 +258,25 @@ export default async function AccountPage({
         actorUserId: inner.user.id,
       },
       excludeSessionId: keepSessionId,
+    });
+    revalidatePath(`/${tenantSlug}/account`);
+  }
+
+  async function setNotificationPrefAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    const kind = String(formData.get("kind") ?? "");
+    const emailEnabled = formData.get("emailEnabled") === "on";
+    // ValidationError surfaces "kind is mandatory" if the form was
+    // tampered with — defence in depth on top of the UI showing only
+    // opt-outable kinds.
+    await setEmailEnabled({
+      tenantId: inner.tenant.id,
+      membershipId: inner.membership.id,
+      actorMembershipId: inner.membership.id,
+      kind,
+      emailEnabled,
     });
     revalidatePath(`/${tenantSlug}/account`);
   }
@@ -468,6 +496,12 @@ export default async function AccountPage({
         )}
       </div>
 
+      <NotificationPreferencesCard
+        prefs={notificationPrefs}
+        action={setNotificationPrefAction}
+        t={t}
+      />
+
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Channel authorisations</h2>
         {liveAuths.length === 0 && revokedAuths.length === 0 ? (
@@ -588,4 +622,139 @@ function LifecycleBanner({ state }: { state: ReturnType<typeof getMemberLifecycl
     );
   }
   return null;
+}
+
+/**
+ * Opt-outable kinds get a toggle each; mandatory kinds are listed in a
+ * secondary "Always sent" block so the user can see what they cannot
+ * mute and why. Per-kind copy lives in i18n
+ * (`notifications.kinds.<key>`), so a translator sees them together.
+ */
+const OPT_OUTABLE_COPY: Record<
+  OptOutableKind,
+  { labelKey: DictionaryPath; descriptionKey: DictionaryPath }
+> = {
+  weekly_digest: {
+    labelKey: "notifications.kinds.weeklyDigestLabel",
+    descriptionKey: "notifications.kinds.weeklyDigestDescription",
+  },
+  sign_in_new_device: {
+    labelKey: "notifications.kinds.signInNewDeviceLabel",
+    descriptionKey: "notifications.kinds.signInNewDeviceDescription",
+  },
+};
+
+const MANDATORY_COPY: Array<{ labelKey: DictionaryPath; reasonKey: DictionaryPath }> = [
+  {
+    labelKey: "notifications.kinds.sentimentEscalationLabel",
+    reasonKey: "notifications.kinds.sentimentEscalationAlways",
+  },
+  {
+    labelKey: "notifications.kinds.adherenceEscalationLabel",
+    reasonKey: "notifications.kinds.adherenceEscalationAlways",
+  },
+  {
+    labelKey: "notifications.kinds.breachAckRequiredLabel",
+    reasonKey: "notifications.kinds.breachAckRequiredAlways",
+  },
+  {
+    labelKey: "notifications.kinds.auditChainTamperedLabel",
+    reasonKey: "notifications.kinds.auditChainTamperedAlways",
+  },
+  {
+    labelKey: "notifications.kinds.subprocessorChangeLabel",
+    reasonKey: "notifications.kinds.subprocessorChangeAlways",
+  },
+  {
+    labelKey: "notifications.kinds.cronStalledLabel",
+    reasonKey: "notifications.kinds.cronStalledAlways",
+  },
+  {
+    labelKey: "notifications.kinds.totpResetByAdminLabel",
+    reasonKey: "notifications.kinds.totpResetByAdminAlways",
+  },
+];
+
+function NotificationPreferencesCard({
+  prefs,
+  action,
+  t,
+}: {
+  prefs: Record<OptOutableKind, boolean>;
+  action: (fd: FormData) => Promise<void>;
+  t: TFunction;
+}) {
+  return (
+    <div className="card space-y-4">
+      <div>
+        <h2 className="text-base font-medium">
+          {t("account.notificationPrefsHeading")}
+        </h2>
+        <p className="mt-1 text-sm text-ink/70">
+          {t("account.notificationPrefsDescription")}
+        </p>
+      </div>
+
+      <ul className="divide-y divide-ink/5">
+        {OPT_OUTABLE_KINDS.map((kind) => {
+          const enabled = prefs[kind];
+          const copy = OPT_OUTABLE_COPY[kind];
+          return (
+            <li
+              key={kind}
+              className="flex flex-col gap-2 py-3 first:pt-0 sm:flex-row sm:items-start sm:justify-between"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">{t(copy.labelKey)}</div>
+                <p className="mt-0.5 text-xs text-ink/60">{t(copy.descriptionKey)}</p>
+              </div>
+              <form action={action} className="flex shrink-0 items-center gap-2">
+                <input type="hidden" name="kind" value={kind} />
+                {/* Submit the inverse — clicking the button toggles the bit. */}
+                <input
+                  type="hidden"
+                  name="emailEnabled"
+                  value={enabled ? "off" : "on"}
+                />
+                <span
+                  className={`tag text-xs ${
+                    enabled ? "bg-emerald-50 text-emerald-800" : "bg-ink/5 text-ink/60"
+                  }`}
+                >
+                  {enabled
+                    ? t("account.notificationPrefsToggleEnable")
+                    : t("account.notificationPrefsToggleDisable")}
+                </span>
+                <button type="submit" className="btn text-xs">
+                  {enabled
+                    ? t("account.notificationPrefsToggleDisable")
+                    : t("account.notificationPrefsToggleEnable")}
+                </button>
+              </form>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="rounded border border-ink/5 bg-ink/3 p-3">
+        <div className="text-xs font-medium uppercase tracking-wider text-ink/60">
+          {t("account.notificationPrefsAlwaysSentHeading")}
+        </div>
+        <p className="mt-1 text-xs text-ink/60">
+          {t("account.notificationPrefsAlwaysSentDescription")}
+        </p>
+        <ul className="mt-2 space-y-1 text-xs">
+          {MANDATORY_COPY.map((m) => (
+            <li
+              key={m.labelKey}
+              className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between"
+            >
+              <span className="font-medium">{t(m.labelKey)}</span>
+              <span className="text-ink/50">{t(m.reasonKey)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
 }

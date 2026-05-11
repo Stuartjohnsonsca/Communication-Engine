@@ -287,6 +287,13 @@ enum AuditEventType {
   NOTIFICATION_DISPATCHED
   NOTIFICATION_DISPATCH_FAILED
   NOTIFICATION_DIGEST_RUN
+  /// Post-PRD hardening item 45 — a User toggled email delivery for an
+  /// opt-outable notification kind on /<slug>/account. Payload carries
+  /// `{ kind, emailEnabled, prior }`. Mandatory kinds (breach,
+  /// audit-chain, subprocessor-*, cron-stalled, escalations, totp-reset)
+  /// cannot be toggled — those throws `ValidationError` and never reach
+  /// this event.
+  NOTIFICATION_PREFERENCE_CHANGED
   RATE_LIMIT_EXCEEDED
   TOTP_ENROLLED
   TOTP_DISABLED
@@ -818,6 +825,7 @@ model Tenant {
   onboardingItems           OnboardingChecklistItem[]
   notificationDispatches    NotificationDispatch[]
   notificationInbox         NotificationInbox[]
+  notificationPreferences   MembershipNotificationPreference[]
   webhookSubscriptions      WebhookSubscription[]
   webhookDeliveries         WebhookDelivery[]
   apiKeys                   ApiKey[]
@@ -909,31 +917,32 @@ model Membership {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   ucgs                   UserCultureGuide[]
-  cultureScansInitiated  FirmCultureScan[]        @relation("FCGScanAuthor")
-  proposalsAuthored      FCGProposal[]            @relation("ProposalAuthor")
-  votesCast              FCGVote[]                @relation("Voter")
-  votesCastAlternate     FCGVote[]                @relation("Alternate")
+  cultureScansInitiated  FirmCultureScan[]                  @relation("FCGScanAuthor")
+  proposalsAuthored      FCGProposal[]                      @relation("ProposalAuthor")
+  votesCast              FCGVote[]                          @relation("Voter")
+  votesCastAlternate     FCGVote[]                          @relation("Alternate")
   drafts                 Draft[]
   actions                Action[]
   channelAuths           ChannelAuth[]
   meetingsAsPaperAuthor  Meeting[]
-  meetingsCreated        Meeting[]                @relation("MeetingCreator")
-  meetingsAsChair        Meeting[]                @relation("MeetingChair")
-  opportunitiesAssigned  OpportunityCandidate[]   @relation("OpportunityReviewer")
-  opportunitiesDecided   OpportunityCandidate[]   @relation("OpportunityDecider")
-  opportunityComments    OpportunityComment[]     @relation("OpportunityCommentAuthor")
+  meetingsCreated        Meeting[]                          @relation("MeetingCreator")
+  meetingsAsChair        Meeting[]                          @relation("MeetingChair")
+  opportunitiesAssigned  OpportunityCandidate[]             @relation("OpportunityReviewer")
+  opportunitiesDecided   OpportunityCandidate[]             @relation("OpportunityDecider")
+  opportunityComments    OpportunityComment[]               @relation("OpportunityCommentAuthor")
   adherenceScores        AdherenceScore[]
   commAdherence          CommunicationAdherence[]
-  adherenceAcknowledged  CommunicationAdherence[] @relation("AdherenceAcknowledger")
-  sentimentAssigned      SentimentSignal[]        @relation("SentimentAssignee")
-  sentimentAcknowledged  SentimentSignal[]        @relation("SentimentAcknowledger")
-  auditEventsActor       AuditEvent[]             @relation("AuditActor")
+  adherenceAcknowledged  CommunicationAdherence[]           @relation("AdherenceAcknowledger")
+  sentimentAssigned      SentimentSignal[]                  @relation("SentimentAssignee")
+  sentimentAcknowledged  SentimentSignal[]                  @relation("SentimentAcknowledger")
+  auditEventsActor       AuditEvent[]                       @relation("AuditActor")
   billingUserSnapshots   BillingUserSnapshot[]
   notificationDispatches NotificationDispatch[]
   notificationInbox      NotificationInbox[]
-  webhookSubscriptions   WebhookSubscription[]    @relation("WebhookSubCreatedBy")
-  apiKeysCreated         ApiKey[]                 @relation("ApiKeyCreatedBy")
-  apiKeysRevoked         ApiKey[]                 @relation("ApiKeyRevokedBy")
+  notificationPrefs      MembershipNotificationPreference[]
+  webhookSubscriptions   WebhookSubscription[]              @relation("WebhookSubCreatedBy")
+  apiKeysCreated         ApiKey[]                           @relation("ApiKeyCreatedBy")
+  apiKeysRevoked         ApiKey[]                           @relation("ApiKeyRevokedBy")
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -3022,4 +3031,39 @@ model ApiIdempotencyKey {
   @@unique([apiKeyId, key, methodPath])
   @@index([tenantId])
   @@index([expiresAt])
+}
+
+/// Post-PRD hardening item 45 — per-Membership opt-out of opt-outable
+/// notification email kinds. Tenant-scoped + RLS-protected.
+///
+/// Default behaviour (no row) = opted-in. The dispatcher only consults
+/// this table when the kind is in `OPT_OUTABLE_KINDS`
+/// (`src/lib/notifications/preferences.ts`); mandatory kinds
+/// (breach_ack_required, audit_chain_tampered, subprocessor_*,
+/// cron_stalled, sentiment_escalation, adherence_escalation,
+/// totp_reset_by_admin) short-circuit the lookup and always send. So a
+/// row with `emailEnabled=false` for a mandatory kind (e.g. inserted
+/// directly into the DB) is silently ignored — defence in depth on top
+/// of the `ValidationError` thrown by `setEmailEnabled` at the API edge.
+///
+/// The in-app inbox is unaffected; muting only suppresses the SMTP
+/// send. The dispatch row records `status='SKIPPED_USER_PREFERENCE'`
+/// so an operator can see why an email didn't go out.
+model MembershipNotificationPreference {
+  id           String   @id @default(cuid())
+  tenantId     String
+  membershipId String
+  /// String mirroring `NotificationKind` in
+  /// `src/lib/notifications/dispatch.ts`. Free-form text rather than an
+  /// enum so adding a new kind doesn't require a migration (the
+  /// `isOptOutable` allowlist in code is the gate).
+  kind         String
+  emailEnabled Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, kind])
+  @@index([tenantId, membershipId])
 }

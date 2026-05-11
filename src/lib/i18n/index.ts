@@ -73,6 +73,8 @@ export type DictionaryPath =
   | `account.${keyof Dictionary["account"]}`
   | `twofa.${keyof Dictionary["twofa"]}`
   | `sessions.${keyof Dictionary["sessions"]}`
+  | `notifications.mutedByPreference`
+  | `notifications.kinds.${keyof Dictionary["notifications"]["kinds"]}`
   | `audit.${keyof Dictionary["audit"]}`
   | "locale";
 

@@ -84,6 +84,14 @@ export const enGB: Dictionary = {
     inheritFromTenant: "Inherit from tenant default ({locale})",
     save: "Save preference",
     saved: "Preference saved.",
+    notificationPrefsHeading: "Email preferences",
+    notificationPrefsDescription:
+      "Choose which notification emails you want to receive. Items in your in-app inbox at /notifications are unaffected — only the email side is muted.",
+    notificationPrefsAlwaysSentHeading: "Always sent",
+    notificationPrefsAlwaysSentDescription:
+      "These notifications carry governance or security obligations and cannot be muted.",
+    notificationPrefsToggleEnable: "Email me",
+    notificationPrefsToggleDisable: "Don't email me",
   },
   twofa: {
     accountHeading: "Two-factor authentication",
@@ -136,6 +144,31 @@ export const enGB: Dictionary = {
     lastSeen: "Last seen",
     revoke: "Revoke",
     revokeOthers: "Sign out all other devices",
+  },
+  notifications: {
+    mutedByPreference: "muted by your preference",
+    kinds: {
+      weeklyDigestLabel: "Weekly digest",
+      weeklyDigestDescription:
+        "Monday summary of what's outstanding for you: open actions, FCG proposals to vote on, escalations and approaching expiries.",
+      signInNewDeviceLabel: "New device sign-in",
+      signInNewDeviceDescription:
+        "Sent when you sign in from a device or network you haven't used before. Useful as a tripwire for account takeover; you can mute it if it's noisy.",
+      sentimentEscalationLabel: "Sentiment escalations",
+      sentimentEscalationAlways: "Routes through Firm Culture Team governance.",
+      adherenceEscalationLabel: "Adherence escalations",
+      adherenceEscalationAlways: "Audit-grade record of your own send-side compliance.",
+      breachAckRequiredLabel: "Breach acknowledgement",
+      breachAckRequiredAlways: "DPA art. 33–34 obligation for Firm Administrators.",
+      auditChainTamperedLabel: "Audit chain integrity",
+      auditChainTamperedAlways: "Critical security alert — chain integrity is a controllership concern.",
+      cronStalledLabel: "Platform cron stalled",
+      cronStalledAlways: "Operator-only alert; missing it defeats the cron.",
+      subprocessorChangeLabel: "Sub-processor changes",
+      subprocessorChangeAlways: "DPA art. 28(2)(a) prior-notice obligation.",
+      totpResetByAdminLabel: "Two-factor reset by admin",
+      totpResetByAdminAlways: "Security advisory — never muted.",
+    },
   },
   audit: {
     heading: "Audit log",
@@ -239,6 +272,12 @@ export type Dictionary = {
     inheritFromTenant: string;
     save: string;
     saved: string;
+    notificationPrefsHeading: string;
+    notificationPrefsDescription: string;
+    notificationPrefsAlwaysSentHeading: string;
+    notificationPrefsAlwaysSentDescription: string;
+    notificationPrefsToggleEnable: string;
+    notificationPrefsToggleDisable: string;
   };
   twofa: {
     accountHeading: string;
@@ -282,6 +321,29 @@ export type Dictionary = {
     lastSeen: string;
     revoke: string;
     revokeOthers: string;
+  };
+  notifications: {
+    mutedByPreference: string;
+    kinds: {
+      weeklyDigestLabel: string;
+      weeklyDigestDescription: string;
+      signInNewDeviceLabel: string;
+      signInNewDeviceDescription: string;
+      sentimentEscalationLabel: string;
+      sentimentEscalationAlways: string;
+      adherenceEscalationLabel: string;
+      adherenceEscalationAlways: string;
+      breachAckRequiredLabel: string;
+      breachAckRequiredAlways: string;
+      auditChainTamperedLabel: string;
+      auditChainTamperedAlways: string;
+      cronStalledLabel: string;
+      cronStalledAlways: string;
+      subprocessorChangeLabel: string;
+      subprocessorChangeAlways: string;
+      totpResetByAdminLabel: string;
+      totpResetByAdminAlways: string;
+    };
   };
   audit: {
     heading: string;

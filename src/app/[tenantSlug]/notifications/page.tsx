@@ -6,7 +6,10 @@ import {
   aggregateForMembership,
   digestHasContent,
   isMailerConfigured,
+  listPreferences,
+  isOptOutable,
 } from "@/lib/notifications";
+import { getT, resolveLocale } from "@/lib/i18n";
 import NotificationActions from "./NotificationActions";
 
 const KIND_LABEL: Record<string, string> = {
@@ -25,7 +28,7 @@ export default async function NotificationsPage({
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
 
-  const [inbox, digest] = await Promise.all([
+  const [inbox, digest, prefs] = await Promise.all([
     tenantDb(ctx.tenant.id).notificationInbox.findMany({
       where: {
         tenantId: ctx.tenant.id,
@@ -35,10 +38,13 @@ export default async function NotificationsPage({
       take: 100,
     }),
     aggregateForMembership({ tenant: ctx.tenant, membership: ctx.membership }),
+    listPreferences(ctx.membership.id),
   ]);
 
   const unread = inbox.filter((r) => !r.readAt).length;
   const hasContent = digestHasContent(digest);
+  const locale = resolveLocale({ membership: ctx.membership, tenant: ctx.tenant });
+  const t = getT(locale);
 
   return (
     <div className="space-y-6">
@@ -171,6 +177,8 @@ export default async function NotificationsPage({
                     )}
                     {r.emailSentAt ? (
                       <span>email sent {r.emailSentAt.toISOString().slice(0, 16).replace("T", " ")}</span>
+                    ) : isOptOutable(r.kind) && prefs[r.kind] === false ? (
+                      <span className="text-ink/60">{t("notifications.mutedByPreference")}</span>
                     ) : (
                       <span className="text-amber-700">in-app only (no email)</span>
                     )}

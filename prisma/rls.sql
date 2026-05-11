@@ -40,6 +40,7 @@ DECLARE
     'OnboardingChecklistItem',
     'NotificationDispatch',
     'NotificationInbox',
+    'MembershipNotificationPreference',
     'WebhookSubscription',
     'WebhookDelivery',
     'ApiKey',

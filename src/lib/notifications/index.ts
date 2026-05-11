@@ -15,3 +15,11 @@ export {
   dispatchAdherenceEscalation,
   dispatchBreachAckRequired,
 } from "./immediate";
+export {
+  OPT_OUTABLE_KINDS,
+  isOptOutable,
+  getEmailEnabled,
+  listPreferences,
+  setEmailEnabled,
+} from "./preferences";
+export type { OptOutableKind } from "./preferences";

@@ -81,6 +81,14 @@ export const fr: Dictionary = {
     inheritFromTenant: "Hériter du paramètre par défaut du tenant ({locale})",
     save: "Enregistrer la préférence",
     saved: "Préférence enregistrée.",
+    notificationPrefsHeading: "Préférences d'e-mail",
+    notificationPrefsDescription:
+      "Choisissez quels e-mails de notification vous souhaitez recevoir. Les éléments de votre boîte de réception in-app à /notifications ne sont pas affectés — seul l'envoi par e-mail est désactivé.",
+    notificationPrefsAlwaysSentHeading: "Toujours envoyés",
+    notificationPrefsAlwaysSentDescription:
+      "Ces notifications relèvent d'obligations de gouvernance ou de sécurité et ne peuvent pas être désactivées.",
+    notificationPrefsToggleEnable: "M'envoyer un e-mail",
+    notificationPrefsToggleDisable: "Ne pas m'envoyer d'e-mail",
   },
   twofa: {
     accountHeading: "Authentification à deux facteurs",
@@ -135,6 +143,37 @@ export const fr: Dictionary = {
     lastSeen: "Vu pour la dernière fois",
     revoke: "Révoquer",
     revokeOthers: "Déconnecter tous les autres appareils",
+  },
+  notifications: {
+    mutedByPreference: "désactivée selon votre préférence",
+    kinds: {
+      weeklyDigestLabel: "Digest hebdomadaire",
+      weeklyDigestDescription:
+        "Récapitulatif du lundi sur ce qui vous reste à traiter : actions ouvertes, propositions GCC à voter, escalades et échéances proches.",
+      signInNewDeviceLabel: "Connexion depuis un nouvel appareil",
+      signInNewDeviceDescription:
+        "Envoyée lorsque vous vous connectez depuis un appareil ou un réseau inhabituel. Utile comme garde-fou contre la prise de contrôle de compte ; à désactiver si trop bruyante.",
+      sentimentEscalationLabel: "Escalades de sentiment",
+      sentimentEscalationAlways:
+        "Transite par la gouvernance de l'équipe Culture du cabinet.",
+      adherenceEscalationLabel: "Escalades de conformité",
+      adherenceEscalationAlways:
+        "Enregistrement de niveau audit de votre conformité côté envoi.",
+      breachAckRequiredLabel: "Accusé de réception de violation",
+      breachAckRequiredAlways:
+        "Obligation DPA art. 33–34 pour les Administrateurs du cabinet.",
+      auditChainTamperedLabel: "Intégrité de la chaîne d'audit",
+      auditChainTamperedAlways:
+        "Alerte de sécurité critique — l'intégrité de la chaîne relève du responsable de traitement.",
+      cronStalledLabel: "Tâche planifiée bloquée",
+      cronStalledAlways:
+        "Alerte opérateur uniquement ; la manquer revient à annuler la tâche.",
+      subprocessorChangeLabel: "Changements de sous-traitants",
+      subprocessorChangeAlways:
+        "Obligation de préavis DPA art. 28(2)(a).",
+      totpResetByAdminLabel: "Réinitialisation 2FA par l'administrateur",
+      totpResetByAdminAlways: "Avis de sécurité — jamais désactivable.",
+    },
   },
   audit: {
     heading: "Journal d'audit",

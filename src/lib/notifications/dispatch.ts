@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { isMailerConfigured, sendNotificationEmail } from "./mailer";
+import { getEmailEnabled, isOptOutable } from "./preferences";
 
 /**
  * Single dispatch entry-point used by both immediate triggers and the
@@ -50,7 +51,11 @@ export type NotificationKind =
 
 export type DispatchResult = {
   alreadySent: boolean;
-  status: "DISPATCHED" | "FAILED" | "SKIPPED_NO_EMAIL_SERVER";
+  status:
+    | "DISPATCHED"
+    | "FAILED"
+    | "SKIPPED_NO_EMAIL_SERVER"
+    | "SKIPPED_USER_PREFERENCE";
   errorMessage?: string;
   dispatchId?: string;
   inboxId?: string;
@@ -77,20 +82,34 @@ export async function dispatchNotification(input: DispatchInput): Promise<Dispat
     };
   }
 
-  const sendResult = input.toEmail
-    ? await sendNotificationEmail({
-        to: input.toEmail,
-        subject: input.subject,
-        text: input.text,
-      })
-    : { status: "SKIPPED_NO_EMAIL_SERVER" as const };
+  // Post-PRD item 45 — opt-outable kinds (weekly_digest,
+  // sign_in_new_device) honour the User's email-mute preference. The
+  // in-app inbox row is still written so the User can find the
+  // notification in their inbox; only the SMTP send is skipped.
+  // Mandatory kinds (breach, audit-chain, subprocessor, escalations,
+  // cron-stalled, totp-reset) short-circuit `isOptOutable` and always
+  // send.
+  const optedOut =
+    isOptOutable(input.kind) && !(await getEmailEnabled(input.membershipId, input.kind));
 
-  const status =
+  const sendResult = optedOut
+    ? { status: "SKIPPED_USER_PREFERENCE" as const }
+    : input.toEmail
+      ? await sendNotificationEmail({
+          to: input.toEmail,
+          subject: input.subject,
+          text: input.text,
+        })
+      : { status: "SKIPPED_NO_EMAIL_SERVER" as const };
+
+  const status: DispatchResult["status"] =
     sendResult.status === "DISPATCHED"
       ? "DISPATCHED"
       : sendResult.status === "FAILED"
         ? "FAILED"
-        : "SKIPPED_NO_EMAIL_SERVER";
+        : sendResult.status === "SKIPPED_USER_PREFERENCE"
+          ? "SKIPPED_USER_PREFERENCE"
+          : "SKIPPED_NO_EMAIL_SERVER";
 
   const errorMessage =
     sendResult.status === "FAILED" ? sendResult.errorMessage : undefined;
@@ -141,9 +160,9 @@ export async function dispatchNotification(input: DispatchInput): Promise<Dispat
   await writeAuditEvent({
     tenantId: input.tenantId,
     eventType:
-      status === "DISPATCHED" || status === "SKIPPED_NO_EMAIL_SERVER"
-        ? "NOTIFICATION_DISPATCHED"
-        : "NOTIFICATION_DISPATCH_FAILED",
+      status === "FAILED"
+        ? "NOTIFICATION_DISPATCH_FAILED"
+        : "NOTIFICATION_DISPATCHED",
     actorMembershipId: null,
     subjectType: "NotificationDispatch",
     subjectId: result.dispatchId,
