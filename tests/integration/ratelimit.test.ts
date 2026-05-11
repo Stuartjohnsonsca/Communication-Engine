@@ -79,11 +79,15 @@ describe("rate limit — fixed-window counter", () => {
   });
 
   it("isolates buckets per identity — different IPs don't share", async () => {
+    // Use unique IPs per run so accumulated buckets from prior test runs
+    // can't push us over the limit before the first call.
+    const ipA = `10.${(Date.now() >> 16) & 0xff}.${(Date.now() >> 8) & 0xff}.${Math.floor(Math.random() * 255)}`;
+    const ipB = `10.${(Date.now() >> 16) & 0xff}.${(Date.now() >> 8) & 0xff}.${Math.floor(Math.random() * 255)}`;
     const a = await rateLimit({
-      identity: ipIdentity("10.0.0.1"), scope: "default", limit: 1, windowSeconds: 60,
+      identity: ipIdentity(ipA), scope: "default", limit: 1, windowSeconds: 60,
     });
     const b = await rateLimit({
-      identity: ipIdentity("10.0.0.2"), scope: "default", limit: 1, windowSeconds: 60,
+      identity: ipIdentity(ipB), scope: "default", limit: 1, windowSeconds: 60,
     });
     expect(a.allowed).toBe(true);
     expect(b.allowed).toBe(true);

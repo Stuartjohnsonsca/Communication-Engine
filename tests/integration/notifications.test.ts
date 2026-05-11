@@ -19,8 +19,15 @@
  *     firm (FCT-visible escalations) using the same definitions the
  *     digest uses.
  */
+import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach } from "vitest";
 import { superDb } from "@/lib/db";
+
+/** Suffix emails to dodge the global `User.email` UNIQUE collision when this
+ *  test file runs against a DB that already has rows from prior test runs. */
+function uniqueEmail(label: string) {
+  return `${label}-${randomUUID().slice(0, 8)}@example.com`;
+}
 import {
   dispatchNotification,
   runWeeklyDigest,
@@ -85,7 +92,7 @@ describe("Notifications — dispatchNotification", () => {
     const t = await createTestTenant();
     const { membership, user } = await createTestUserAndMembership(t.id, {
       role: "FIRM_ADMIN",
-      email: "fa1@example.com",
+      email: uniqueEmail("fa1"),
     });
 
     const r1 = await dispatchNotification({
@@ -149,15 +156,15 @@ describe("Notifications — adherence escalation immediate dispatch", () => {
     const t = await createTestTenant();
     const { membership: sender } = await createTestUserAndMembership(t.id, {
       role: "USER",
-      email: "user1@example.com",
+      email: uniqueEmail("user1"),
     });
     const { membership: fct } = await createTestUserAndMembership(t.id, {
       role: "FCT_MEMBER",
-      email: "fct1@example.com",
+      email: uniqueEmail("fct1"),
     });
     const { membership: admin } = await createTestUserAndMembership(t.id, {
       role: "FIRM_ADMIN",
-      email: "fa1@example.com",
+      email: uniqueEmail("fa1"),
     });
 
     const draft = await makeDraft({
@@ -241,11 +248,11 @@ describe("Notifications — breach dispatch immediate", () => {
     const affected = await createTestTenant();
     const { membership: fa1 } = await createTestUserAndMembership(affected.id, {
       role: "FIRM_ADMIN",
-      email: "afa1@example.com",
+      email: uniqueEmail("afa1"),
     });
     const { membership: fa2 } = await createTestUserAndMembership(affected.id, {
       role: "FIRM_ADMIN",
-      email: "afa2@example.com",
+      email: uniqueEmail("afa2"),
     });
     // FCT does not have breach:notify so should not get the immediate ack ping.
     await createTestUserAndMembership(affected.id, { role: "FCT_MEMBER" });
@@ -290,7 +297,7 @@ describe("Notifications — weekly digest", () => {
     const t = await createTestTenant();
     const { membership: admin, user: adminUser } = await createTestUserAndMembership(t.id, {
       role: "FIRM_ADMIN",
-      email: "fa-digest@example.com",
+      email: uniqueEmail("fa-digest"),
     });
     // Give the admin one overdue action so the digest has content.
     await superDb.action.create({
@@ -342,7 +349,7 @@ describe("Notifications — weekly digest", () => {
     const t = await createTestTenant();
     const { membership: empty } = await createTestUserAndMembership(t.id, {
       role: "USER",
-      email: "empty@example.com",
+      email: uniqueEmail("empty"),
     });
     const week = isoWeekKey(new Date());
     const r = await runWeeklyDigest({ tenantId: t.id, weekKey: week });

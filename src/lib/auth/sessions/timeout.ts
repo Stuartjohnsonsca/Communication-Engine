@@ -72,15 +72,19 @@ export async function resolvePolicyForUser(userId: string): Promise<TimeoutPolic
     },
   });
 
-  let idleLimit = DEFAULT_IDLE_TIMEOUT_MINUTES;
-  let absoluteLimit = DEFAULT_ABSOLUTE_TIMEOUT_MINUTES;
+  // Track the strictest non-null tenant value separately from the platform
+  // default — the default is a FALLBACK when every membership inherits, not
+  // a CEILING that caps tenant-set values. A single tenant configuring
+  // idle=120 should bind to 120, even though 120 > 60-minute default.
+  let idleLimit: number | null = null;
+  let absoluteLimit: number | null = null;
   const idleBinding: string[] = [];
   const absoluteBinding: string[] = [];
 
   for (const m of memberships) {
     const i = m.tenant.sessionIdleTimeoutMinutes;
     if (i !== null && i > 0) {
-      if (i < idleLimit) {
+      if (idleLimit === null || i < idleLimit) {
         idleLimit = i;
         idleBinding.length = 0;
         idleBinding.push(m.tenantId);
@@ -90,7 +94,7 @@ export async function resolvePolicyForUser(userId: string): Promise<TimeoutPolic
     }
     const a = m.tenant.sessionAbsoluteTimeoutMinutes;
     if (a !== null && a > 0) {
-      if (a < absoluteLimit) {
+      if (absoluteLimit === null || a < absoluteLimit) {
         absoluteLimit = a;
         absoluteBinding.length = 0;
         absoluteBinding.push(m.tenantId);
@@ -101,8 +105,8 @@ export async function resolvePolicyForUser(userId: string): Promise<TimeoutPolic
   }
 
   return {
-    idleLimitMinutes: idleLimit,
-    absoluteLimitMinutes: absoluteLimit,
+    idleLimitMinutes: idleLimit ?? DEFAULT_IDLE_TIMEOUT_MINUTES,
+    absoluteLimitMinutes: absoluteLimit ?? DEFAULT_ABSOLUTE_TIMEOUT_MINUTES,
     idleBindingTenantIds: idleBinding,
     absoluteBindingTenantIds: absoluteBinding,
   };

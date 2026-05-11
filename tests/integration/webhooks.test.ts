@@ -393,7 +393,13 @@ describe("webhooks — dispatch fan-out", () => {
       subjectId: "draft-b",
       payload: { tenant: "B" },
     });
-    const aDeliveries = await superDb.webhookDelivery.findMany({ where: { tenantId: a.id } });
+    // Tenant A's wildcard sub legitimately receives its own
+    // WEBHOOK_SUBSCRIPTION_CREATED event from when it was just created — that's
+    // expected. The invariant we're checking is the cross-tenant one: nothing
+    // from B's audit chain leaks into A's delivery queue.
+    const aDeliveries = await superDb.webhookDelivery.findMany({
+      where: { tenantId: a.id, eventType: "DRAFT_SENT_MARKED" },
+    });
     expect(aDeliveries.length).toBe(0);
   });
 
@@ -435,6 +441,16 @@ describe("webhooks — dispatch fan-out", () => {
 });
 
 describe("webhooks — delivery worker", () => {
+  beforeEach(async () => {
+    // The delivery worker drains the global PENDING queue — it has no tenant
+    // filter, so leftover rows from earlier tests (or earlier test files
+    // running against the same DB) would inflate the per-test counts. Clear
+    // the queue + the subscriptions that produced them so each test starts
+    // from a clean state. Audit rows are append-only and stay.
+    await superDb.webhookDelivery.deleteMany({});
+    await superDb.webhookSubscription.deleteMany({});
+  });
+
   it("delivers on 2xx, writes audit, resets failure counter", async () => {
     const tenant = await createTestTenant();
     const { membership } = await createTestUserAndMembership(tenant.id, { role: "FIRM_ADMIN" });
@@ -443,7 +459,10 @@ describe("webhooks — delivery worker", () => {
       actorMembershipId: membership.id,
       name: "ok-receiver",
       url: "http://example.com/ok",
-      eventTypes: ["*"],
+      // Specific event type so the WEBHOOK_SUBSCRIPTION_CREATED audit (which
+      // also fires through enqueueWebhooks) doesn't match this sub itself and
+      // add a stray PENDING delivery the worker would also process.
+      eventTypes: ["DRAFT_SENT_MARKED"],
     });
     // Pre-existing failure count to confirm it's reset on success.
     await superDb.webhookSubscription.update({
@@ -506,7 +525,7 @@ describe("webhooks — delivery worker", () => {
       actorMembershipId: membership.id,
       name: "flaky",
       url: "http://example.com/flaky",
-      eventTypes: ["*"],
+      eventTypes: ["DRAFT_SENT_MARKED"],
     });
     await enqueueWebhooks({
       tenantId: tenant.id,
@@ -544,7 +563,7 @@ describe("webhooks — delivery worker", () => {
       actorMembershipId: membership.id,
       name: "always-down",
       url: "http://example.com/down",
-      eventTypes: ["*"],
+      eventTypes: ["DRAFT_SENT_MARKED"],
     });
     await enqueueWebhooks({
       tenantId: tenant.id,
@@ -638,7 +657,7 @@ describe("webhooks — delivery worker", () => {
       actorMembershipId: membership.id,
       name: "broken",
       url: "http://example.com/broken",
-      eventTypes: ["*"],
+      eventTypes: ["DRAFT_SENT_MARKED"],
     });
     await enqueueWebhooks({
       tenantId: tenant.id,
@@ -674,7 +693,7 @@ describe("webhooks — delivery worker", () => {
       actorMembershipId: membership.id,
       name: "reap",
       url: "http://example.com/reap",
-      eventTypes: ["*"],
+      eventTypes: ["DRAFT_SENT_MARKED"],
     });
     const old = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
     const fresh = new Date();

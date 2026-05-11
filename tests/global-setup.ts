@@ -25,6 +25,12 @@ export default async function setup() {
   // Make tests deterministic — pin the audit hash seed so verify-chain has
   // a stable genesis regardless of host environment.
   process.env.AUDIT_HASH_SEED ??= "acumon-genesis-2026";
+  // tenantDb (`src/lib/db.ts`) consults APP_DB_ROLE and, when set, does
+  // `SET LOCAL ROLE` inside each tenant transaction so RLS evaluates
+  // against a non-superuser context. setup-db.ts creates the matching
+  // Postgres role and grants it to the connecting role. Without this the
+  // rls-isolation tests can't verify isolation (superusers bypass RLS).
+  process.env.APP_DB_ROLE ??= process.env.TEST_APP_DB_ROLE ?? "acumon_app";
 
   // Smoke-check that the schema is present and RLS is enabled. If migrate
   // deploy hasn't been run, fail fast with a friendlier error than a Prisma

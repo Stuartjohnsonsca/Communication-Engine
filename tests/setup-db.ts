@@ -3,8 +3,17 @@
  *
  * Reads TEST_DATABASE_URL (falling back to DATABASE_URL only if explicitly
  * marked as a test database via TEST_DATABASE_ALLOW_PROD=1 — guard against
- * blowing away a real DB), runs `prisma migrate deploy` against it, then
+ * blowing away a real DB), syncs the schema via `prisma db push`, then
  * applies prisma/rls.sql. Idempotent — safe to re-run.
+ *
+ * Uses `db push` (not `migrate deploy`) because the migration directory
+ * names are not zero-padded — lexicographic sort puts `14_meeting_minutes`
+ * before `6_meetings`, so a fresh-DB `migrate deploy` fails with a missing-
+ * relation error on migration 14 (which references `MeetingParticipant`
+ * created in migration 6). `db push` reflects only the current
+ * `schema.prisma` state, which is what tests care about. Production
+ * Railway is unaffected — it migrates incrementally, and `_prisma_migrations`
+ * already records every historical migration in its applied order.
  *
  * Used by:
  *   - CI: invoked from .github/workflows/ci.yml after the postgres service
@@ -38,8 +47,8 @@ async function main() {
     process.exit(2);
   }
 
-  console.log("Running prisma migrate deploy against TEST_DATABASE_URL...");
-  execSync("npx prisma migrate deploy", {
+  console.log("Syncing schema to TEST_DATABASE_URL via prisma db push...");
+  execSync("npx prisma db push --skip-generate --accept-data-loss", {
     stdio: "inherit",
     env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
   });
@@ -50,6 +59,35 @@ async function main() {
   await client.connect();
   try {
     await client.query(sql);
+
+    // Create a non-superuser app role so RLS actually fires when tests use
+    // `tenantDb` (which does `SET LOCAL ROLE <APP_DB_ROLE>` inside its
+    // transaction when the env var is set). Postgres superusers ALWAYS
+    // bypass RLS — even with `FORCE ROW LEVEL SECURITY` — so without this
+    // step the rls-isolation tests can't actually verify that the policy
+    // blocks anything. The role is granted to the connecting role so the
+    // SET LOCAL ROLE inside Prisma's transaction succeeds.
+    const appRole = process.env.TEST_APP_DB_ROLE ?? "acumon_app";
+    const me = (await client.query<{ current_user: string }>(`SELECT current_user`))
+      .rows[0]!.current_user;
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${appRole}') THEN
+          CREATE ROLE ${appRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
+        END IF;
+      END $$;
+
+      GRANT USAGE ON SCHEMA public TO ${appRole};
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${appRole};
+      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${appRole};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${appRole};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT USAGE, SELECT ON SEQUENCES TO ${appRole};
+      GRANT ${appRole} TO "${me}";
+    `);
+    console.log(`Granted ${appRole} role (NOSUPERUSER NOBYPASSRLS) to current user.`);
   } finally {
     await client.end();
   }

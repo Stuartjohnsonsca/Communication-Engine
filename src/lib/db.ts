@@ -14,6 +14,21 @@ export const prisma =
 if (process.env.NODE_ENV !== "production") global.__prisma = prisma;
 
 /**
+ * Optional env-driven role switch inside each tenant transaction. When set,
+ * the transaction `SET LOCAL ROLE`s to this role so RLS evaluates against a
+ * non-superuser context — Postgres superusers always bypass RLS, even with
+ * `FORCE ROW LEVEL SECURITY`. Used by the integration test suite (where the
+ * connecting role is usually a superuser); production typically connects as
+ * a non-superuser app role already and can leave this unset. Sanitised to
+ * a strict Postgres-identifier shape so the raw SQL splice is safe.
+ */
+const TENANT_DB_ROLE = (() => {
+  const raw = process.env.APP_DB_ROLE;
+  if (!raw) return null;
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(raw) ? raw : null;
+})();
+
+/**
  * Tenant-scoped Prisma client. Every query runs inside an interactive
  * transaction that first sets the `app.current_tenant` Postgres GUC,
  * which the RLS policies (see prisma/rls.sql) read.
@@ -31,15 +46,34 @@ export function tenantDb(tenantId: string) {
   return prisma.$extends({
     name: "tenant-rls",
     query: {
-      $allOperations: async ({ args, query }) => {
+      // `query(args)` (the default forward) re-issues the call on the
+      // original prisma client and does NOT pick up the surrounding
+      // `$transaction` context — so neither `set_config('app.current_tenant')`
+      // nor `SET LOCAL ROLE` would apply to the actual query. We forward
+      // through `tx[model][operation](args)` so the tx-local settings are
+      // in scope when the SQL hits the DB. Verified empirically:
+      //   - query(args) returned all rows (no role / config applied)
+      //   - tx.model.operation(args) returned rows scoped to the policy.
+      $allOperations: async ({ args, model, operation }) => {
         return prisma.$transaction(async (tx) => {
           await tx.$executeRawUnsafe(
             `SELECT set_config('app.current_tenant', $1, true)`,
             tenantId,
           );
-          // The extended query function expects to receive the original tx
-          // via the `$transaction` boundary; Prisma wires this automatically.
-          return query(args);
+          if (TENANT_DB_ROLE) {
+            await tx.$executeRawUnsafe(`SET LOCAL ROLE "${TENANT_DB_ROLE}"`);
+          }
+          if (!model) {
+            // Top-level operations (`$queryRaw`, `$executeRaw`, etc.) — call
+            // straight on tx by name.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            return (tx as any)[operation](args);
+          }
+          const delegateKey = model.charAt(0).toLowerCase() + model.slice(1);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const delegate = (tx as any)[delegateKey];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (delegate as any)[operation](args);
         });
       },
     },

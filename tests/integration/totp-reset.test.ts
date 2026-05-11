@@ -78,8 +78,12 @@ describe("admin totp reset :: happy path", () => {
   it("writes TOTP_RESET_BY_ADMIN audit with target id + email + wasEnrolled=true", async () => {
     const tenant = await createTestTenant();
     const { membership: actorM } = await createTestUserAndMembership(tenant.id, { role: "FIRM_ADMIN" });
+    // Email uniqueness is a global UNIQUE on User.email — collisions
+    // accumulate across runs against a shared test DB, so suffix it and
+    // assert against the same suffixed value rather than a literal.
+    const targetEmail = `locked-out-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
     const { user: target } = await createTestUserAndMembership(tenant.id, {
-      email: "locked-out@example.com",
+      email: targetEmail,
     });
     await enrollWithRecovery(target.id);
 
@@ -99,7 +103,7 @@ describe("admin totp reset :: happy path", () => {
     expect(audit!.subjectType).toBe("User");
     const payload = audit!.payload as Record<string, unknown>;
     expect(payload.targetUserId).toBe(target.id);
-    expect(payload.targetUserEmail).toBe("locked-out@example.com");
+    expect(payload.targetUserEmail).toBe(targetEmail);
     expect(payload.wasEnrolled).toBe(true);
   });
 
