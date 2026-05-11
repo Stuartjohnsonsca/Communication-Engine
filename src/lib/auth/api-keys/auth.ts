@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { reportError } from "@/lib/observability";
+import { labelForRequest, reportError, timeRequest } from "@/lib/observability";
 import { clientIpFromHeaders, rateLimit, tooManyRequestsResponse } from "@/lib/ratelimit";
 import { parseApiKey } from "./secret";
 import { authenticateApiKey, recordAuthFailure, type AuthenticatedApiKey } from "./store";
@@ -61,71 +61,98 @@ export type WithApiKeyOptions = {
 export function withApiKey(opts: WithApiKeyOptions, handler: ApiKeyHandler) {
   return async function authenticatedHandler(req: NextRequest): Promise<Response> {
     const ip = clientIpFromHeaders(req.headers);
-
-    // Per-IP rate-limit BEFORE auth so an attacker probing the prefix
-    // space can't blow up the audit chain with one row per failed
-    // attempt.
-    const rl = await rateLimit({
-      identity: { kind: "ip", value: ip },
-      scope: "api-key-auth",
-      limit: opts.ipRateLimit?.limit ?? 50,
-      windowSeconds: opts.ipRateLimit?.windowSeconds ?? 60,
-    });
-    if (!rl.allowed) return tooManyRequestsResponse(rl);
-
-    const header = req.headers.get("authorization");
-    const parsed = parseApiKey(header);
-    if (!parsed) return unauthorised("authorisation header missing or malformed");
-
-    let auth: AuthenticatedApiKey | null = null;
-    try {
-      auth = await authenticateApiKey({ prefix: parsed.prefix, secret: parsed.secret, presentedIp: ip });
-    } catch (err) {
-      reportError(err, { route: "api-keys/auth" }, "api-key auth lookup failed");
-      return unauthorised("internal authentication error");
-    }
-    if (!auth) {
-      // We don't know the tenant yet (the prefix didn't resolve OR the
-      // hash didn't match OR the creator went inactive). Skip the
-      // audit write — there's no tenant chain to write to. The
-      // per-IP rate limit above provides the brute-force defence.
-      return unauthorised("invalid api key");
-    }
-
-    // Post-PRD hardening item 17 — tenant IP allowlist. Evaluated
-    // AFTER authentication so we know the tenant id without trusting
-    // a request-side hint. A denial here writes IP_ALLOWLIST_DENIED
-    // to the tenant chain (throttled) and returns 403 — the
-    // integrator's IP isn't the kind of thing they can fix via
-    // retrying with different headers, so 403 conveys "intent
-    // received, policy rejects" better than 401 would.
-    const ipDecision = await evaluateIpAllowlist({
-      tenantId: auth.membership.tenantId,
-      ip,
-      surface: "api-key",
-      apiKeyId: auth.apiKey.id,
-    });
-    if (!ipDecision.allowed) {
-      return forbidden(ipDecision.reason ?? "source IP not in tenant allowlist");
-    }
-
-    if (!scopeAllows(auth.apiKey.scopes, auth.membership.role, opts.scope)) {
-      // Authenticated but the wrong scope — audit on the resolved
-      // tenant. Useful incident-response signal: a key trying to
-      // access a surface it isn't scoped for.
-      try {
-        await recordAuthFailure({
-          tenantId: auth.membership.tenantId,
-          prefix: auth.apiKey.prefix,
-          reason: "scope-denied",
-          ip,
-        });
-      } catch (err) {
-        reportError(err, { route: "api-keys/auth-failure" });
-      }
-      return forbidden(`scope '${opts.scope}' not granted by this api key`);
-    }
-
-    return handler(req, { ...auth, ip });
+    // Slow-request observability (post-PRD hardening). Every /api/v1/*
+    // request goes through this wrapper, so adding timing here gives
+    // operator-visible duration signal across the entire third-party
+    // surface for free. We stash the final response in a closure-local
+    // so the timing helper can read its status code at the very end.
+    const timingLabel = labelForRequest(req);
+    let captured: Response | null = null;
+    return timeRequest(
+      {
+        label: timingLabel.label,
+        method: timingLabel.method,
+        pathname: timingLabel.pathname,
+        extra: { scope: opts.scope, ip },
+      },
+      async () => {
+        captured = await runAuthenticatedHandler(req, ip, opts, handler);
+        return captured;
+      },
+      { statusCode: () => captured?.status },
+    );
   };
+}
+
+async function runAuthenticatedHandler(
+  req: NextRequest,
+  ip: string,
+  opts: WithApiKeyOptions,
+  handler: ApiKeyHandler,
+): Promise<Response> {
+  // Per-IP rate-limit BEFORE auth so an attacker probing the prefix
+  // space can't blow up the audit chain with one row per failed
+  // attempt.
+  const rl = await rateLimit({
+    identity: { kind: "ip", value: ip },
+    scope: "api-key-auth",
+    limit: opts.ipRateLimit?.limit ?? 50,
+    windowSeconds: opts.ipRateLimit?.windowSeconds ?? 60,
+  });
+  if (!rl.allowed) return tooManyRequestsResponse(rl);
+
+  const header = req.headers.get("authorization");
+  const parsed = parseApiKey(header);
+  if (!parsed) return unauthorised("authorisation header missing or malformed");
+
+  let auth: AuthenticatedApiKey | null = null;
+  try {
+    auth = await authenticateApiKey({ prefix: parsed.prefix, secret: parsed.secret, presentedIp: ip });
+  } catch (err) {
+    reportError(err, { route: "api-keys/auth" }, "api-key auth lookup failed");
+    return unauthorised("internal authentication error");
+  }
+  if (!auth) {
+    // We don't know the tenant yet (the prefix didn't resolve OR the
+    // hash didn't match OR the creator went inactive). Skip the
+    // audit write — there's no tenant chain to write to. The
+    // per-IP rate limit above provides the brute-force defence.
+    return unauthorised("invalid api key");
+  }
+
+  // Post-PRD hardening item 17 — tenant IP allowlist. Evaluated
+  // AFTER authentication so we know the tenant id without trusting
+  // a request-side hint. A denial here writes IP_ALLOWLIST_DENIED
+  // to the tenant chain (throttled) and returns 403 — the
+  // integrator's IP isn't the kind of thing they can fix via
+  // retrying with different headers, so 403 conveys "intent
+  // received, policy rejects" better than 401 would.
+  const ipDecision = await evaluateIpAllowlist({
+    tenantId: auth.membership.tenantId,
+    ip,
+    surface: "api-key",
+    apiKeyId: auth.apiKey.id,
+  });
+  if (!ipDecision.allowed) {
+    return forbidden(ipDecision.reason ?? "source IP not in tenant allowlist");
+  }
+
+  if (!scopeAllows(auth.apiKey.scopes, auth.membership.role, opts.scope)) {
+    // Authenticated but the wrong scope — audit on the resolved
+    // tenant. Useful incident-response signal: a key trying to
+    // access a surface it isn't scoped for.
+    try {
+      await recordAuthFailure({
+        tenantId: auth.membership.tenantId,
+        prefix: auth.apiKey.prefix,
+        reason: "scope-denied",
+        ip,
+      });
+    } catch (err) {
+      reportError(err, { route: "api-keys/auth-failure" });
+    }
+    return forbidden(`scope '${opts.scope}' not granted by this api key`);
+  }
+
+  return handler(req, { ...auth, ip });
 }
