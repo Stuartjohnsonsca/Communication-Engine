@@ -236,6 +236,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "auth:read-own-sessions":      ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "auth:revoke-own-sessions":    ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "tenant:revoke-member-sessions": ["FIRM_ADMIN"],
+  // Post-PRD hardening item 15 — idle + absolute session timeout. The Firm
+  // Administrator configures the per-tenant thresholds; the layout-level
+  // and cron-level enforcers read those thresholds (null = inherit platform
+  // default).
+  "tenant:configure-session-timeout": ["FIRM_ADMIN"],
 
   // Post-PRD hardening item 14 — outbound webhook delivery. The Firm
   // Administrator subscribes HTTPS receivers to audit-event types and

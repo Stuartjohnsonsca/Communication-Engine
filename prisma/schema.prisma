@@ -286,6 +286,7 @@ enum AuditEventType {
   WEBHOOK_DELIVERY_FAILED
   WEBHOOK_DEAD_LETTERED
   WEBHOOK_REPLAYED
+  TENANT_SESSION_TIMEOUT_CHANGED
 }
 
 enum BillingPeriodStatus {
@@ -717,6 +718,14 @@ model Tenant {
   /// the flag governs whether enrollment is *required*, not whether it is
   /// *permitted*.
   requireTotp                          Boolean      @default(false)
+  /// Post-PRD hardening item 15 — session idle/absolute timeouts. Null on
+  /// either column means "inherit the platform default" (60 minutes idle,
+  /// 1440 minutes / 24h absolute). When a User has memberships across
+  /// multiple tenants, the STRICTEST tenant's threshold wins for each
+  /// dimension — sessions are per-User globally so the conservative choice
+  /// is to take the smallest non-null configured value.
+  sessionIdleTimeoutMinutes            Int?
+  sessionAbsoluteTimeoutMinutes        Int?
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 

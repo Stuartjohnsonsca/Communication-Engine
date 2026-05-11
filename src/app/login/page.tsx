@@ -1,19 +1,40 @@
 import { cookies } from "next/headers";
 import { signIn } from "@/lib/auth";
 
-export default function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+export default function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; timeout?: string }>;
+}) {
   return <LoginInner searchParams={searchParams} />;
 }
 
-async function LoginInner({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+async function LoginInner({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; timeout?: string }>;
+}) {
   const sp = await searchParams;
   const hasEmailServer = !!process.env.EMAIL_SERVER && !!process.env.EMAIL_FROM;
+  const timeoutReason =
+    sp.timeout === "idle-timeout" || sp.timeout === "absolute-timeout"
+      ? sp.timeout
+      : null;
   return (
     <main className="mx-auto max-w-md p-8">
       <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
       <p className="mt-2 text-sm text-ink/70">
         We&apos;ll email you a 6-digit code. Enter it on the next page. No password.
       </p>
+
+      {timeoutReason && (
+        <p className="mt-4 rounded bg-amber-50 p-3 text-sm text-amber-800">
+          You were signed out automatically:{" "}
+          {timeoutReason === "idle-timeout"
+            ? "your session was inactive for too long."
+            : "your session reached its maximum allowed duration."}
+        </p>
+      )}
 
       {sp.error && (
         <p className="mt-4 rounded bg-red-50 p-3 text-sm text-red-700">

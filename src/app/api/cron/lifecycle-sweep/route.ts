@@ -3,6 +3,7 @@ import { runLifecycleSweep } from "@/lib/lifecycle";
 import { expireOverdueTias } from "@/lib/compliance/cross-border";
 import { reapStaleRateLimitBuckets, rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 import { reapOldDeliveries } from "@/lib/webhooks";
+import { sweepExpiredSessions } from "@/lib/auth/sessions";
 
 /**
  * PRD §14.3 lifecycle sweep. Idempotent — only acts on rows whose grace
@@ -41,12 +42,20 @@ export async function GET(req: Request) {
   // lettered rows older than 90 days. Receivers shouldn't depend on the
   // delivery log for primary state; the audit chain is the source of truth.
   const webhooks = await reapOldDeliveries();
+  // Post-PRD hardening item 15 — auto-revoke sessions that breached the
+  // per-tenant idle or absolute timeout. The layout-level enforcer catches
+  // returning Users on their next page load; this sweep catches sessions
+  // whose User never came back (laptop closed, browser tab abandoned)
+  // so the row is genuinely revoked rather than just rejected next visit.
+  const sessions = await sweepExpiredSessions();
   return NextResponse.json({
     ok: true,
     ...result,
     tiaExpired: tia.expired,
     rateLimitBucketsReaped: ratelimit.deleted,
     webhookDeliveriesReaped: webhooks.deleted,
+    sessionsTimedOut: sessions.revoked,
+    sessionsTimedOutByReason: sessions.reasons,
   });
 }
 

@@ -9,6 +9,12 @@ import {
   revokeSession,
   revokeAllSessionsForUser,
   maskIp,
+  DEFAULT_IDLE_TIMEOUT_MINUTES,
+  DEFAULT_ABSOLUTE_TIMEOUT_MINUTES,
+  MIN_IDLE_TIMEOUT_MINUTES,
+  MAX_IDLE_TIMEOUT_MINUTES,
+  MIN_ABSOLUTE_TIMEOUT_MINUTES,
+  MAX_ABSOLUTE_TIMEOUT_MINUTES,
 } from "@/lib/auth/sessions";
 
 /**
@@ -104,6 +110,61 @@ export default async function SecurityPage({
     revalidatePath(`/${tenantSlug}/admin/security`);
   }
 
+  async function updateTimeoutsAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    requirePermission(inner.membership.role, "tenant:configure-session-timeout");
+    function parse(raw: FormDataEntryValue | null): number | null {
+      if (typeof raw !== "string") return null;
+      const trimmed = raw.trim();
+      if (trimmed === "") return null;
+      const n = Number.parseInt(trimmed, 10);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return n;
+    }
+    const rawIdle = parse(formData.get("sessionIdleTimeoutMinutes"));
+    const rawAbs = parse(formData.get("sessionAbsoluteTimeoutMinutes"));
+    const idle =
+      rawIdle === null
+        ? null
+        : Math.min(MAX_IDLE_TIMEOUT_MINUTES, Math.max(MIN_IDLE_TIMEOUT_MINUTES, rawIdle));
+    const absolute =
+      rawAbs === null
+        ? null
+        : Math.min(
+            MAX_ABSOLUTE_TIMEOUT_MINUTES,
+            Math.max(MIN_ABSOLUTE_TIMEOUT_MINUTES, rawAbs),
+          );
+    if (idle !== null && absolute !== null && idle > absolute) {
+      throw new Error("idle timeout cannot exceed absolute timeout");
+    }
+    const before = {
+      idle: inner.tenant.sessionIdleTimeoutMinutes,
+      absolute: inner.tenant.sessionAbsoluteTimeoutMinutes,
+    };
+    if (before.idle === idle && before.absolute === absolute) return;
+    await superDb.tenant.update({
+      where: { id: inner.tenant.id },
+      data: {
+        sessionIdleTimeoutMinutes: idle,
+        sessionAbsoluteTimeoutMinutes: absolute,
+      },
+    });
+    await writeAuditEvent({
+      tenantId: inner.tenant.id,
+      eventType: "TENANT_SESSION_TIMEOUT_CHANGED",
+      actorMembershipId: inner.membership.id,
+      subjectType: "Tenant",
+      subjectId: inner.tenant.id,
+      payload: {
+        before,
+        after: { idle, absolute },
+      },
+    });
+    revalidatePath(`/${tenantSlug}/admin/security`);
+  }
+
   async function toggleAction(formData: FormData) {
     "use server";
     const inner = await getTenantContext(tenantSlug);
@@ -138,6 +199,59 @@ export default async function SecurityPage({
           the second factor is enforced as a step-up on entry to the tenant.
         </p>
       </div>
+
+      <form action={updateTimeoutsAction} className="card space-y-3">
+        <h2 className="text-base font-medium">Session timeouts</h2>
+        <p className="text-xs text-ink/60">
+          Sessions are auto-revoked when they exceed either threshold. Idle timeout
+          measures the gap since the last authenticated request from the session;
+          absolute timeout measures the age of the session since sign-in regardless
+          of activity. Leave a field blank to inherit the platform default ({DEFAULT_IDLE_TIMEOUT_MINUTES}{" "}
+          minutes idle, {DEFAULT_ABSOLUTE_TIMEOUT_MINUTES} minutes / 24h absolute).
+          Cross-tenant Users inherit the strictest active membership's threshold.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-sm">
+            <span className="block text-xs uppercase tracking-wider text-ink/50">
+              Idle timeout (minutes)
+            </span>
+            <input
+              name="sessionIdleTimeoutMinutes"
+              type="number"
+              min={MIN_IDLE_TIMEOUT_MINUTES}
+              max={MAX_IDLE_TIMEOUT_MINUTES}
+              defaultValue={ctx.tenant.sessionIdleTimeoutMinutes ?? ""}
+              placeholder={`${DEFAULT_IDLE_TIMEOUT_MINUTES} (default)`}
+              className="mt-1 w-full rounded border border-ink/15 px-2 py-1 text-sm"
+            />
+            <span className="text-[11px] text-ink/50">
+              {MIN_IDLE_TIMEOUT_MINUTES}–{MAX_IDLE_TIMEOUT_MINUTES} minutes
+            </span>
+          </label>
+          <label className="text-sm">
+            <span className="block text-xs uppercase tracking-wider text-ink/50">
+              Absolute timeout (minutes)
+            </span>
+            <input
+              name="sessionAbsoluteTimeoutMinutes"
+              type="number"
+              min={MIN_ABSOLUTE_TIMEOUT_MINUTES}
+              max={MAX_ABSOLUTE_TIMEOUT_MINUTES}
+              defaultValue={ctx.tenant.sessionAbsoluteTimeoutMinutes ?? ""}
+              placeholder={`${DEFAULT_ABSOLUTE_TIMEOUT_MINUTES} (default)`}
+              className="mt-1 w-full rounded border border-ink/15 px-2 py-1 text-sm"
+            />
+            <span className="text-[11px] text-ink/50">
+              {MIN_ABSOLUTE_TIMEOUT_MINUTES}–{MAX_ABSOLUTE_TIMEOUT_MINUTES} minutes
+            </span>
+          </label>
+        </div>
+        <div className="flex justify-end">
+          <button type="submit" className="btn btn-primary text-sm">
+            Save timeouts
+          </button>
+        </div>
+      </form>
 
       <form action={toggleAction} className="card space-y-3">
         <h2 className="text-base font-medium">Two-factor authentication</h2>

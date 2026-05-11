@@ -10,7 +10,12 @@ import { NavShell } from "@/components/NavShell";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { getT, resolveLocale } from "@/lib/i18n";
 import { evaluateTotpGate, resolveCurrentSessionId } from "@/lib/auth/totp";
-import { touchSession, observeSessionMetadata, ipFromHeaders } from "@/lib/auth/sessions";
+import {
+  touchSession,
+  observeSessionMetadata,
+  ipFromHeaders,
+  enforceSessionTimeout,
+} from "@/lib/auth/sessions";
 
 export default async function TenantLayout({
   children,
@@ -36,6 +41,15 @@ export default async function TenantLayout({
   // 1/min for lastSeenAt; first-observation-wins for UA/IP) so the write
   // rate stays bounded even on hot tenant pages.
   if (sessionId) {
+    // Post-PRD hardening item 15 — idle/absolute session timeout. Evaluate
+    // BEFORE touching `lastSeenAt`, otherwise the touch would reset the
+    // idle window using THIS request's arrival time and a User returning
+    // after 65 minutes idle would pass the gate. Evaluate using the
+    // pre-touch lastSeenAt, then touch only if not expired.
+    const timeout = await enforceSessionTimeout(sessionId);
+    if (timeout.expired) {
+      redirect(`/login?timeout=${timeout.reason}`);
+    }
     await Promise.all([
       touchSession(sessionId),
       observeSessionMetadata(sessionId, h.get("user-agent"), ipFromHeaders(h)),
