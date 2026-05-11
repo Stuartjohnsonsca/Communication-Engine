@@ -3,17 +3,9 @@
  *
  * Reads TEST_DATABASE_URL (falling back to DATABASE_URL only if explicitly
  * marked as a test database via TEST_DATABASE_ALLOW_PROD=1 — guard against
- * blowing away a real DB), syncs the schema via `prisma db push`, then
- * applies prisma/rls.sql. Idempotent — safe to re-run.
- *
- * Uses `db push` (not `migrate deploy`) because the migration directory
- * names are not zero-padded — lexicographic sort puts `14_meeting_minutes`
- * before `6_meetings`, so a fresh-DB `migrate deploy` fails with a missing-
- * relation error on migration 14 (which references `MeetingParticipant`
- * created in migration 6). `db push` reflects only the current
- * `schema.prisma` state, which is what tests care about. Production
- * Railway is unaffected — it migrates incrementally, and `_prisma_migrations`
- * already records every historical migration in its applied order.
+ * blowing away a real DB), runs `prisma migrate deploy` (zero-padded
+ * directories sort numerically so the full sequence applies cleanly on a
+ * fresh DB), then applies prisma/rls.sql. Idempotent — safe to re-run.
  *
  * Used by:
  *   - CI: invoked from .github/workflows/ci.yml after the postgres service
@@ -47,8 +39,8 @@ async function main() {
     process.exit(2);
   }
 
-  console.log("Syncing schema to TEST_DATABASE_URL via prisma db push...");
-  execSync("npx prisma db push --skip-generate --accept-data-loss", {
+  console.log("Applying migrations to TEST_DATABASE_URL via prisma migrate deploy...");
+  execSync("npx prisma migrate deploy", {
     stdio: "inherit",
     env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
   });

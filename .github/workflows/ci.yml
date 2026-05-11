@@ -25,6 +25,7 @@ jobs:
       - run: npx prisma format --check || (echo "Prisma schema needs formatting" && exit 1)
       - run: npm run typecheck
       - run: npm run check:tenant-scoping
+      - run: npm run check:migration-prefixes
 
   integration-tests:
     runs-on: ubuntu-latest
