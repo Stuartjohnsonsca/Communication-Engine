@@ -147,6 +147,25 @@ export default async function StatusPage() {
         </ul>
       </section>
 
+      <section className="card space-y-2 border-emerald-200 bg-emerald-50/30">
+        <h2 className="text-base font-medium">Security disclosure</h2>
+        <p className="text-sm text-ink/70">
+          Found a vulnerability? Email <strong>security@acumon.com</strong>. Our coordinated
+          disclosure policy and what to expect from us are documented in{" "}
+          <a
+            href="https://github.com/Stuartjohnsonsca/Communication-Engine/blob/main/SECURITY.md"
+            className="underline decoration-dotted"
+          >
+            SECURITY.md
+          </a>
+          ; a machine-readable RFC 9116 record is at{" "}
+          <a href="/.well-known/security.txt" className="underline decoration-dotted">
+            /.well-known/security.txt
+          </a>
+          .
+        </p>
+      </section>
+
       <section className="card text-xs text-ink/60">
         Need more detail than this surface provides? Authenticated tenants see per-tenant
         breakdowns inside their <code className="rounded bg-ink/5 px-1">/sla</code>,{" "}

@@ -85,6 +85,15 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // /.well-known/security.txt (RFC 9116) — Next.js App Router doesn't serve
+  // dot-prefixed folders as routes, so we rewrite the canonical URL to a
+  // dynamic route handler that re-stamps the `Expires:` field within the
+  // spec's 1-year ceiling on each render.
+  async rewrites() {
+    return [
+      { source: "/.well-known/security.txt", destination: "/api/security-txt" },
+    ];
+  },
 };
 
 export default nextConfig;

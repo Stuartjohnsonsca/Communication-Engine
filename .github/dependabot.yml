@@ -1,0 +1,48 @@
+# Dependabot configuration (post-PRD hardening item 25).
+#
+# Weekly checks across the npm + GitHub Actions ecosystems. Production
+# vulnerabilities are also caught by the CI `audit` job — this opens the
+# PRs that turn that signal into a merge candidate.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      # Type definitions are noisy — roll them into one PR per week so
+      # the queue stays focused on the substantive bumps.
+      types:
+        patterns:
+          - "@types/*"
+      prisma:
+        patterns:
+          - "prisma"
+          - "@prisma/*"
+      next:
+        patterns:
+          - "next"
+          - "eslint-config-next"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 3
+    labels:
+      - "ci"

@@ -59,6 +59,42 @@ jobs:
       - name: Run integration tests
         run: npm test
 
+  audit:
+    # Production-dependency vulnerability scan. Non-blocking initially so
+    # an upstream advisory landing on a Friday afternoon doesn't wedge
+    # the release flow — Dependabot opens the remediation PR; the audit
+    # job is the early-warning signal alongside it. Tighten to blocking
+    # once the noise floor is understood.
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: npm audit (production deps, high severity)
+        run: |
+          npm audit --omit=dev --audit-level=high --json > audit-report.json || true
+          node -e "
+            const r = require('./audit-report.json');
+            const v = (r.metadata && r.metadata.vulnerabilities) || {};
+            const counts = ['info','low','moderate','high','critical']
+              .map(k => k+': '+(v[k]||0)).join(' · ');
+            console.log('Production-dependency advisories — '+counts);
+            const high = (v.high||0)+(v.critical||0);
+            if (high > 0) {
+              console.log('::warning::High/critical vulnerabilities present in production dependencies. See audit-report.json artifact.');
+            }
+          "
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: audit-report.json
+          retention-days: 30
+
   evals:
     # AI eval harness — drift detection per PRD §17 mitigation for
     # "judge inconsistency" risk. Non-blocking by design (continue-on-error)
