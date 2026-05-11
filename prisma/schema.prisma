@@ -186,6 +186,13 @@ enum AuditEventType {
   USER_LEAVER_REVERSED
   MEMBERSHIP_SUSPENDED_AFTER_GRACE
   MEMBERSHIP_ANONYMISED
+  /// Post-PRD hardening — GDPR Art. 17 fulfillment. The User row is
+  /// pseudonymised (email → `erased-<id>@erased.invalid`, name/image
+  /// nulled), every Membership of this user across every tenant flips to
+  /// ANONYMISED, sessions revoked, TOTP wiped, OAuth tokens deleted. The
+  /// audit event lands on every affected tenant's chain so each Firm
+  /// Administrator sees the action against their own data.
+  USER_ERASED
   UCG_FROZEN
   UCG_ANONYMISED
   BILLING_PLAN_UPDATED

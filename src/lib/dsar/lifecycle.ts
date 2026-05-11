@@ -1,5 +1,7 @@
 import { superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
+import { eraseUser, type EraseUserResult, UserErasureError } from "./erasure";
+import { reportError } from "@/lib/observability";
 
 /**
  * DSAR open/fulfil lifecycle (PRD §12.4).
@@ -79,7 +81,14 @@ export type FulfillDsarInput = {
   notes?: string | null;
 };
 
-export async function fulfillDsar(input: FulfillDsarInput) {
+export type FulfillDsarOutcome = {
+  request: Awaited<ReturnType<typeof superDb.dSARequest.update>>;
+  /** Populated when the DSAR was kind=ERASE + subjectType=USER and
+   *  fulfilment triggered cross-tenant pseudonymisation. */
+  erasure: EraseUserResult | null;
+};
+
+export async function fulfillDsar(input: FulfillDsarInput): Promise<FulfillDsarOutcome> {
   const existing = await superDb.dSARequest.findFirst({
     where: { id: input.dsarId, tenantId: input.tenantId },
   });
@@ -87,6 +96,50 @@ export async function fulfillDsar(input: FulfillDsarInput) {
   if (existing.fulfilledAt) throw new Error("DSAR: already fulfilled");
 
   const fulfilledAt = new Date();
+
+  // Erase-side execution runs BEFORE the DSARequest row flips to
+  // FULFILLED. Two reasons: (a) if the User can't be resolved (typo in
+  // subjectIdent, account already removed by some other path), surfacing
+  // the error before stamping FULFILLED lets the operator decide what to
+  // do; (b) the audit chain reads cleaner when USER_ERASED lands before
+  // DSAR_FULFILLED — the cause precedes its closure event. REJECT
+  // outcomes skip the erasure (the operator decided not to act).
+  let erasure: EraseUserResult | null = null;
+  if (
+    input.outcome === "FULFILLED" &&
+    existing.kind === "ERASE" &&
+    existing.subjectType === "USER"
+  ) {
+    const user = await superDb.user.findFirst({
+      where: { email: existing.subjectIdent.trim().toLowerCase() },
+    });
+    if (!user) {
+      throw new UserErasureError(
+        "user-not-found",
+        `DSAR fulfilment: User with email ${existing.subjectIdent} not found`,
+      );
+    }
+    try {
+      erasure = await eraseUser({
+        userId: user.id,
+        requestingTenantId: input.tenantId,
+        actorMembershipId: input.actorMembershipId,
+        dsarRequestId: existing.id,
+        reason: input.notes ?? null,
+      });
+    } catch (err) {
+      // Erasure is the load-bearing side-effect; if it fails, refuse to
+      // stamp FULFILLED so the operator can investigate without a
+      // misleading "we did it" audit row.
+      reportError(err, {
+        route: "dsar/fulfill",
+        tenantId: input.tenantId,
+        extra: { dsarId: existing.id },
+      });
+      throw err;
+    }
+  }
+
   const updated = await superDb.dSARequest.update({
     where: { id: existing.id },
     data: {
@@ -113,10 +166,22 @@ export async function fulfillDsar(input: FulfillDsarInput) {
       withinStandard:
         fulfilledAt.getTime() - existing.openedAt.getTime() <=
         STANDARD_TURNAROUND_DAYS * 24 * 60 * 60 * 1000,
+      erasure: erasure
+        ? {
+            userId: erasure.userId,
+            alreadyErased: erasure.alreadyErased,
+            tenantIdsAffected: erasure.tenantIdsAffected,
+            membershipsAnonymised: erasure.membershipsAnonymised,
+            ucgsAnonymised: erasure.ucgsAnonymised,
+            sessionsRevoked: erasure.sessionsRevoked,
+            channelAuthsDeleted: erasure.channelAuthsDeleted,
+            totpWiped: erasure.totpWiped,
+          }
+        : null,
     },
   });
 
-  return updated;
+  return { request: updated, erasure };
 }
 
 export type DsarSlaBadge =

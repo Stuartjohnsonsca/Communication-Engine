@@ -354,7 +354,7 @@ export async function reverseLeaver(input: ReverseLeaverInput) {
 
 // ─── Sweep / time-based transitions ────────────────────────────────────────
 
-async function anonymiseUcgsFor(tenantId: string, membershipId: string) {
+export async function anonymiseUcgsFor(tenantId: string, membershipId: string) {
   const ucgs = await superDb.userCultureGuide.findMany({
     where: { tenantId, membershipId, anonymisedAt: null },
     select: { id: true },
