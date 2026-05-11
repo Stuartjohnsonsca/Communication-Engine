@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { requirePermission } from "@/lib/rbac";
 import { recordTerms } from "@/lib/terms";
+import { safeApiError } from "@/lib/observability";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -60,6 +61,9 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ record });
   } catch (err) {
-    return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 400 });
+    // Typed application errors (carrying `statusCode` in [400, 499])
+    // surface their message; anything else (Prisma internals, etc.)
+    // logs via reportError + returns generic 500.
+    return safeApiError(err, { ctx: { route: "api/terms", tenantId: ctx.tenant.id } });
   }
 }

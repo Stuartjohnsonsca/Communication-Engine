@@ -10,3 +10,5 @@ export {
   labelForRequest,
 } from "./timing";
 export type { TimingFields } from "./timing";
+export { safeApiError } from "./safe-api-error";
+export type { TypedApiError, SafeApiErrorOptions } from "./safe-api-error";
