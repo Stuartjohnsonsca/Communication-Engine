@@ -43,7 +43,10 @@ export type NotificationKind =
   | "totp_reset_by_admin"
   | "sign_in_new_device"
   | "cron_stalled"
-  | "audit_chain_tampered";
+  | "audit_chain_tampered"
+  | "subprocessor_change_announced"
+  | "subprocessor_change_cancelled"
+  | "subprocessor_change_effective";
 
 export type DispatchResult = {
   alreadySent: boolean;

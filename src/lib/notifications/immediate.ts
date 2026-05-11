@@ -375,6 +375,193 @@ export async function dispatchCronStalled(input: {
   return { recipients: recipients.length };
 }
 
+// ─── Sub-processor change notifications (post-PRD hardening item 24) ─────
+
+/**
+ * Fan-out helper: every ACTIVE FIRM_ADMIN of every ACTIVE Client tenant
+ * (excluding Acumon itself — Acumon is the announcer, not a recipient).
+ * Returns one membership per active FIRM_ADMIN with a usable email.
+ */
+async function clientFirmAdminRecipientsAllTenants(): Promise<
+  Array<{ tenantId: string; tenantSlug: string; membershipId: string; toEmail: string }>
+> {
+  const rows = await superDb.membership.findMany({
+    where: {
+      status: "ACTIVE",
+      role: "FIRM_ADMIN",
+      tenant: { status: "ACTIVE", slug: { not: "acumon" } },
+    },
+    include: {
+      user: { select: { email: true } },
+      tenant: { select: { slug: true } },
+    },
+  });
+  return rows
+    .filter((r) => !!r.user.email)
+    .map((r) => ({
+      tenantId: r.tenantId,
+      tenantSlug: r.tenant.slug,
+      membershipId: r.id,
+      toEmail: r.user.email!,
+    }));
+}
+
+function describeChangeKind(kind: "ADDED" | "REMOVED" | "MATERIAL_UPDATE"): string {
+  if (kind === "ADDED") return "addition of a new sub-processor";
+  if (kind === "REMOVED") return "removal of an existing sub-processor";
+  return "material change to an existing sub-processor";
+}
+
+export async function dispatchSubProcessorChangeAnnounced(input: {
+  changeId: string;
+  kind: "ADDED" | "REMOVED" | "MATERIAL_UPDATE";
+  description: string;
+  effectiveAt: Date;
+  subProcessorName: string;
+  subProcessorCode: string;
+  subProcessorJurisdiction: string;
+}): Promise<{ recipients: number }> {
+  const recipients = await clientFirmAdminRecipientsAllTenants();
+  if (recipients.length === 0) return { recipients: 0 };
+
+  const verb = describeChangeKind(input.kind);
+  const effectiveIso = input.effectiveAt.toISOString().slice(0, 10);
+  const subject = `Sub-processor change announced: ${input.subProcessorName}`;
+  const summary = `${verb} — effective ${effectiveIso}`;
+  const body = [
+    `Acumon has announced a change to its sub-processor list under DPA art. 28(2)(a).`,
+    "",
+    `Sub-processor: ${input.subProcessorName} (${input.subProcessorCode})`,
+    `Jurisdiction: ${input.subProcessorJurisdiction}`,
+    `Change type: ${verb}`,
+    `Earliest effective date: ${effectiveIso}`,
+    "",
+    `Rationale: ${input.description}`,
+    "",
+    `If your firm objects to this change, raise an objection from the Switching posture page (/<your-tenant>/switching) before the effective date. Objections are non-blocking but are recorded on your tenant's audit chain as the formal evidence of timely objection.`,
+  ].join("\n");
+
+  let dispatched = 0;
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: r.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "subprocessor_change_announced",
+      dedupeKey: input.changeId,
+      subject,
+      summary,
+      text: body,
+      href: `/${r.tenantSlug}/switching`,
+      payload: {
+        changeId: input.changeId,
+        kind: input.kind,
+        subProcessorCode: input.subProcessorCode,
+      },
+    });
+    dispatched += 1;
+  }
+  return { recipients: dispatched };
+}
+
+export async function dispatchSubProcessorChangeCancelled(input: {
+  changeId: string;
+  kind: "ADDED" | "REMOVED" | "MATERIAL_UPDATE";
+  reason: string;
+  subProcessorName: string;
+  subProcessorCode: string;
+}): Promise<{ recipients: number }> {
+  const recipients = await clientFirmAdminRecipientsAllTenants();
+  if (recipients.length === 0) return { recipients: 0 };
+
+  const verb = describeChangeKind(input.kind);
+  const subject = `Sub-processor change cancelled: ${input.subProcessorName}`;
+  const summary = `Previously-announced ${verb} has been cancelled.`;
+  const body = [
+    `A previously-announced sub-processor change has been cancelled by Acumon.`,
+    "",
+    `Sub-processor: ${input.subProcessorName} (${input.subProcessorCode})`,
+    `Change type: ${verb}`,
+    "",
+    `Reason: ${input.reason}`,
+    "",
+    `No further action is required.`,
+  ].join("\n");
+
+  let dispatched = 0;
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: r.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "subprocessor_change_cancelled",
+      dedupeKey: `${input.changeId}:cancelled`,
+      subject,
+      summary,
+      text: body,
+      href: `/${r.tenantSlug}/switching`,
+      payload: {
+        changeId: input.changeId,
+        kind: input.kind,
+        subProcessorCode: input.subProcessorCode,
+      },
+    });
+    dispatched += 1;
+  }
+  return { recipients: dispatched };
+}
+
+export async function dispatchSubProcessorChangeEffective(input: {
+  changeId: string;
+  kind: "ADDED" | "REMOVED" | "MATERIAL_UPDATE";
+  subProcessorName: string;
+  subProcessorCode: string;
+  effectiveAt: Date;
+  noticeOverride: boolean;
+}): Promise<{ recipients: number }> {
+  const recipients = await clientFirmAdminRecipientsAllTenants();
+  if (recipients.length === 0) return { recipients: 0 };
+
+  const verb = describeChangeKind(input.kind);
+  const noticeNote = input.noticeOverride
+    ? " (operator override — see audit chain for the reason)"
+    : "";
+  const subject = `Sub-processor change now in effect: ${input.subProcessorName}`;
+  const summary = `${verb} has been promoted to effective.`;
+  const body = [
+    `The sub-processor change previously announced under DPA art. 28(2)(a) has now taken effect${noticeNote}.`,
+    "",
+    `Sub-processor: ${input.subProcessorName} (${input.subProcessorCode})`,
+    `Change type: ${verb}`,
+    `Effective: ${input.effectiveAt.toISOString().slice(0, 10)}`,
+    "",
+    `The Switching posture page (/<your-tenant>/switching) reflects the updated sub-processor list. No action is required from you; this notification closes the notice loop.`,
+  ].join("\n");
+
+  let dispatched = 0;
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: r.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "subprocessor_change_effective",
+      dedupeKey: `${input.changeId}:effective`,
+      subject,
+      summary,
+      text: body,
+      href: `/${r.tenantSlug}/switching`,
+      payload: {
+        changeId: input.changeId,
+        kind: input.kind,
+        subProcessorCode: input.subProcessorCode,
+        noticeOverride: input.noticeOverride,
+      },
+    });
+    dispatched += 1;
+  }
+  return { recipients: dispatched };
+}
+
 // ─── Audit chain tampered (post-PRD hardening item 23) ────────────────────
 
 /**

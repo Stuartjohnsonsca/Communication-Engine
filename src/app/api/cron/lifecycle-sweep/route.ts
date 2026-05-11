@@ -6,6 +6,7 @@ import { reapOldDeliveries } from "@/lib/webhooks";
 import { sweepExpiredSessions } from "@/lib/auth/sessions";
 import { sweepInactiveOrExpiredApiKeys } from "@/lib/auth/api-keys";
 import { withCronHeartbeat } from "@/lib/cron-health";
+import { processDueChanges } from "@/lib/subprocessors";
 
 /**
  * PRD §14.3 lifecycle sweep. Idempotent — only acts on rows whose grace
@@ -54,6 +55,11 @@ export async function GET(req: Request) {
     // Post-PRD hardening item 16 — auto-revoke API keys whose creator-
     // Membership has gone INACTIVE, or whose `expiresAt` has passed.
     const apiKeys = await sweepInactiveOrExpiredApiKeys();
+    // Post-PRD hardening item 24 — auto-promote sub-processor changes whose
+    // 30-day (or operator-set) notice window has elapsed. Idempotent;
+    // confirmChange is a no-op when the change has already been promoted
+    // (e.g. an Acumon operator clicked "Confirm now" earlier).
+    const subprocessors = await processDueChanges();
     return {
       ...result,
       tiaExpired: tia.expired,
@@ -63,6 +69,8 @@ export async function GET(req: Request) {
       sessionsTimedOutByReason: sessions.reasons,
       apiKeysRevokedForInactivity: apiKeys.revokedForInactivity,
       apiKeysRevokedForExpiry: apiKeys.revokedForExpiry,
+      subprocessorChangesConsidered: subprocessors.considered,
+      subprocessorChangesConfirmed: subprocessors.confirmed,
     };
   });
   return NextResponse.json({ ok: true, ...payload });

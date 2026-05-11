@@ -108,6 +108,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // in the page handler — same shape as Roadmap (§16) and Risks (§17).
   "switching:read":      ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER", "CURATOR", "ACUMON_ADMIN"],
   "subprocessors:manage":["FIRM_ADMIN", "ACUMON_ADMIN"],
+  // Post-PRD hardening item 24 — sub-processor change objections. Only the
+  // Firm Administrator of a Client tenant can lodge or withdraw an objection
+  // (it's a contractual posture decision, not a day-to-day operation). FCT
+  // can read the objection state for governance oversight via switching:read.
+  "subprocessor-objections:raise": ["FIRM_ADMIN"],
 
   // Tenant Termination (PRD §14.4). Notice / reverse / export generation are
   // controllership decisions — restricted to the FIRM_ADMIN. The FCT can read

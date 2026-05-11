@@ -301,6 +301,11 @@ enum AuditEventType {
   CRON_STALLED
   AUDIT_CHAIN_VERIFIED
   AUDIT_CHAIN_TAMPERED
+  SUBPROCESSOR_CHANGE_ANNOUNCED
+  SUBPROCESSOR_CHANGE_CANCELLED
+  SUBPROCESSOR_CHANGE_EFFECTIVE
+  SUBPROCESSOR_OBJECTION_RAISED
+  SUBPROCESSOR_OBJECTION_WITHDRAWN
 }
 
 enum BillingPeriodStatus {
@@ -797,6 +802,7 @@ model Tenant {
   webhookDeliveries         WebhookDelivery[]
   apiKeys                   ApiKey[]
   auditChainVerifications   AuditChainVerification[]
+  subProcessorObjections    SubProcessorObjection[]
 
   @@index([status])
 }
@@ -1995,8 +2001,114 @@ model SubProcessor {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  changes SubProcessorChange[]
+
   @@index([isActive, ordinal])
   @@index([ordinal])
+}
+
+/// Post-PRD hardening item 24 — sub-processor change notification with prior
+/// notice. DPA art. 28(2)(a) obligates Acumon to give Clients advance notice
+/// of additions or replacements of sub-processors so Clients can object and
+/// (if unresolved) terminate. The existing `SubProcessor.isActive` toggle
+/// flips silently and instantly; this model is the announcement layer.
+///
+/// Lifecycle:
+///   ANNOUNCED → (after effectiveAt elapses) EFFECTIVE
+///                 │
+///                 └→ CANCELLED at any point before EFFECTIVE
+///
+/// On ANNOUNCED → EFFECTIVE: ADDED flips a freshly-staged SubProcessor row
+/// from isActive=false to isActive=true; REMOVED flips an existing
+/// SubProcessor row to isActive=false; MATERIAL_UPDATE leaves the row alone
+/// (the change is documentary — contract terms, jurisdiction, data
+/// categories — and is recorded by the operator updating the SubProcessor
+/// row directly once the notice period has elapsed).
+///
+/// Global model — no tenantId. Audit events for announce/cancel/confirm
+/// land on the Acumon operator's tenant chain (same pattern as Roadmap
+/// §16, Risks §17, SubProcessor itself). Per-tenant objections live in
+/// `SubProcessorObjection` (RLS-protected).
+model SubProcessorChange {
+  id              String                   @id @default(cuid())
+  subProcessorId  String
+  /// Operator-supplied free-text rationale visible to Clients in the
+  /// notification + on the /switching page during the notice window.
+  description     String                   @db.Text
+  kind            SubProcessorChangeKind
+  status          SubProcessorChangeStatus @default(ANNOUNCED)
+  announcedAt     DateTime                 @default(now())
+  /// Earliest moment the change can take effect. Default policy is +30 days
+  /// from announcedAt per industry-standard DPA notice; operator can set it
+  /// further out for low-risk material changes or up to 365 days. The
+  /// lifecycle-sweep cron promotes ANNOUNCED → EFFECTIVE when now() crosses
+  /// this timestamp.
+  effectiveAt     DateTime
+  confirmedAt     DateTime?
+  cancelledAt     DateTime?
+  cancelledReason String?                  @db.Text
+  /// Membership that announced the change (FIRM_ADMIN or ACUMON_ADMIN of
+  /// the Acumon tenant). Kept as a free-form string to avoid a cross-tenant
+  /// FK; the membership id IS canonical.
+  announcedById   String
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  subProcessor SubProcessor            @relation(fields: [subProcessorId], references: [id], onDelete: Cascade)
+  objections   SubProcessorObjection[]
+
+  @@index([status, effectiveAt])
+  @@index([subProcessorId, announcedAt])
+}
+
+enum SubProcessorChangeKind {
+  /// Acumon is adding a new sub-processor. The SubProcessor row is created
+  /// alongside the change with isActive=false, and is flipped to true on
+  /// EFFECTIVE.
+  ADDED
+  /// Acumon is removing an existing sub-processor. The SubProcessor row
+  /// stays isActive=true during the notice window, then flips on EFFECTIVE.
+  REMOVED
+  /// Documentary change to an existing sub-processor — jurisdiction shift,
+  /// data-category expansion, new contract terms. The SubProcessor row is
+  /// not touched by the lifecycle promotion; the operator updates the row
+  /// directly once the notice window has elapsed.
+  MATERIAL_UPDATE
+}
+
+enum SubProcessorChangeStatus {
+  ANNOUNCED
+  EFFECTIVE
+  CANCELLED
+}
+
+/// Per-tenant audit-trail record of a Client raising an objection to a
+/// `SubProcessorChange` during the notice window. Objections are visible to
+/// the raising tenant + to Acumon operators reviewing the change, and are
+/// captured on the tenant's audit chain. The objection is non-blocking by
+/// design — under standard DPA terms, Acumon may proceed unless the parties
+/// agree on remediation; either party may terminate if unresolved. This row
+/// is the legal evidence that the objection was lodged.
+///
+/// Tenant-scoped + RLS-protected.
+model SubProcessorObjection {
+  id                   String    @id @default(cuid())
+  tenantId             String
+  subProcessorChangeId String
+  /// Membership that raised the objection (FIRM_ADMIN of the Client).
+  raisedById           String
+  reason               String    @db.Text
+  raisedAt             DateTime  @default(now())
+  withdrawnAt          DateTime?
+  withdrawnReason      String?   @db.Text
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  change SubProcessorChange @relation(fields: [subProcessorChangeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, subProcessorChangeId])
+  @@index([subProcessorChangeId])
 }
 
 // ─── Onboarding Checklist (PRD §14.1) ─────────────────────────────────────

@@ -43,7 +43,8 @@ DECLARE
     'WebhookSubscription',
     'WebhookDelivery',
     'ApiKey',
-    'AuditChainVerification'
+    'AuditChainVerification',
+    'SubProcessorObjection'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

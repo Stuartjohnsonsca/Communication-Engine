@@ -10,6 +10,19 @@ import {
   setSubProcessorActive,
   updateSubProcessor,
 } from "@/lib/switching";
+import {
+  announceChange,
+  cancelChange,
+  confirmChange,
+  DEFAULT_NOTICE_DAYS,
+  getChange,
+  getObjectionForTenant,
+  listObjectionsForChange,
+  listPendingChanges,
+  raiseObjection,
+  SubProcessorChangeValidationError,
+  withdrawObjection,
+} from "@/lib/subprocessors";
 
 export default async function SwitchingPage({
   params,
@@ -27,6 +40,31 @@ export default async function SwitchingPage({
   const isOperator =
     isAcumonOperator(ctx.tenant.slug) &&
     hasPermission(ctx.membership.role, "subprocessors:manage");
+  const isClient = !isAcumonOperator(ctx.tenant.slug);
+  const canObject =
+    isClient && hasPermission(ctx.membership.role, "subprocessor-objections:raise");
+
+  const pendingChanges = await listPendingChanges();
+  const pendingObjectionsByChange = new Map<
+    string,
+    Awaited<ReturnType<typeof listObjectionsForChange>>
+  >();
+  const tenantObjectionByChange = new Map<
+    string,
+    Awaited<ReturnType<typeof getObjectionForTenant>>
+  >();
+  if (pendingChanges.length > 0) {
+    if (isOperator) {
+      for (const c of pendingChanges) {
+        pendingObjectionsByChange.set(c.id, await listObjectionsForChange(c.id));
+      }
+    }
+    if (isClient) {
+      for (const c of pendingChanges) {
+        tenantObjectionByChange.set(c.id, await getObjectionForTenant(ctx.tenant.id, c.id));
+      }
+    }
+  }
 
   async function addAction(formData: FormData) {
     "use server";
@@ -98,6 +136,148 @@ export default async function SwitchingPage({
     revalidatePath(`/${tenantSlug}/switching`);
   }
 
+  // ─── Item 24 actions: announce / cancel / confirm / object / withdraw ───
+
+  async function announceAddAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!isAcumonOperator(inner.tenant.slug) || !hasPermission(inner.membership.role, "subprocessors:manage")) {
+      throw new Error("forbidden");
+    }
+    const days = Math.max(1, Math.min(365, Number(formData.get("noticeDays") ?? DEFAULT_NOTICE_DAYS) || DEFAULT_NOTICE_DAYS));
+    const effectiveAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    try {
+      await announceChange({
+        kind: "ADDED",
+        description: String(formData.get("description") ?? ""),
+        effectiveAt,
+        subProcessor: {
+          code: String(formData.get("code") ?? ""),
+          name: String(formData.get("name") ?? ""),
+          role: String(formData.get("role") ?? ""),
+          jurisdiction: String(formData.get("jurisdiction") ?? ""),
+          dataCategories: String(formData.get("dataCategories") ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          contractRef: String(formData.get("contractRef") ?? "").trim() || null,
+          notes: String(formData.get("notes") ?? "").trim() || null,
+        },
+        actorTenantId: inner.tenant.id,
+        actorMembershipId: inner.membership.id,
+      });
+    } catch (err) {
+      if (err instanceof SubProcessorChangeValidationError) {
+        throw new Error(`Announce failed: ${err.message}`);
+      }
+      throw err;
+    }
+    revalidatePath(`/${tenantSlug}/switching`);
+  }
+
+  async function announceExistingAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!isAcumonOperator(inner.tenant.slug) || !hasPermission(inner.membership.role, "subprocessors:manage")) {
+      throw new Error("forbidden");
+    }
+    const kindRaw = String(formData.get("kind") ?? "");
+    if (kindRaw !== "REMOVED" && kindRaw !== "MATERIAL_UPDATE") {
+      throw new Error("invalid kind");
+    }
+    const days = Math.max(1, Math.min(365, Number(formData.get("noticeDays") ?? DEFAULT_NOTICE_DAYS) || DEFAULT_NOTICE_DAYS));
+    const effectiveAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    try {
+      await announceChange({
+        kind: kindRaw,
+        description: String(formData.get("description") ?? ""),
+        effectiveAt,
+        subProcessorCode: String(formData.get("code") ?? ""),
+        actorTenantId: inner.tenant.id,
+        actorMembershipId: inner.membership.id,
+      });
+    } catch (err) {
+      if (err instanceof SubProcessorChangeValidationError) {
+        throw new Error(`Announce failed: ${err.message}`);
+      }
+      throw err;
+    }
+    revalidatePath(`/${tenantSlug}/switching`);
+  }
+
+  async function cancelChangeAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!isAcumonOperator(inner.tenant.slug) || !hasPermission(inner.membership.role, "subprocessors:manage")) {
+      throw new Error("forbidden");
+    }
+    await cancelChange({
+      changeId: String(formData.get("changeId") ?? ""),
+      reason: String(formData.get("reason") ?? ""),
+      actorTenantId: inner.tenant.id,
+      actorMembershipId: inner.membership.id,
+    });
+    revalidatePath(`/${tenantSlug}/switching`);
+  }
+
+  async function confirmChangeNowAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!isAcumonOperator(inner.tenant.slug) || !hasPermission(inner.membership.role, "subprocessors:manage")) {
+      throw new Error("forbidden");
+    }
+    const changeId = String(formData.get("changeId") ?? "");
+    const change = await getChange(changeId);
+    if (!change) throw new Error("change not found");
+    const noticeOverride = change.effectiveAt > new Date();
+    await confirmChange({
+      changeId,
+      noticeOverride,
+      actorTenantId: inner.tenant.id,
+      actorMembershipId: inner.membership.id,
+    });
+    revalidatePath(`/${tenantSlug}/switching`);
+  }
+
+  async function raiseObjectionAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "subprocessor-objections:raise")) {
+      throw new Error("forbidden");
+    }
+    if (isAcumonOperator(inner.tenant.slug)) {
+      throw new Error("Acumon-tenant FIRM_ADMINs cannot raise objections to their own changes");
+    }
+    await raiseObjection({
+      tenantId: inner.tenant.id,
+      subProcessorChangeId: String(formData.get("changeId") ?? ""),
+      raisedByMembershipId: inner.membership.id,
+      reason: String(formData.get("reason") ?? ""),
+    });
+    revalidatePath(`/${tenantSlug}/switching`);
+  }
+
+  async function withdrawObjectionAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "subprocessor-objections:raise")) {
+      throw new Error("forbidden");
+    }
+    await withdrawObjection({
+      tenantId: inner.tenant.id,
+      objectionId: String(formData.get("objectionId") ?? ""),
+      withdrawnByMembershipId: inner.membership.id,
+      reason: String(formData.get("reason") ?? "").trim() || null,
+    });
+    revalidatePath(`/${tenantSlug}/switching`);
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -142,6 +322,144 @@ export default async function SwitchingPage({
           </li>
         </ol>
       </section>
+
+      {pendingChanges.length > 0 && (
+        <section className="card space-y-3 border-amber-300 bg-amber-50/40">
+          <div>
+            <h2 className="text-base font-medium">
+              Pending sub-processor changes ({pendingChanges.length})
+            </h2>
+            <p className="mt-1 text-xs text-ink/60">
+              DPA art. 28(2)(a) notice window. Each change takes effect on the earliest effective
+              date below unless cancelled. Clients may raise an objection at any point before the
+              effective date — objections are non-blocking but are recorded on the tenant&rsquo;s
+              audit chain.
+            </p>
+          </div>
+          <ul className="space-y-3">
+            {pendingChanges.map((c) => {
+              const objections = pendingObjectionsByChange.get(c.id) ?? [];
+              const ownObjection = tenantObjectionByChange.get(c.id) ?? null;
+              const verb =
+                c.kind === "ADDED"
+                  ? "Adding"
+                  : c.kind === "REMOVED"
+                    ? "Removing"
+                    : "Material change to";
+              return (
+                <li key={c.id} className="rounded border border-ink/10 bg-white p-3 text-sm">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <div>
+                      <span className="font-medium">
+                        {verb} {c.subProcessor.name}
+                      </span>
+                      <span className="ml-2 text-xs text-ink/50">
+                        <code className="rounded bg-ink/5 px-1">{c.subProcessor.code}</code> ·{" "}
+                        {c.subProcessor.jurisdiction}
+                      </span>
+                    </div>
+                    <span className="text-xs text-ink/70">
+                      effective {c.effectiveAt.toISOString().slice(0, 10)}
+                    </span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap">{c.description}</p>
+                  <div className="mt-1 text-xs text-ink/50">
+                    Announced {c.announcedAt.toISOString().slice(0, 10)}.
+                  </div>
+
+                  {isOperator && objections.length > 0 && (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-ink/70">
+                        {objections.length} objection{objections.length === 1 ? "" : "s"} raised
+                      </summary>
+                      <ul className="mt-1 space-y-1">
+                        {objections.map((o) => (
+                          <li key={o.id} className="rounded bg-ink/5 p-2">
+                            <div className="text-xs text-ink/50">
+                              tenant {o.tenantId} · raised {o.raisedAt.toISOString().slice(0, 10)}
+                            </div>
+                            <p className="whitespace-pre-wrap">{o.reason}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+
+                  {isClient && ownObjection && !ownObjection.withdrawnAt && (
+                    <div className="mt-2 rounded border border-amber-300 bg-amber-100/50 p-2 text-xs">
+                      <strong>Your objection lodged {ownObjection.raisedAt.toISOString().slice(0, 10)}.</strong>
+                      <p className="mt-1 whitespace-pre-wrap">{ownObjection.reason}</p>
+                      <form action={withdrawObjectionAction} className="mt-2 grid gap-1">
+                        <input type="hidden" name="objectionId" value={ownObjection.id} />
+                        <input
+                          className="input"
+                          name="reason"
+                          placeholder="Reason for withdrawal (optional)"
+                          maxLength={500}
+                        />
+                        <button className="btn justify-self-start" type="submit">
+                          Withdraw objection
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                  {isClient && canObject && (!ownObjection || ownObjection.withdrawnAt) && (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-ink/70">Raise objection</summary>
+                      <form action={raiseObjectionAction} className="mt-1 grid gap-1">
+                        <input type="hidden" name="changeId" value={c.id} />
+                        <textarea
+                          className="input"
+                          name="reason"
+                          rows={3}
+                          required
+                          maxLength={2000}
+                          placeholder="Why your firm objects to this change. The objection is recorded on your tenant's audit chain and visible to Acumon."
+                        />
+                        <button className="btn btn-primary justify-self-start" type="submit">
+                          Lodge objection
+                        </button>
+                      </form>
+                    </details>
+                  )}
+
+                  {isOperator && (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-ink/70">Operator actions</summary>
+                      <div className="mt-1 grid gap-2">
+                        <form action={confirmChangeNowAction} className="grid gap-1">
+                          <input type="hidden" name="changeId" value={c.id} />
+                          <p className="text-xs text-ink/60">
+                            Confirming now before the effective date overrides the notice
+                            period. This is audited with <code>noticeOverride=true</code>.
+                          </p>
+                          <button className="btn justify-self-start" type="submit">
+                            Confirm now
+                          </button>
+                        </form>
+                        <form action={cancelChangeAction} className="grid gap-1">
+                          <input type="hidden" name="changeId" value={c.id} />
+                          <input
+                            className="input"
+                            name="reason"
+                            required
+                            placeholder="Reason for cancellation"
+                            maxLength={500}
+                          />
+                          <button className="btn justify-self-start" type="submit">
+                            Cancel change
+                          </button>
+                        </form>
+                      </div>
+                    </details>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="card space-y-3">
         <div className="flex items-center justify-between">
@@ -189,7 +507,7 @@ export default async function SwitchingPage({
                 )}
                 {isOperator && (
                   <details className="mt-2 text-xs">
-                    <summary className="cursor-pointer text-ink/60">Edit / remove</summary>
+                    <summary className="cursor-pointer text-ink/60">Edit / announce removal</summary>
                     <form action={updateAction} className="mt-2 grid gap-1 text-sm">
                       <input type="hidden" name="code" value={s.code} />
                       <input className="input" name="name" defaultValue={s.name} required />
@@ -209,7 +527,53 @@ export default async function SwitchingPage({
                       />
                       <textarea className="input" name="notes" rows={2} defaultValue={s.notes ?? ""} />
                       <button className="btn justify-self-start" type="submit">
-                        Save
+                        Save (no notice)
+                      </button>
+                    </form>
+                    <form action={announceExistingAction} className="mt-2 grid gap-1 text-sm">
+                      <input type="hidden" name="code" value={s.code} />
+                      <input type="hidden" name="kind" value="REMOVED" />
+                      <textarea
+                        className="input"
+                        name="description"
+                        rows={2}
+                        required
+                        placeholder="Why this sub-processor is being removed (visible to Clients)"
+                      />
+                      <input
+                        className="input"
+                        name="noticeDays"
+                        type="number"
+                        min={1}
+                        max={365}
+                        defaultValue={DEFAULT_NOTICE_DAYS}
+                        placeholder="Notice days"
+                      />
+                      <button className="btn btn-primary justify-self-start" type="submit">
+                        Announce removal (recommended)
+                      </button>
+                    </form>
+                    <form action={announceExistingAction} className="mt-2 grid gap-1 text-sm">
+                      <input type="hidden" name="code" value={s.code} />
+                      <input type="hidden" name="kind" value="MATERIAL_UPDATE" />
+                      <textarea
+                        className="input"
+                        name="description"
+                        rows={2}
+                        required
+                        placeholder="Material change details (jurisdiction, scope, contract terms)"
+                      />
+                      <input
+                        className="input"
+                        name="noticeDays"
+                        type="number"
+                        min={1}
+                        max={365}
+                        defaultValue={DEFAULT_NOTICE_DAYS}
+                        placeholder="Notice days"
+                      />
+                      <button className="btn justify-self-start" type="submit">
+                        Announce material change
                       </button>
                     </form>
                     <form action={setActiveAction} className="mt-2 grid gap-1 text-sm">
@@ -218,10 +582,10 @@ export default async function SwitchingPage({
                       <input
                         className="input"
                         name="notes"
-                        placeholder="Reason for removal"
+                        placeholder="Reason for immediate removal (emergency only)"
                       />
                       <button className="btn justify-self-start" type="submit">
-                        Mark removed
+                        Mark removed (immediate, no notice)
                       </button>
                     </form>
                   </details>
@@ -233,8 +597,14 @@ export default async function SwitchingPage({
 
         {isOperator && (
           <details className="border-t border-ink/10 pt-3">
-            <summary className="cursor-pointer text-sm font-medium">Add sub-processor</summary>
-            <form action={addAction} className="mt-2 grid gap-2 text-sm">
+            <summary className="cursor-pointer text-sm font-medium">Announce new sub-processor (recommended)</summary>
+            <p className="mt-1 text-xs text-ink/60">
+              Creates the sub-processor as inactive and fans out a DPA art. 28(2)(a) prior-notice
+              notification to every Client&rsquo;s FIRM_ADMIN. Promotion to active happens
+              automatically once the notice window elapses, or by clicking &ldquo;Confirm
+              now&rdquo; on the pending change (audited as a notice override).
+            </p>
+            <form action={announceAddAction} className="mt-2 grid gap-2 text-sm">
               <div className="grid grid-cols-2 gap-2">
                 <input
                   className="input"
@@ -267,10 +637,58 @@ export default async function SwitchingPage({
               />
               <input className="input" name="contractRef" placeholder="Contract reference (optional)" />
               <textarea className="input" name="notes" rows={2} placeholder="Notes (optional)" />
+              <textarea
+                className="input"
+                name="description"
+                required
+                rows={3}
+                placeholder="Why this sub-processor is being added (visible to Clients in the notice)"
+                maxLength={2000}
+              />
+              <input
+                className="input"
+                name="noticeDays"
+                type="number"
+                min={1}
+                max={365}
+                defaultValue={DEFAULT_NOTICE_DAYS}
+                placeholder="Notice days"
+              />
               <button className="btn btn-primary justify-self-start" type="submit">
-                Add
+                Announce addition
               </button>
             </form>
+            <details className="mt-3 border-t border-ink/10 pt-2 text-xs">
+              <summary className="cursor-pointer text-ink/60">
+                Immediate add (emergency only — no notice given)
+              </summary>
+              <p className="mt-1 text-ink/60">
+                Use only when contractual notice is genuinely impossible (security incident,
+                bankruptcy of a sub-processor). The action is audited and Clients can object
+                retroactively.
+              </p>
+              <form action={addAction} className="mt-2 grid gap-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    className="input"
+                    name="code"
+                    required
+                    placeholder="stable-code"
+                    pattern="[a-z0-9_-]+"
+                    maxLength={64}
+                  />
+                  <input className="input" name="name" required placeholder="Display name" maxLength={200} />
+                </div>
+                <input className="input" name="role" required placeholder="Role" maxLength={200} />
+                <input className="input" name="jurisdiction" required placeholder="Jurisdiction" maxLength={64} />
+                <input className="input" name="dataCategories" placeholder="Data categories (comma-separated)" />
+                <input className="input" name="contractRef" placeholder="Contract reference (optional)" />
+                <textarea className="input" name="notes" rows={2} placeholder="Notes (optional)" />
+                <button className="btn justify-self-start" type="submit">
+                  Add immediately
+                </button>
+              </form>
+            </details>
           </details>
         )}
       </section>
