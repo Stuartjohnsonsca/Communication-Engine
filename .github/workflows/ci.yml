@@ -89,7 +89,7 @@ jobs:
               console.log('::warning::High/critical vulnerabilities present in production dependencies. See audit-report.json artifact.');
             }
           "
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-audit-report
           path: audit-report.json
