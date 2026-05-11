@@ -197,6 +197,14 @@ enum AuditEventType {
   /// pack (security posture snapshot for SOC 2 / ISO 27001 / vendor
   /// audits). Payload carries `{ exportedSections: string[] }`.
   COMPLIANCE_EVIDENCE_PACK_EXPORTED
+  /// Post-PRD hardening — operator clicked "Send test event" on a
+  /// webhook subscription. Synthesises a single WebhookDelivery for
+  /// the target subscription with a sentinel payload, lets the
+  /// existing delivery worker fire it through the full signing +
+  /// retry pipeline. Excluded from `WEBHOOK_SELF_EVENT_TYPES` fan-out
+  /// — writing this audit row must NOT enqueue it for every matching
+  /// subscription.
+  WEBHOOK_SUBSCRIPTION_TESTED
   UCG_FROZEN
   UCG_ANONYMISED
   BILLING_PLAN_UPDATED

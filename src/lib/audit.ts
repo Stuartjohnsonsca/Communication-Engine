@@ -15,6 +15,11 @@ const WEBHOOK_SELF_EVENT_TYPES = new Set<AuditEventType>([
   "WEBHOOK_DEAD_LETTERED",
   "WEBHOOK_REPLAYED",
   "WEBHOOK_SUBSCRIPTION_AUTO_DISABLED",
+  // Post-PRD: the test-fire path creates its own targeted WebhookDelivery
+  // row for a single subscription and writes this audit as a forensic
+  // record only. Excluding it from fan-out prevents the test from
+  // accidentally firing at every other matching subscription.
+  "WEBHOOK_SUBSCRIPTION_TESTED",
 ]);
 
 export type WriteAuditInput = {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { hasPermission, requirePermission } from "@/lib/rbac";
 import { superDb } from "@/lib/db";
-import { getSubscription, replayDelivery } from "@/lib/webhooks";
+import { getSubscription, replayDelivery, fireTestEvent } from "@/lib/webhooks";
 
 /**
  * Per-subscription detail. Shows recent deliveries (PENDING + IN_FLIGHT +
@@ -16,10 +16,13 @@ import { getSubscription, replayDelivery } from "@/lib/webhooks";
 
 export default async function WebhookDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ tenantSlug: string; id: string }>;
+  searchParams?: Promise<{ testFired?: string; testError?: string; testDeliveryId?: string }>;
 }) {
   const { tenantSlug, id } = await params;
+  const sp = (await searchParams) ?? {};
   const ctx = await getTenantContext(tenantSlug);
   if (!ctx) redirect("/login");
   if (!hasPermission(ctx.membership.role, "webhooks:read")) {
@@ -67,6 +70,30 @@ export default async function WebhookDetailPage({
     if (!deliveryId) throw new Error("missing deliveryId");
     await replayDelivery({ tenantId: inner.tenant.id, deliveryId });
     revalidatePath(`/${tenantSlug}/admin/webhooks/${id}`);
+  }
+
+  async function testFireAction(formData: FormData) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    requirePermission(inner.membership.role, "webhooks:configure");
+    const note = (formData.get("note") as string | null)?.trim() || null;
+    const result = await fireTestEvent({
+      tenantId: inner.tenant.id,
+      subscriptionId: id,
+      actorMembershipId: inner.membership.id,
+      note,
+    });
+    revalidatePath(`/${tenantSlug}/admin/webhooks/${id}`);
+    if (result.ok) {
+      redirect(
+        `/${tenantSlug}/admin/webhooks/${id}?testFired=1&testDeliveryId=${encodeURIComponent(result.deliveryId)}`,
+      );
+    } else {
+      redirect(
+        `/${tenantSlug}/admin/webhooks/${id}?testError=${encodeURIComponent(result.reason)}`,
+      );
+    }
   }
 
   return (
@@ -126,6 +153,58 @@ export default async function WebhookDetailPage({
           <div className="font-medium">{sub.lastStatusCode ?? "—"}</div>
         </div>
       </div>
+
+      {canConfigure && (
+        <div className="card space-y-3">
+          <div>
+            <h2 className="text-base font-medium">Send test event</h2>
+            <p className="mt-1 text-sm text-ink/70">
+              Synthesises a single signed{" "}
+              <code className="rounded bg-ink/5 px-1 text-xs">
+                WEBHOOK_SUBSCRIPTION_TESTED
+              </code>{" "}
+              delivery to this subscription only, using the production
+              signing key + retry pipeline. Safe to fire against disabled
+              subscriptions for receiver setup verification.
+            </p>
+          </div>
+          {sp.testFired === "1" && (
+            <div className="rounded border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
+              Test event queued.
+              {sp.testDeliveryId && (
+                <>
+                  {" "}
+                  Delivery id:{" "}
+                  <code className="font-mono text-xs">{sp.testDeliveryId}</code>
+                </>
+              )}{" "}
+              The cron worker will fire it within a minute.
+            </div>
+          )}
+          {sp.testError && (
+            <div className="rounded border border-red-300 bg-red-50/60 px-3 py-2 text-sm text-red-800">
+              Test failed: {sp.testError}
+            </div>
+          )}
+          <form action={testFireAction} className="space-y-2">
+            <label className="block text-sm">
+              <span className="block text-xs uppercase text-ink/50">
+                Note (optional)
+              </span>
+              <input
+                type="text"
+                name="note"
+                maxLength={200}
+                placeholder="e.g. signature verification check 2026-05-11"
+                className="mt-1 w-full rounded border border-ink/10 px-2 py-1 text-sm"
+              />
+            </label>
+            <button type="submit" className="btn text-sm">
+              Send test event
+            </button>
+          </form>
+        </div>
+      )}
 
       <div className="card space-y-2">
         <h2 className="text-base font-medium">Recent deliveries</h2>
