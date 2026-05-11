@@ -264,6 +264,119 @@ describe("public /status surface", () => {
   });
 });
 
+describe("public /status SLA trend", () => {
+  it("returns a 6-period recentPeriods array oldest→newest with the right MET/MISSED outcomes", async () => {
+    const target = await superDb.slaTarget.upsert({
+      where: { code: "test-trend" },
+      create: {
+        code: "test-trend",
+        ordinal: 9_001,
+        name: "Test trend availability",
+        kind: "AVAILABILITY",
+        threshold: 99,
+        unit: "%",
+        aggregation: "monthly_pct",
+        scope: "test",
+        notes: null,
+        isActive: true,
+      },
+      update: { isActive: true },
+    });
+    const t = await createTestTenant();
+    // Seed 3 periods: 2 ago MET, 1 ago MISSED, current MET.
+    const periods = lastNPeriodsDescending(6);
+    const current = periods[0]!;
+    const oneAgo = periods[1]!;
+    const twoAgo = periods[2]!;
+
+    const seedRows: Array<{
+      period: string;
+      observed: number;
+      outcome: "MET" | "MISSED";
+    }> = [
+      { period: twoAgo, observed: 99.9, outcome: "MET" },
+      { period: oneAgo, observed: 98.5, outcome: "MISSED" },
+      { period: current, observed: 99.95, outcome: "MET" },
+    ];
+    for (const seed of seedRows) {
+      await superDb.slaMeasurement.create({
+        data: {
+          tenantId: t.id,
+          targetId: target.id,
+          period: seed.period,
+          observed: seed.observed,
+          outcome: seed.outcome,
+          sampleN: 720,
+          recordedAt: new Date(),
+          recordedByName: "fixture",
+        },
+      });
+    }
+
+    const status = await getPublicStatus();
+    const row = status.sla.find((r) => r.target.code === "test-trend")!;
+    expect(row.recentPeriods).toHaveLength(6);
+
+    // Oldest first, newest last.
+    expect(row.recentPeriods[0]!.period < row.recentPeriods[5]!.period).toBe(true);
+
+    const byPeriod = new Map(row.recentPeriods.map((p) => [p.period, p]));
+    expect(byPeriod.get(twoAgo)?.outcome).toBe("MET");
+    expect(byPeriod.get(oneAgo)?.outcome).toBe("MISSED");
+    expect(byPeriod.get(current)?.outcome).toBe("MET");
+
+    // Periods with no measurement become INSUFFICIENT_DATA, NOT missing.
+    const fourAgo = periods[4]!;
+    expect(byPeriod.get(fourAgo)?.outcome).toBe("INSUFFICIENT_DATA");
+
+    // Trend doesn't leak tenant identity.
+    const json = JSON.stringify(row.recentPeriods);
+    expect(json).not.toContain(t.id);
+    expect(json).not.toContain(t.slug);
+
+    await superDb.slaMeasurement.deleteMany({ where: { targetId: target.id } });
+    await superDb.slaTarget.update({ where: { id: target.id }, data: { isActive: false } });
+  });
+
+  it("returns a stable-length trend of INSUFFICIENT_DATA when a target has no measurements", async () => {
+    const target = await superDb.slaTarget.upsert({
+      where: { code: "test-trend-empty" },
+      create: {
+        code: "test-trend-empty",
+        ordinal: 9_002,
+        name: "Test empty trend",
+        kind: "LATENCY",
+        threshold: 5,
+        unit: "s",
+        aggregation: "median",
+        scope: "test",
+        notes: null,
+        isActive: true,
+      },
+      update: { isActive: true },
+    });
+    try {
+      const status = await getPublicStatus();
+      const row = status.sla.find((r) => r.target.code === "test-trend-empty")!;
+      expect(row.recentPeriods).toHaveLength(6);
+      expect(row.recentPeriods.every((p) => p.outcome === "INSUFFICIENT_DATA")).toBe(true);
+      expect(row.recentPeriods.every((p) => p.observed === null)).toBe(true);
+    } finally {
+      await superDb.slaTarget.update({ where: { id: target.id }, data: { isActive: false } });
+    }
+  });
+});
+
+function lastNPeriodsDescending(n: number): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+  }
+  return out;
+}
+
 function currentPeriod(): string {
   const d = new Date();
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;

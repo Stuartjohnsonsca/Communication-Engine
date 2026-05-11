@@ -241,6 +241,36 @@ function SlaCard({ row }: { row: SlaRollup }) {
       ) : (
         <div className="mt-1 text-[11px] text-ink/50">No measurements yet for this target.</div>
       )}
+      {row.recentPeriods.length > 0 && (
+        <div className="mt-3">
+          <div className="text-[10px] uppercase tracking-wide text-ink/50">
+            Last {row.recentPeriods.length} periods
+          </div>
+          <div className="mt-1 flex items-end gap-1" aria-label="Recent period trend">
+            {row.recentPeriods.map((p) => (
+              <div
+                key={p.period}
+                className={`h-5 flex-1 rounded-sm ${
+                  p.outcome === "MET"
+                    ? "bg-emerald-400"
+                    : p.outcome === "MISSED"
+                      ? "bg-red-400"
+                      : "bg-ink/15"
+                }`}
+                title={`${p.period}: ${p.outcome}${
+                  p.observed != null
+                    ? ` (${formatNumber(p.observed, 2)} ${row.target.unit})`
+                    : ""
+                }`}
+              />
+            ))}
+          </div>
+          <div className="mt-1 flex justify-between text-[10px] text-ink/50">
+            <span>{row.recentPeriods[0]?.period}</span>
+            <span>{row.recentPeriods[row.recentPeriods.length - 1]?.period}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

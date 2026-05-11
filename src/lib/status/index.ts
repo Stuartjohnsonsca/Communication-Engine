@@ -62,6 +62,22 @@ export type SlaRollup = {
   aggregateObserved: number | null;
   /** Whether `aggregateObserved` clears `target.threshold`. */
   aggregateOutcome: "MET" | "MISSED" | "INSUFFICIENT_DATA";
+  /**
+   * Per-period trend for the most recent N periods (oldest → newest).
+   * Each entry shows the aggregate outcome for that period, so a
+   * procurement reviewer can tell "missed once" from "missing every
+   * month". Periods with no measurement appear as INSUFFICIENT_DATA so
+   * the trend has a stable length. Never reveals tenant identity.
+   */
+  recentPeriods: SlaTrendPoint[];
+};
+
+export type SlaTrendPoint = {
+  /** YYYY-MM. */
+  period: string;
+  outcome: "MET" | "MISSED" | "INSUFFICIENT_DATA";
+  /** Aggregate observed (same shape as `aggregateObserved`). */
+  observed: number | null;
 };
 
 export type RedactedIncident = {
@@ -157,17 +173,68 @@ export async function getPublicStatus(): Promise<PublicStatus> {
   };
 }
 
-function buildSlaRollup(
+type MeasurementSlice = {
+  targetId: string;
+  period: string;
+  observed: number | null;
+  outcome: "MET" | "MISSED" | "INSUFFICIENT_DATA";
+  sampleN: number;
+};
+
+function aggregatePeriod(
   target: SlaTarget,
-  measurements: Array<{
-    targetId: string;
-    period: string;
-    observed: number | null;
-    outcome: "MET" | "MISSED" | "INSUFFICIENT_DATA";
-    sampleN: number;
-  }>,
-): SlaRollup {
+  slice: MeasurementSlice[],
+): { observed: number | null; outcome: "MET" | "MISSED" | "INSUFFICIENT_DATA" } {
+  if (slice.length === 0) return { observed: null, outcome: "INSUFFICIENT_DATA" };
+  const observedValues = slice
+    .map((m) => m.observed)
+    .filter((v): v is number => typeof v === "number");
+
+  let aggregateObserved: number | null = null;
+  if (observedValues.length > 0) {
+    if (target.kind === "AVAILABILITY") {
+      const totalSample = slice.reduce(
+        (acc, m) => acc + (m.observed != null ? m.sampleN || 1 : 0),
+        0,
+      );
+      aggregateObserved =
+        totalSample === 0
+          ? observedValues.reduce((a, b) => a + b, 0) / observedValues.length
+          : slice.reduce(
+              (acc, m) => (m.observed != null ? acc + m.observed * (m.sampleN || 1) : acc),
+              0,
+            ) / totalSample;
+    } else {
+      const sorted = [...observedValues].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      aggregateObserved =
+        sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+    }
+  }
+  let outcome: "MET" | "MISSED" | "INSUFFICIENT_DATA";
+  if (aggregateObserved == null) {
+    outcome = "INSUFFICIENT_DATA";
+  } else if (target.kind === "AVAILABILITY") {
+    outcome = aggregateObserved >= target.threshold ? "MET" : "MISSED";
+  } else {
+    outcome = aggregateObserved <= target.threshold ? "MET" : "MISSED";
+  }
+  return { observed: aggregateObserved, outcome };
+}
+
+function buildSlaRollup(target: SlaTarget, measurements: MeasurementSlice[]): SlaRollup {
   const own = measurements.filter((m) => m.targetId === target.id);
+
+  // Trend: every period in the lookback window, oldest → newest. Periods
+  // with no measurement still appear as INSUFFICIENT_DATA so the public
+  // bar has a stable length and a "gap" is visible.
+  const periods = lastNPeriods(6).slice().reverse(); // oldest → newest
+  const recentPeriods: SlaTrendPoint[] = periods.map((period) => {
+    const slice = own.filter((m) => m.period === period);
+    const { observed, outcome } = aggregatePeriod(target, slice);
+    return { period, outcome, observed };
+  });
+
   if (own.length === 0) {
     return {
       target,
@@ -179,11 +246,12 @@ function buildSlaRollup(
       sampleN: 0,
       aggregateObserved: null,
       aggregateOutcome: "INSUFFICIENT_DATA",
+      recentPeriods,
     };
   }
+
   // The most recent period that has any measurement of this target across
-  // any tenant. (The catalogue + measurement order isn't sortable by
-  // string compare in general, but YYYY-MM is lexicographic-safe.)
+  // any tenant.
   const period = own
     .map((m) => m.period)
     .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0))[0]!;
@@ -193,41 +261,11 @@ function buildSlaRollup(
   const missed = slice.filter((m) => m.outcome === "MISSED").length;
   const insufficient = slice.filter((m) => m.outcome === "INSUFFICIENT_DATA").length;
   const sampleN = slice.reduce((acc, m) => acc + (m.sampleN ?? 0), 0);
-  const observed = slice.map((m) => m.observed).filter((v): v is number => typeof v === "number");
 
-  let aggregateObserved: number | null = null;
-  if (observed.length > 0) {
-    if (target.kind === "AVAILABILITY") {
-      const totalSample = slice.reduce(
-        (acc, m) => acc + (m.observed != null ? m.sampleN || 1 : 0),
-        0,
-      );
-      aggregateObserved =
-        totalSample === 0
-          ? observed.reduce((a, b) => a + b, 0) / observed.length
-          : slice.reduce(
-              (acc, m) =>
-                m.observed != null ? acc + m.observed * (m.sampleN || 1) : acc,
-              0,
-            ) / totalSample;
-    } else {
-      // LATENCY: median of per-tenant medians. Robust against one tenant
-      // having a runaway p95 dominating the public number.
-      const sorted = [...observed].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      aggregateObserved =
-        sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
-    }
-  }
-
-  let aggregateOutcome: SlaRollup["aggregateOutcome"];
-  if (aggregateObserved == null) {
-    aggregateOutcome = "INSUFFICIENT_DATA";
-  } else if (target.kind === "AVAILABILITY") {
-    aggregateOutcome = aggregateObserved >= target.threshold ? "MET" : "MISSED";
-  } else {
-    aggregateOutcome = aggregateObserved <= target.threshold ? "MET" : "MISSED";
-  }
+  const { observed: aggregateObserved, outcome: aggregateOutcome } = aggregatePeriod(
+    target,
+    slice,
+  );
 
   return {
     target,
@@ -239,6 +277,7 @@ function buildSlaRollup(
     sampleN,
     aggregateObserved,
     aggregateOutcome,
+    recentPeriods,
   };
 }
 
