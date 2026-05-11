@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { base32Encode } from "@/lib/auth/totp/base32";
+import { getRegistry, getAesKey, type KeyVersion } from "@/lib/crypto/keys";
 
 /**
  * Issued API key format:
@@ -38,22 +39,40 @@ export type GeneratedKey = {
   secret: string;
   /** Hex HMAC. THIS is what goes in `ApiKey.hash`. */
   hash: string;
+  /** Which `ENCRYPTION_KEY` version this hash was keyed under. Stored on the row. */
+  version: KeyVersion;
 };
 
-function hmacKey(): Buffer {
-  // Same posture as recovery codes (UserTotp) — defence-in-depth: a leak
-  // of the DB row alone doesn't yield working credentials, you'd also
-  // need ENCRYPTION_KEY. In tests we fall back to NEXTAUTH_SECRET so the
-  // suite doesn't require a separate env var.
-  const key = process.env.ENCRYPTION_KEY ?? process.env.NEXTAUTH_SECRET;
-  if (!key) {
-    throw new Error("API key signing requires ENCRYPTION_KEY (or NEXTAUTH_SECRET in tests)");
+/**
+ * HMAC key resolution is version-aware so existing keys continue to verify
+ * after an ENCRYPTION_KEY rotation. Rules:
+ *   - version "v1": LEGACY path — bytes are the utf8 of the env-var string
+ *     (matches the original pre-rotation posture; if `ENCRYPTION_KEYS` is
+ *     present and contains "v1", we still use the legacy utf8 form so
+ *     pre-existing hashes verify).
+ *   - any other version: bytes are the 32-byte AES key from the registry.
+ *
+ * In tests we fall back to NEXTAUTH_SECRET for v1 so the suite doesn't
+ * require a separate env var.
+ */
+function hmacKey(version: KeyVersion): Buffer {
+  if (version === "v1") {
+    const key = process.env.ENCRYPTION_KEY ?? process.env.NEXTAUTH_SECRET;
+    if (!key) {
+      throw new Error("API key signing requires ENCRYPTION_KEY (or NEXTAUTH_SECRET in tests)");
+    }
+    return Buffer.from(key, "utf8");
   }
-  return Buffer.from(key, "utf8");
+  return getAesKey(getRegistry(), version);
 }
 
-export function computeHash(prefix: string, secret: string): string {
-  return createHmac("sha256", hmacKey()).update(`${prefix}.${secret}`).digest("hex");
+export function computeHash(prefix: string, secret: string, version: KeyVersion = "v1"): string {
+  return createHmac("sha256", hmacKey(version)).update(`${prefix}.${secret}`).digest("hex");
+}
+
+/** Pick the version a NEW key should be issued under (the active version). */
+export function activeKeyVersion(): KeyVersion {
+  return getRegistry().active;
 }
 
 export function generateApiKey(): GeneratedKey {
@@ -71,7 +90,8 @@ export function generateApiKey(): GeneratedKey {
     );
   }
   const plaintext = `${BRAND}_${prefix}_${secret}`;
-  return { plaintext, prefix, secret, hash: computeHash(prefix, secret) };
+  const version = activeKeyVersion();
+  return { plaintext, prefix, secret, hash: computeHash(prefix, secret, version), version };
 }
 
 export type ParsedKey = { prefix: string; secret: string };

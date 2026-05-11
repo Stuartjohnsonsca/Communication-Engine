@@ -70,7 +70,7 @@ export async function createApiKey(input: CreateApiKeyInput): Promise<CreateApiK
     if (t - now > FIVE_YEARS) throw new ApiKeyValidationError("expiresAt must be within 5 years");
   }
 
-  const { plaintext, prefix, hash } = generateApiKey();
+  const { plaintext, prefix, hash, version } = generateApiKey();
 
   const row = await superDb.apiKey.create({
     data: {
@@ -78,6 +78,7 @@ export async function createApiKey(input: CreateApiKeyInput): Promise<CreateApiK
       name,
       prefix,
       hash,
+      keyVersion: version,
       scopes,
       expiresAt: input.expiresAt ?? null,
       createdByMembershipId: input.actorMembershipId,
@@ -194,7 +195,10 @@ export async function authenticateApiKey(opts: {
   // Constant-time hash compare. Order is important: revocation /
   // expiry / membership checks are AFTER the hash check so a caller
   // cannot infer that a prefix exists by timing the response.
-  const expected = computeHash(opts.prefix, opts.secret);
+  // `keyVersion` selects the right HMAC key — legacy "v1" keys verify
+  // against the original env-string posture; v2+ verifies against the
+  // 32-byte AES key from the registry (see `lib/crypto/keys.ts`).
+  const expected = computeHash(opts.prefix, opts.secret, row.keyVersion);
   if (!hashesMatch(row.hash, expected)) return null;
 
   if (row.revokedAt) return null;

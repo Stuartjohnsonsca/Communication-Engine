@@ -31,6 +31,14 @@ export default async function setup() {
   // Postgres role and grants it to the connecting role. Without this the
   // rls-isolation tests can't verify isolation (superusers bypass RLS).
   process.env.APP_DB_ROLE ??= process.env.TEST_APP_DB_ROLE ?? "acumon_app";
+  // Encryption keys: pin defaults so tests that exercise encrypt/decrypt
+  // (TOTP, OAuth tokens, webhook secrets, API key HMAC) don't depend on
+  // CI-side env wiring. The default ENCRYPTION_KEY is 32 random bytes
+  // base64-encoded so the keys-registry length check passes; pinned to a
+  // deterministic value for reproducible test hashes. NEXTAUTH_SECRET is
+  // the v1 HMAC fallback used by `src/lib/auth/api-keys/secret.ts`.
+  process.env.ENCRYPTION_KEY ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  process.env.NEXTAUTH_SECRET ??= "test-nextauth-secret";
 
   // Smoke-check that the schema is present and RLS is enabled. If migrate
   // deploy hasn't been run, fail fast with a friendlier error than a Prisma

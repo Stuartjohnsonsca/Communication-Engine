@@ -306,6 +306,7 @@ enum AuditEventType {
   SUBPROCESSOR_CHANGE_EFFECTIVE
   SUBPROCESSOR_OBJECTION_RAISED
   SUBPROCESSOR_OBJECTION_WITHDRAWN
+  ENCRYPTION_KEYS_ROTATED
 }
 
 enum BillingPeriodStatus {
@@ -2908,6 +2909,12 @@ model ApiKey {
   /// HMAC-SHA256(prefix || "." || secret, ENCRYPTION_KEY). Hex-encoded.
   /// Verifies the secret half without ever storing it.
   hash                  String
+  /// Encryption-key version this hash was keyed under. Backwards-compat
+  /// default "v1" matches the pre-rotation single-key posture. Set on
+  /// creation to the active version from the registry; verification looks
+  /// up this version so a rotated ENCRYPTION_KEY doesn't invalidate
+  /// pre-rotation keys. See `src/lib/crypto/keys.ts`.
+  keyVersion            String    @default("v1")
   /// Subset of canonical scope strings (see
   /// `src/lib/auth/api-keys/scopes.ts`). Empty array = no scopes (rejected
   /// at auth); `["*"]` = every scope the creator-Membership's role grants.
