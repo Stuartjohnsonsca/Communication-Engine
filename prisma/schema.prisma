@@ -193,6 +193,10 @@ enum AuditEventType {
   /// audit event lands on every affected tenant's chain so each Firm
   /// Administrator sees the action against their own data.
   USER_ERASED
+  /// Post-PRD hardening — a FIRM_ADMIN exported the compliance evidence
+  /// pack (security posture snapshot for SOC 2 / ISO 27001 / vendor
+  /// audits). Payload carries `{ exportedSections: string[] }`.
+  COMPLIANCE_EVIDENCE_PACK_EXPORTED
   UCG_FROZEN
   UCG_ANONYMISED
   BILLING_PLAN_UPDATED

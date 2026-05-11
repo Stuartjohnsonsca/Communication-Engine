@@ -114,6 +114,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // can read the objection state for governance oversight via switching:read.
   "subprocessor-objections:raise": ["FIRM_ADMIN"],
 
+  // Post-PRD hardening — compliance evidence pack export (audit-ready
+  // security posture snapshot for SOC 2 / ISO 27001 / vendor audits).
+  // FIRM_ADMIN only because the pack covers configuration the FCT
+  // doesn't own (API keys, IP allowlist, encryption key rotation
+  // history). Read-only by nature; the audit chain records every
+  // export with the actor for forensic correlation.
+  "compliance:export-evidence-pack": ["FIRM_ADMIN", "ACUMON_ADMIN"],
+
   // Tenant Termination (PRD §14.4). Notice / reverse / export generation are
   // controllership decisions — restricted to the FIRM_ADMIN. The FCT can read
   // the lifecycle status for governance oversight (any export pulled is in
