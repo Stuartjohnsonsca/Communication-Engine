@@ -1,6 +1,12 @@
 import type { Prisma, TermsKind, TermsRecord, TermsStatus } from "@prisma/client";
 import { tenantDb, superDb } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
+import {
+  ValidationError,
+  NotFoundError,
+  ForbiddenError,
+  ConflictError,
+} from "@/lib/api-errors";
 
 /**
  * PRD §15.4 Terms and Conditions persistence.
@@ -82,14 +88,17 @@ export type RecordTermsInput = {
 
 export async function recordTerms(input: RecordTermsInput): Promise<TermsRecord> {
   await assertMembership(input.actorMembershipId, input.tenantId);
-  if (!KINDS.includes(input.kind)) throw new Error(`terms: unknown kind ${input.kind}`);
-  if (!input.documentRef.trim()) throw new Error("terms: documentRef is required");
-  if (!input.body.trim()) throw new Error("terms: body is required");
+  if (!KINDS.includes(input.kind))
+    throw new ValidationError(`terms: unknown kind ${input.kind}`, "unknown-kind");
+  if (!input.documentRef.trim())
+    throw new ValidationError("terms: documentRef is required", "document-ref-required");
+  if (!input.body.trim())
+    throw new ValidationError("terms: body is required", "body-required");
   if (input.documentRef.length > MAX_DOC_REF) {
-    throw new Error("terms: documentRef exceeds limit");
+    throw new ValidationError("terms: documentRef exceeds limit", "document-ref-too-long");
   }
   if (Buffer.byteLength(input.body, "utf8") > MAX_BODY) {
-    throw new Error("terms: body exceeds size limit");
+    throw new ValidationError("terms: body exceeds size limit", "body-too-long");
   }
 
   const db = tenantDb(input.tenantId);
@@ -154,10 +163,13 @@ export async function activateTerms(input: ActivateTermsInput): Promise<TermsRec
 
   const db = tenantDb(input.tenantId);
   const record = await db.termsRecord.findUnique({ where: { id: input.recordId } });
-  if (!record) throw new Error("terms: record not found");
+  if (!record) throw new NotFoundError("terms: record not found", "record-not-found");
   if (record.status === "ACTIVE") return record;
   if (record.status === "SUPERSEDED") {
-    throw new Error("terms: cannot reactivate a superseded version — record a new one");
+    throw new ConflictError(
+      "terms: cannot reactivate a superseded version — record a new one",
+      "superseded-cannot-reactivate",
+    );
   }
 
   const updated = await db.termsRecord.update({
@@ -200,9 +212,12 @@ export async function amendTerms(input: AmendTermsInput): Promise<TermsRecord> {
 
   const db = tenantDb(input.tenantId);
   const before = await db.termsRecord.findUnique({ where: { id: input.recordId } });
-  if (!before) throw new Error("terms: record not found");
+  if (!before) throw new NotFoundError("terms: record not found", "record-not-found");
   if (before.status !== "DRAFT") {
-    throw new Error("terms: only DRAFT records can be amended in place — record a new version instead");
+    throw new ConflictError(
+      "terms: only DRAFT records can be amended in place — record a new version instead",
+      "non-draft-amend",
+    );
   }
 
   const data: Prisma.TermsRecordUpdateInput = {};
@@ -210,7 +225,7 @@ export async function amendTerms(input: AmendTermsInput): Promise<TermsRecord> {
 
   if (input.body !== undefined && input.body.trim() && input.body.trim() !== before.body) {
     if (Buffer.byteLength(input.body, "utf8") > MAX_BODY) {
-      throw new Error("terms: body exceeds size limit");
+      throw new ValidationError("terms: body exceeds size limit", "body-too-long");
     }
     data.body = input.body.trim();
     changes.body = { from: "<previous>", to: "<new>" };
@@ -316,9 +331,11 @@ async function assertMembership(actorMembershipId: string, tenantId: string) {
     where: { id: actorMembershipId },
     select: { tenantId: true, status: true },
   });
-  if (!m) throw new Error("terms: actor membership not found");
-  if (m.tenantId !== tenantId) throw new Error("terms: actor not on this tenant");
-  if (m.status !== "ACTIVE") throw new Error("terms: actor membership is not ACTIVE");
+  if (!m) throw new NotFoundError("terms: actor membership not found", "actor-not-found");
+  if (m.tenantId !== tenantId)
+    throw new ForbiddenError("terms: actor not on this tenant", "actor-wrong-tenant");
+  if (m.status !== "ACTIVE")
+    throw new ForbiddenError("terms: actor membership is not ACTIVE", "actor-not-active");
 }
 
 export type Status = TermsStatus;
