@@ -132,6 +132,33 @@ export const enGB: Dictionary = {
     revoke: "Revoke",
     revokeOthers: "Sign out all other devices",
   },
+  audit: {
+    heading: "Audit log",
+    description:
+      "Append-only, hash-chained per tenant. Every privileged action lands here. Filter by event, actor, subject, or date range; expand a row to see the full payload. Use Verify chain to confirm cryptographic integrity from genesis.",
+    exportButton: "Export NDJSON",
+    filterEvent: "Event type",
+    filterEventAny: "Any event",
+    filterActor: "Actor",
+    filterSubjectType: "Subject type",
+    filterSubjectId: "Subject id",
+    filterSince: "From",
+    filterUntil: "To",
+    filterPageSize: "Page size",
+    applyFilters: "Apply",
+    resetFilters: "Reset",
+    actorNotFound: "No member matched — filter applied as no-match.",
+    colWhen: "When",
+    colEvent: "Event",
+    colSubject: "Subject",
+    colActor: "Actor",
+    colHash: "Hash",
+    colDetails: "Details",
+    empty: "No events match these filters.",
+    showingCount: "Showing {shown} events (seq {from} → {to}).",
+    firstPage: "← First page",
+    olderPage: "Older →",
+  },
 };
 
 /**
@@ -246,5 +273,31 @@ export type Dictionary = {
     lastSeen: string;
     revoke: string;
     revokeOthers: string;
+  };
+  audit: {
+    heading: string;
+    description: string;
+    exportButton: string;
+    filterEvent: string;
+    filterEventAny: string;
+    filterActor: string;
+    filterSubjectType: string;
+    filterSubjectId: string;
+    filterSince: string;
+    filterUntil: string;
+    filterPageSize: string;
+    applyFilters: string;
+    resetFilters: string;
+    actorNotFound: string;
+    colWhen: string;
+    colEvent: string;
+    colSubject: string;
+    colActor: string;
+    colHash: string;
+    colDetails: string;
+    empty: string;
+    showingCount: string;
+    firstPage: string;
+    olderPage: string;
   };
 };

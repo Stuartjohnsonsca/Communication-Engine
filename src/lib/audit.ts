@@ -132,6 +132,140 @@ export function canonicalJson(value: unknown): string {
 }
 
 /**
+ * Filtered, paginated read of a tenant's audit chain. Used by the
+ * /[tenantSlug]/admin/audit review UI (post-PRD hardening item 20). The
+ * chain can be huge — items 11–19 alone write dozens of event types — so the
+ * default page surface is 50 events with keyset pagination on `seq DESC`.
+ *
+ * `superDb` mirrors the rest of this module's reads: integrity comes from the
+ * append-only trigger + the per-row `tenantId` filter, not from RLS. The
+ * caller is expected to enforce RBAC (`audit:read`) before invoking.
+ */
+export type AuditListFilters = {
+  eventTypes?: AuditEventType[];
+  actorMembershipId?: string | null;
+  subjectType?: string | null;
+  subjectId?: string | null;
+  since?: Date | null;
+  /** Exclusive upper bound — calendar-day friendly (`until = next day 00:00`). */
+  until?: Date | null;
+};
+
+export type AuditListInput = {
+  tenantId: string;
+  filters?: AuditListFilters;
+  /** Cursor — return only rows with `seq < before`. First page omits. */
+  before?: bigint | null;
+  /** Page size, clamped to [1, 200]. Default 50. */
+  limit?: number;
+};
+
+export type AuditListEvent = {
+  id: string;
+  seq: bigint;
+  eventType: AuditEventType;
+  actorMembershipId: string | null;
+  actor: { user: { email: string; name: string | null } } | null;
+  subjectType: string;
+  subjectId: string;
+  payload: Prisma.JsonValue;
+  createdAt: Date;
+  hash: string;
+  prevHash: string;
+};
+
+export type AuditListResult = {
+  events: AuditListEvent[];
+  /** String-encoded `seq` of the last row returned; null when no further pages. */
+  nextCursor: string | null;
+};
+
+const AUDIT_LIST_DEFAULT_LIMIT = 50;
+const AUDIT_LIST_MAX_LIMIT = 200;
+
+export async function listAuditEvents(input: AuditListInput): Promise<AuditListResult> {
+  const limit = Math.min(
+    Math.max(Math.trunc(input.limit ?? AUDIT_LIST_DEFAULT_LIMIT), 1),
+    AUDIT_LIST_MAX_LIMIT,
+  );
+  const f = input.filters ?? {};
+  const where: Prisma.AuditEventWhereInput = { tenantId: input.tenantId };
+
+  if (f.eventTypes && f.eventTypes.length > 0) where.eventType = { in: f.eventTypes };
+  if (f.actorMembershipId) where.actorMembershipId = f.actorMembershipId;
+  if (f.subjectType) where.subjectType = f.subjectType;
+  if (f.subjectId) where.subjectId = f.subjectId;
+  if (f.since || f.until) {
+    where.createdAt = {
+      ...(f.since ? { gte: f.since } : {}),
+      ...(f.until ? { lt: f.until } : {}),
+    };
+  }
+  if (input.before != null) where.seq = { lt: input.before };
+
+  // Take one extra row to determine whether a next page exists without
+  // running a separate count query (the chain can be very long).
+  const rows = await superDb.auditEvent.findMany({
+    where,
+    orderBy: { seq: "desc" },
+    take: limit + 1,
+    include: {
+      actor: { include: { user: { select: { email: true, name: true } } } },
+    },
+  });
+
+  const hasMore = rows.length > limit;
+  const events = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor =
+    hasMore && events.length > 0 ? events[events.length - 1].seq.toString() : null;
+
+  return {
+    events: events.map((e) => ({
+      id: e.id,
+      seq: e.seq,
+      eventType: e.eventType,
+      actorMembershipId: e.actorMembershipId,
+      actor: e.actor
+        ? { user: { email: e.actor.user.email, name: e.actor.user.name } }
+        : null,
+      subjectType: e.subjectType,
+      subjectId: e.subjectId,
+      payload: e.payload as Prisma.JsonValue,
+      createdAt: e.createdAt,
+      hash: e.hash,
+      prevHash: e.prevHash,
+    })),
+    nextCursor,
+  };
+}
+
+/**
+ * Resolve `actor` filter token to a membership id within the tenant. Accepts
+ * either a raw membership id or an email — the audit page treats both as
+ * valid so a reviewer can paste either. Returns `null` if no membership
+ * matches (the page renders an empty result rather than a hard error).
+ */
+export async function resolveAuditActor(
+  tenantId: string,
+  token: string,
+): Promise<string | null> {
+  const trimmed = token.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes("@")) {
+    const membership = await superDb.membership.findFirst({
+      where: { tenantId, user: { email: trimmed.toLowerCase() } },
+      select: { id: true },
+    });
+    return membership?.id ?? null;
+  }
+  const membership = await superDb.membership.findFirst({
+    where: { tenantId, id: trimmed },
+    select: { id: true },
+  });
+  return membership?.id ?? null;
+}
+
+/**
  * Walk a tenant's audit chain and verify every hash. Used by
  * `scripts/verify-audit-chain.ts` and the export endpoint.
  */

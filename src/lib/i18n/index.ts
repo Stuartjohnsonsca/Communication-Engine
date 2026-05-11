@@ -73,6 +73,7 @@ export type DictionaryPath =
   | `account.${keyof Dictionary["account"]}`
   | `twofa.${keyof Dictionary["twofa"]}`
   | `sessions.${keyof Dictionary["sessions"]}`
+  | `audit.${keyof Dictionary["audit"]}`
   | "locale";
 
 export function getT(locale: LocaleCode): TFunction {
