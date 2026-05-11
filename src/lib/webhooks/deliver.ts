@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { promises as dnsPromises } from "node:dns";
-import { superDb } from "@/lib/db";
+import { superDb, superDbWith } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { decryptJson } from "@/lib/channels/crypto";
 import { reportError, log } from "@/lib/observability";
@@ -420,18 +420,25 @@ async function reclaimStaleInFlight(asOf: Date): Promise<number> {
  * table doesn't grow forever. Called from the lifecycle-sweep cron.
  */
 export async function reapOldDeliveries(
-  opts: { deliveredKeepDays?: number; deadLetteredKeepDays?: number } = {},
+  opts: { deliveredKeepDays?: number; deadLetteredKeepDays?: number; statementTimeoutMs?: number } = {},
 ): Promise<{ deleted: number }> {
   const now = Date.now();
   const deliveredCutoff = new Date(now - (opts.deliveredKeepDays ?? 30) * 24 * 60 * 60_000);
   const deadCutoff = new Date(now - (opts.deadLetteredKeepDays ?? 90) * 24 * 60 * 60_000);
-  const result = await superDb.webhookDelivery.deleteMany({
-    where: {
-      OR: [
-        { status: "DELIVERED", completedAt: { lt: deliveredCutoff } },
-        { status: "DEAD_LETTERED", completedAt: { lt: deadCutoff } },
-      ],
-    },
+  // Bounded statement_timeout — the cumulative deleteMany over `status +
+  // completedAt` is the largest sweep this module does and the cron is
+  // the only path that touches it; a missing index or bloated stats can
+  // turn it into a long scan. 60s default (10x the typical complete
+  // time on a healthy index).
+  return superDbWith({ statementTimeoutMs: opts.statementTimeoutMs }, async (tx) => {
+    const result = await tx.webhookDelivery.deleteMany({
+      where: {
+        OR: [
+          { status: "DELIVERED", completedAt: { lt: deliveredCutoff } },
+          { status: "DEAD_LETTERED", completedAt: { lt: deadCutoff } },
+        ],
+      },
+    });
+    return { deleted: result.count };
   });
-  return { deleted: result.count };
 }

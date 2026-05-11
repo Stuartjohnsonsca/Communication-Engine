@@ -47,7 +47,7 @@
  * `/api/v1/*` response today is well under this cap.
  */
 import { createHash } from "node:crypto";
-import { superDb } from "@/lib/db";
+import { superDb, superDbWith } from "@/lib/db";
 
 export const IDEMPOTENCY_HEADER = "idempotency-key";
 export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -261,13 +261,17 @@ function isUniqueViolation(err: unknown): boolean {
 
 /**
  * Garbage-collect expired idempotency rows. Called from the
- * lifecycle-sweep cron.
+ * lifecycle-sweep cron. Wrapped in `superDbWith` so a runaway sweep
+ * can't pin a pool connection.
  */
 export async function purgeExpiredIdempotencyKeys(
   now: Date = new Date(),
+  opts: { statementTimeoutMs?: number } = {},
 ): Promise<{ deleted: number }> {
-  const result = await superDb.apiIdempotencyKey.deleteMany({
-    where: { expiresAt: { lt: now } },
+  return superDbWith({ statementTimeoutMs: opts.statementTimeoutMs }, async (tx) => {
+    const result = await tx.apiIdempotencyKey.deleteMany({
+      where: { expiresAt: { lt: now } },
+    });
+    return { deleted: result.count };
   });
-  return { deleted: result.count };
 }

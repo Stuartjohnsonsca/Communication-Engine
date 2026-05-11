@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 import {
   clampStatementTimeoutMs,
   getTenantStatementTimeoutMs,
@@ -124,3 +124,43 @@ export function tenantDb(tenantId: string, opts?: { statementTimeoutMs?: number 
  * Every call must be reviewed and logged.
  */
 export const superDb = prisma;
+
+/**
+ * Bounded-timeout wrapper for `superDb` work that would otherwise hold a
+ * pool connection indefinitely on a hostile or pathological query plan.
+ *
+ * `tenantDb` (the request-time client) already sets `statement_timeout` per
+ * transaction from item 29. `superDb` callers (cron sweeps, Acumon admin
+ * paths, NextAuth callbacks) bypass that protection because they don't
+ * wrap each call in a transaction. For the cron sweeps that issue
+ * unbounded `deleteMany` / `updateMany` against potentially-huge tables,
+ * a missing or bloated index could turn a routine reap into a pool stall.
+ *
+ * Usage — swap `superDb.X.op(args)` for `tx.X.op(args)` inside the
+ * callback. The wrapper opens a Prisma interactive transaction, issues
+ * `SET LOCAL statement_timeout`, then runs the callback. The fn's return
+ * value bubbles out unchanged.
+ *
+ *   const { deleted } = await superDbWith({ statementTimeoutMs: 60_000 }, async (tx) => {
+ *     const r = await tx.webhookDelivery.deleteMany({ where: { ... } });
+ *     return { deleted: r.count };
+ *   });
+ *
+ * Default timeout: 60s (more generous than the UI-request default of 15s
+ * from `tenantDb` — cron sweeps legitimately take longer than UI clicks).
+ * Override per call as needed; clamped to [100ms, 10min] per item 29.
+ */
+export async function superDbWith<T>(
+  opts: { statementTimeoutMs?: number },
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  const stmtTimeoutMs = clampStatementTimeoutMs(
+    opts.statementTimeoutMs ?? DEFAULT_SUPER_DB_STATEMENT_TIMEOUT_MS,
+  );
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${stmtTimeoutMs}`);
+    return fn(tx);
+  });
+}
+
+const DEFAULT_SUPER_DB_STATEMENT_TIMEOUT_MS = 60_000;

@@ -31,7 +31,7 @@
  * application less available than it would have been without it.
  */
 import { randomUUID } from "node:crypto";
-import { superDb } from "@/lib/db";
+import { superDb, superDbWith } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { reportError, log } from "@/lib/observability";
 
@@ -351,10 +351,19 @@ export async function rateLimitByMembership(
  * any row whose `updatedAt` is more than 7 days old is reaped. A subsequent
  * request just re-creates the row.
  */
-export async function reapStaleRateLimitBuckets(): Promise<{ deleted: number }> {
+export async function reapStaleRateLimitBuckets(opts: {
+  statementTimeoutMs?: number;
+} = {}): Promise<{ deleted: number }> {
   const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const deleted = await superDb.rateLimitBucket.deleteMany({
-    where: { updatedAt: { lt: cutoff } },
+  // Bounded statement_timeout — `RateLimitBucket` grows with every IP
+  // that ever hit the platform; the deleteMany walks `updatedAt < cutoff`
+  // and the index makes it cheap in normal operation, but a stats blowup
+  // could still cost minutes. 60s ceiling keeps a runaway sweep from
+  // holding a pool connection.
+  return superDbWith({ statementTimeoutMs: opts.statementTimeoutMs }, async (tx) => {
+    const deleted = await tx.rateLimitBucket.deleteMany({
+      where: { updatedAt: { lt: cutoff } },
+    });
+    return { deleted: deleted.count };
   });
-  return { deleted: deleted.count };
 }
