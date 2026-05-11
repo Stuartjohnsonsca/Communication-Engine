@@ -4,7 +4,10 @@ import { expireOverdueTias } from "@/lib/compliance/cross-border";
 import { reapStaleRateLimitBuckets, rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
 import { reapOldDeliveries } from "@/lib/webhooks";
 import { sweepExpiredSessions } from "@/lib/auth/sessions";
-import { sweepInactiveOrExpiredApiKeys } from "@/lib/auth/api-keys";
+import {
+  sweepInactiveOrExpiredApiKeys,
+  purgeExpiredIdempotencyKeys,
+} from "@/lib/auth/api-keys";
 import { withCronHeartbeat } from "@/lib/cron-health";
 import { processDueChanges } from "@/lib/subprocessors";
 
@@ -60,6 +63,11 @@ export async function GET(req: Request) {
     // confirmChange is a no-op when the change has already been promoted
     // (e.g. an Acumon operator clicked "Confirm now" earlier).
     const subprocessors = await processDueChanges();
+    // Post-PRD hardening — Stripe-style idempotency keys for /api/v1/*
+    // write endpoints expire 24h after creation. The deleteMany is
+    // bounded by the partial-index on expiresAt so this scales with the
+    // expired-row count, not the live key count.
+    const idempotency = await purgeExpiredIdempotencyKeys();
     return {
       ...result,
       tiaExpired: tia.expired,
@@ -71,6 +79,7 @@ export async function GET(req: Request) {
       apiKeysRevokedForExpiry: apiKeys.revokedForExpiry,
       subprocessorChangesConsidered: subprocessors.considered,
       subprocessorChangesConfirmed: subprocessors.confirmed,
+      idempotencyKeysPurged: idempotency.deleted,
     };
   });
   return NextResponse.json({ ok: true, ...payload });

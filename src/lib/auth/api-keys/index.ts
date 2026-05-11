@@ -38,3 +38,21 @@ export type {
 
 export { withApiKey } from "./auth";
 export type { ApiKeyContext, ApiKeyHandler, WithApiKeyOptions } from "./auth";
+
+export {
+  withIdempotency,
+  hashRequestBody,
+  validateKey as validateIdempotencyKey,
+  purgeExpiredIdempotencyKeys,
+  IdempotencyError,
+  IDEMPOTENCY_HEADER,
+  IDEMPOTENCY_TTL_MS,
+  IDEMPOTENCY_MIN_KEY_LEN,
+  IDEMPOTENCY_MAX_KEY_LEN,
+  IDEMPOTENCY_RESPONSE_BODY_CAP_BYTES,
+} from "./idempotency";
+export type {
+  IdempotencyErrorCode,
+  WithIdempotencyInput,
+  IdempotencyResult,
+} from "./idempotency";

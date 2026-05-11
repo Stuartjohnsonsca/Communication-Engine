@@ -802,6 +802,7 @@ model Tenant {
   webhookSubscriptions      WebhookSubscription[]
   webhookDeliveries         WebhookDelivery[]
   apiKeys                   ApiKey[]
+  apiIdempotencyKeys        ApiIdempotencyKey[]
   auditChainVerifications   AuditChainVerification[]
   subProcessorObjections    SubProcessorObjection[]
 
@@ -2945,7 +2946,61 @@ model ApiKey {
   createdBy Membership  @relation("ApiKeyCreatedBy", fields: [createdByMembershipId], references: [id], onDelete: Cascade)
   revokedBy Membership? @relation("ApiKeyRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
 
+  idempotencyKeys ApiIdempotencyKey[]
+
   @@index([tenantId, revokedAt])
   @@index([createdByMembershipId])
+  @@index([expiresAt])
+}
+
+/// Stripe-style idempotency keys for `/api/v1/*` write endpoints.
+///
+/// Lifecycle:
+///   1. Pre-insert a RESERVATION row (`completedAt` null, `statusCode` null).
+///   2. Run the handler.
+///   3. UPDATE the row with the actual response + `completedAt = now()`.
+///
+/// A retried request that lands on the same `(apiKeyId, key, methodPath)`
+/// returns the cached response without re-executing. A retry with the
+/// same key but a different `requestHash` is a 422 conflict (Stripe
+/// convention). A retry that lands on a still-reserved row gets a 409
+/// "request still in progress" — concurrent same-key requests must
+/// serialise, not double-execute.
+///
+/// Tenant-scoped: RLS in `prisma/rls.sql` blocks cross-tenant reads.
+/// TTL: 24h, purged by lifecycle-sweep.
+model ApiIdempotencyKey {
+  id           String    @id @default(cuid())
+  tenantId     String
+  apiKeyId     String
+  /// The Idempotency-Key header value the integrator supplied. Length
+  /// bounded at the application layer (1..200 chars).
+  key          String
+  /// HTTP method + path the key was used against, e.g.
+  /// `POST /api/v1/webhooks/replay`. Same key against different paths
+  /// is treated as independent — keys are scoped per (method, path).
+  methodPath   String
+  /// SHA-256 hex of the request body. Empty-body requests hash an
+  /// empty string. Used to detect "same key, different body" reuse
+  /// (Stripe-style 422 conflict).
+  requestHash  String
+  /// HTTP status code of the cached response. Null while reserved.
+  statusCode   Int?
+  /// Cached response body. Null while reserved. Capped at 64KB at
+  /// write time — larger responses skip caching (the request still
+  /// succeeds, but a subsequent retry will re-execute).
+  responseBody String?   @db.Text
+  createdAt    DateTime  @default(now())
+  /// Set on phase-3 promotion. Null = still reserved (in-flight).
+  completedAt  DateTime?
+  /// TTL boundary. After this, the row is purged by lifecycle-sweep
+  /// and subsequent retries get fresh execution.
+  expiresAt    DateTime
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([apiKeyId, key, methodPath])
+  @@index([tenantId])
   @@index([expiresAt])
 }

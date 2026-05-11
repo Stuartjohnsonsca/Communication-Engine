@@ -43,6 +43,7 @@ DECLARE
     'WebhookSubscription',
     'WebhookDelivery',
     'ApiKey',
+    'ApiIdempotencyKey',
     'AuditChainVerification',
     'SubProcessorObjection'
   ];
