@@ -8,7 +8,7 @@ import {
   sweepInactiveOrExpiredApiKeys,
   purgeExpiredIdempotencyKeys,
 } from "@/lib/auth/api-keys";
-import { withCronHeartbeat } from "@/lib/cron-health";
+import { withCronHeartbeat, cronJson } from "@/lib/cron-health";
 import { processDueChanges } from "@/lib/subprocessors";
 
 /**
@@ -36,7 +36,7 @@ export async function GET(req: Request) {
   if (auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
-  const payload = await withCronHeartbeat("lifecycle-sweep", async () => {
+  return cronJson(() => withCronHeartbeat("lifecycle-sweep", async () => {
     const result = await runLifecycleSweep();
     // PRD §12.6 — flip TIAs whose effectiveTo has passed to EXPIRED in the
     // same sweep so the cross-border view stays accurate without a second
@@ -88,8 +88,7 @@ export async function GET(req: Request) {
       idempotencyKeysPurged: idempotency.deleted,
       webhookSecretPrevCleared: webhookSecrets.cleared,
     };
-  });
-  return NextResponse.json({ ok: true, ...payload });
+  }));
 }
 
 export const POST = GET;

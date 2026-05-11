@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
-import { withCronHeartbeat } from "@/lib/cron-health";
+import { withCronHeartbeat, cronJson } from "@/lib/cron-health";
 import { runChainVerificationPass } from "@/lib/audit-verify";
 
 /**
@@ -32,21 +32,23 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  const result = await withCronHeartbeat("audit-verify", () => runChainVerificationPass());
-
-  // Serialise outcomes so BigInt failedAtSeq survives JSON.
-  const outcomes = result.outcomes.map((o) => ({
-    ...o,
-    failedAtSeq: o.failedAtSeq === null ? null : Number(o.failedAtSeq),
-  }));
-  return NextResponse.json({
-    ok: true,
-    evaluated: result.evaluated,
-    okCount: result.ok,
-    tampered: result.tampered,
-    errored: result.errored,
-    outcomes,
-  });
+  return cronJson(() =>
+    withCronHeartbeat("audit-verify", async () => {
+      const result = await runChainVerificationPass();
+      // Serialise outcomes so BigInt failedAtSeq survives JSON.
+      const outcomes = result.outcomes.map((o) => ({
+        ...o,
+        failedAtSeq: o.failedAtSeq === null ? null : Number(o.failedAtSeq),
+      }));
+      return {
+        evaluated: result.evaluated,
+        okCount: result.ok,
+        tampered: result.tampered,
+        errored: result.errored,
+        outcomes,
+      };
+    }),
+  );
 }
 
 export const POST = GET;

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
-import { runHealthCheck, withCronHeartbeat } from "@/lib/cron-health";
+import { runHealthCheck, withCronHeartbeat, cronJson } from "@/lib/cron-health";
 
 /**
  * Post-PRD hardening item 22 — cron heartbeat monitoring worker.
@@ -35,13 +35,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  const result = await withCronHeartbeat("health-check", () => runHealthCheck());
-  return NextResponse.json({
-    ok: true,
-    evaluated: result.evaluated,
-    alerted: result.alerted,
-    alerts: result.alerts,
-  });
+  return cronJson(() =>
+    withCronHeartbeat("health-check", async () => {
+      const result = await runHealthCheck();
+      return {
+        evaluated: result.evaluated,
+        alerted: result.alerted,
+        alerts: result.alerts,
+      };
+    }),
+  );
 }
 
 export const POST = GET;

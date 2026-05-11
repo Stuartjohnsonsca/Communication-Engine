@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { runHardDeletionSweep } from "@/lib/termination";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
-import { withCronHeartbeat } from "@/lib/cron-health";
+import { withCronHeartbeat, cronJson } from "@/lib/cron-health";
 
 /**
  * PRD §14.4 hard-deletion sweep. Idempotent — only acts on tenants whose
@@ -30,8 +30,9 @@ export async function GET(req: Request) {
   if (auth !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "unauthorised" }, { status: 401 });
   }
-  const result = await withCronHeartbeat("termination", () => runHardDeletionSweep());
-  return NextResponse.json({ ok: true, ...result });
+  return cronJson(() =>
+    withCronHeartbeat("termination", () => runHardDeletionSweep()),
+  );
 }
 
 export const POST = GET;

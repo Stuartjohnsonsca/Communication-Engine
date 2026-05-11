@@ -328,6 +328,12 @@ enum AuditEventType {
   TOTP_RESET_BY_ADMIN
   SIGN_IN_NEW_DEVICE
   CRON_RUN_FAILED
+  /// Post-PRD hardening item 47 — a cron invocation found another run
+  /// already in flight (advisory lock held) and exited without doing
+  /// any work. Payload carries `{ cronName }`. The scheduler's response
+  /// also surfaces `skipped: "concurrent"` so observability dashboards
+  /// can distinguish "skipped" from "succeeded with no work to do".
+  CRON_RUN_SKIPPED_CONCURRENT
   CRON_STALLED
   AUDIT_CHAIN_VERIFIED
   AUDIT_CHAIN_TAMPERED

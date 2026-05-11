@@ -1,6 +1,7 @@
 import { superDb } from "@/lib/db";
 import { reportError } from "@/lib/observability";
 import { registeredCron } from "./register";
+import { withCronLock, CronSkippedError } from "./lock";
 
 /**
  * Wrap a cron handler with heartbeat recording.
@@ -36,10 +37,20 @@ export async function withCronHeartbeat<T>(
   await markRunStarted(cronName, registration.expectedIntervalMinutes, startedAt);
 
   try {
-    const result = await fn();
+    // Concurrency gate (item 47): if another invocation of this cron is
+    // already in flight, `withCronLock` throws `CronSkippedError` and
+    // we record the skip without doing the work. `lastRunAt` is
+    // already stamped above (so the scheduler can see we DID get
+    // invoked), but `lastSuccessAt` is intentionally NOT advanced —
+    // the run did no work and should not satisfy the stall heuristic.
+    const result = await withCronLock(cronName, fn);
     await markRunSucceeded(cronName, startedAt);
     return result;
   } catch (err) {
+    if (err instanceof CronSkippedError) {
+      await markRunSkippedConcurrent(cronName);
+      throw err;
+    }
     await markRunFailed(cronName, err);
     throw err;
   }
@@ -86,6 +97,25 @@ async function markRunSucceeded(cronName: string, startedAt: Date): Promise<void
     });
   } catch (err) {
     reportError(err, { tags: { kind: "cron-heartbeat", cronName, phase: "success" } });
+  }
+}
+
+/**
+ * Item 47 — record that an invocation found the advisory lock held and
+ * exited without work. We DON'T bump `consecutiveFailures` (this isn't a
+ * failure) and DON'T advance `lastSuccessAt` (no work happened). The
+ * Acumon-side audit row gives an operator the forensic trace.
+ */
+async function markRunSkippedConcurrent(cronName: string): Promise<void> {
+  try {
+    const { writeCronAuditOnAcumon } = await import("./audit");
+    await writeCronAuditOnAcumon("CRON_RUN_SKIPPED_CONCURRENT", cronName, {
+      cronName,
+    });
+  } catch (auditErr) {
+    reportError(auditErr, {
+      tags: { kind: "cron-heartbeat", cronName, phase: "skipped-concurrent" },
+    });
   }
 }
 
