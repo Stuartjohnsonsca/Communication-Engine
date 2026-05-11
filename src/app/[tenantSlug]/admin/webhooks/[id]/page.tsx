@@ -4,7 +4,7 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { hasPermission, requirePermission } from "@/lib/rbac";
 import { superDb } from "@/lib/db";
-import { getSubscription, replayDelivery, fireTestEvent } from "@/lib/webhooks";
+import { getSubscription, replayDelivery, fireTestEvent, getDeliveryStats } from "@/lib/webhooks";
 
 /**
  * Per-subscription detail. Shows recent deliveries (PENDING + IN_FLIGHT +
@@ -41,23 +41,26 @@ export default async function WebhookDetailPage({
     );
   }
 
-  const recent = await superDb.webhookDelivery.findMany({
-    where: { tenantId: ctx.tenant.id, subscriptionId: sub.id },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-    select: {
-      id: true,
-      eventType: true,
-      status: true,
-      attempt: true,
-      maxAttempts: true,
-      lastStatusCode: true,
-      lastError: true,
-      scheduledFor: true,
-      completedAt: true,
-      createdAt: true,
-    },
-  });
+  const [recent, stats] = await Promise.all([
+    superDb.webhookDelivery.findMany({
+      where: { tenantId: ctx.tenant.id, subscriptionId: sub.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        eventType: true,
+        status: true,
+        attempt: true,
+        maxAttempts: true,
+        lastStatusCode: true,
+        lastError: true,
+        scheduledFor: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    }),
+    getDeliveryStats({ tenantId: ctx.tenant.id, subscriptionId: sub.id, windowHours: 24 }),
+  ]);
 
   const canConfigure = hasPermission(ctx.membership.role, "webhooks:configure");
 
@@ -152,6 +155,55 @@ export default async function WebhookDetailPage({
           <div className="text-xs uppercase text-ink/50">Last status code</div>
           <div className="font-medium">{sub.lastStatusCode ?? "—"}</div>
         </div>
+      </div>
+
+      <div className="card space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-base font-medium">Last 24h</h2>
+          <span className="text-xs text-ink/60">
+            {stats.total} {stats.total === 1 ? "delivery" : "deliveries"}
+          </span>
+        </div>
+        {stats.total === 0 ? (
+          <p className="text-sm text-ink/60">No deliveries in the window.</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <StatusPill label="Delivered" count={stats.byStatus.DELIVERED} tone="emerald" />
+              <StatusPill label="Pending" count={stats.byStatus.PENDING} tone="amber" />
+              <StatusPill label="In flight" count={stats.byStatus.IN_FLIGHT} tone="indigo" />
+              <StatusPill label="Dead-lettered" count={stats.byStatus.DEAD_LETTERED} tone="red" />
+            </div>
+            <div>
+              <div className="text-xs uppercase text-ink/50">Response code families</div>
+              <div className="mt-1 grid grid-cols-3 gap-2 text-sm sm:grid-cols-6">
+                <CodeFamily label="2xx" count={stats.byCodeFamily["2xx"]} tone="emerald" />
+                <CodeFamily label="3xx" count={stats.byCodeFamily["3xx"]} tone="indigo" />
+                <CodeFamily label="4xx" count={stats.byCodeFamily["4xx"]} tone="amber" />
+                <CodeFamily label="5xx" count={stats.byCodeFamily["5xx"]} tone="red" />
+                <CodeFamily label="network" count={stats.byCodeFamily.network} tone="slate" />
+                <CodeFamily label="other" count={stats.byCodeFamily.unknown} tone="slate" />
+              </div>
+            </div>
+            {stats.topCodes.length > 0 && (
+              <div>
+                <div className="text-xs uppercase text-ink/50">Top response codes</div>
+                <ul className="mt-1 divide-y divide-ink/5 text-sm">
+                  {stats.topCodes.map((c) => (
+                    <li key={String(c.code)} className="flex items-baseline justify-between py-1">
+                      <code className="font-mono text-xs">
+                        {c.code === "network" ? "no response (network)" : `HTTP ${c.code}`}
+                      </code>
+                      <span className="text-xs text-ink/60">
+                        {c.count} ({((c.count / stats.total) * 100).toFixed(0)}%)
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {canConfigure && (
@@ -263,4 +315,32 @@ function statusLabel(status: string): string {
     default:
       return status;
   }
+}
+
+type Tone = "emerald" | "amber" | "indigo" | "red" | "slate";
+
+const TONE_CLASSES: Record<Tone, string> = {
+  emerald: "border-emerald-300 bg-emerald-50/60 text-emerald-900",
+  amber: "border-amber-300 bg-amber-50/60 text-amber-900",
+  indigo: "border-indigo-300 bg-indigo-50/60 text-indigo-900",
+  red: "border-red-300 bg-red-50/60 text-red-900",
+  slate: "border-ink/10 bg-ink/5 text-ink/80",
+};
+
+function StatusPill({ label, count, tone }: { label: string; count: number; tone: Tone }) {
+  return (
+    <div className={`rounded border px-2 py-1 ${TONE_CLASSES[tone]}`}>
+      <div className="text-[10px] uppercase tracking-wide opacity-80">{label}</div>
+      <div className="text-lg font-medium leading-tight">{count}</div>
+    </div>
+  );
+}
+
+function CodeFamily({ label, count, tone }: { label: string; count: number; tone: Tone }) {
+  return (
+    <div className={`rounded border px-2 py-1 ${TONE_CLASSES[tone]}`}>
+      <div className="text-[10px] uppercase tracking-wide opacity-80">{label}</div>
+      <div className="text-sm font-medium leading-tight">{count}</div>
+    </div>
+  );
 }

@@ -20,3 +20,4 @@ export * from "./subscriptions";
 export * from "./dispatch";
 export * from "./deliver";
 export * from "./test-fire";
+export * from "./delivery-stats";
