@@ -299,6 +299,8 @@ enum AuditEventType {
   SIGN_IN_NEW_DEVICE
   CRON_RUN_FAILED
   CRON_STALLED
+  AUDIT_CHAIN_VERIFIED
+  AUDIT_CHAIN_TAMPERED
 }
 
 enum BillingPeriodStatus {
@@ -794,6 +796,7 @@ model Tenant {
   webhookSubscriptions      WebhookSubscription[]
   webhookDeliveries         WebhookDelivery[]
   apiKeys                   ApiKey[]
+  auditChainVerifications   AuditChainVerification[]
 
   @@index([status])
 }
@@ -2594,6 +2597,51 @@ model CronHeartbeat {
   updatedAt               DateTime  @updatedAt
 
   @@index([lastSuccessAt])
+}
+
+// ─── Audit chain background verification (post-PRD hardening item 23) ─────
+
+enum AuditChainVerificationStatus {
+  RUNNING
+  OK
+  TAMPERED
+  ERRORED
+}
+
+/// One row per (tenant, verification run). Written by the daily
+/// `/api/cron/audit-verify` worker which calls `verifyAuditChain(tenantId)`
+/// for every active tenant. On OK the row records timing + event count;
+/// on TAMPERED the row records `failedAtSeq` + emits
+/// `AUDIT_CHAIN_TAMPERED` audit on BOTH the affected tenant's chain AND
+/// the Acumon operator chain (chain integrity is a controllership and
+/// processor concern simultaneously) + dispatches immediate notifications
+/// to the affected tenant's FIRM_ADMINs AND Acumon operators.
+///
+/// Tenant-scoped + RLS-protected — the verification log is sensitive
+/// (tells an attacker which chains have been touched and when they were
+/// last verified). Listed in `prisma/rls.sql tenant_tables`.
+model AuditChainVerification {
+  id           String                       @id @default(cuid())
+  tenantId     String
+  tenant       Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status       AuditChainVerificationStatus
+  startedAt    DateTime                     @default(now())
+  finishedAt   DateTime?
+  eventCount   Int                          @default(0)
+  /// Seq of the first event whose hash didn't validate. Stable across
+  /// reruns of the same tamper — part of the dedupe key.
+  failedAtSeq  BigInt?
+  tookMs       Int?
+  errorMessage String?
+  /// Last time a tamper notification fired for THIS run. Subsequent runs
+  /// that find the same failedAtSeq within the dedupe window are silent;
+  /// a different failedAtSeq re-alerts immediately.
+  notifiedAt   DateTime?
+  createdAt    DateTime                     @default(now())
+  updatedAt    DateTime                     @updatedAt
+
+  @@index([tenantId, startedAt(sort: Desc)])
+  @@index([status])
 }
 
 // ─── Outbound webhook delivery (post-PRD hardening item 14) ───────────────

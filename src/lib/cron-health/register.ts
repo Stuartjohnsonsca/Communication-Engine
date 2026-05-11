@@ -59,6 +59,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "This worker — periodically evaluates every other cron's heartbeat and emits CRON_STALLED audit + notifications.",
   },
+  {
+    cronName: "audit-verify",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "Item 23 — daily background verification of every tenant's audit chain. Emits AUDIT_CHAIN_TAMPERED audit + critical notification on hash mismatch.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {

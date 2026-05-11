@@ -374,3 +374,118 @@ export async function dispatchCronStalled(input: {
   }
   return { recipients: recipients.length };
 }
+
+// ─── Audit chain tampered (post-PRD hardening item 23) ────────────────────
+
+/**
+ * Critical security alert: the daily chain-verification cron detected a
+ * hash mismatch in `tenant`'s audit chain. Recipients = every ACTIVE
+ * FIRM_ADMIN of the affected tenant + every ACTIVE FIRM_ADMIN +
+ * ACUMON_ADMIN of the Acumon operator tenant. Chain integrity is a
+ * controllership concern for the Client (their data, their DPO) and a
+ * processor concern for Acumon (platform-grade incident) — both sides
+ * must be notified simultaneously.
+ *
+ * Dedupe key = `<tenantId>:<failedAtSeq>` — a persistent tamper on the
+ * same seq alerts once; tamper that spreads to a different seq re-alerts.
+ * The run.ts caller has already claimed `notifiedAt` so two passes can't
+ * both reach this code path for the same row.
+ */
+export async function dispatchAuditChainTampered(input: {
+  affectedTenantId: string;
+  affectedTenantSlug: string;
+  affectedTenantName: string;
+  failedAtSeq: number;
+}): Promise<{ recipients: number }> {
+  const operator = await superDb.tenant.findUnique({
+    where: { slug: "acumon" },
+    select: { id: true },
+  });
+
+  // Affected-tenant FIRM_ADMINs. If the affected tenant IS acumon (a
+  // tamper on the operator's own chain), we still want the FIRM_ADMINs
+  // here — they ARE the Acumon operators in that case.
+  const affectedRows = await superDb.membership.findMany({
+    where: {
+      tenantId: input.affectedTenantId,
+      status: "ACTIVE",
+      role: "FIRM_ADMIN",
+    },
+    include: { user: { select: { email: true } } },
+  });
+
+  // Operator-side recipients (FIRM_ADMIN + ACUMON_ADMIN of the acumon
+  // tenant). Skip if affected==operator to avoid double-notifying.
+  const operatorRows =
+    operator && operator.id !== input.affectedTenantId
+      ? await superDb.membership.findMany({
+          where: {
+            tenantId: operator.id,
+            status: "ACTIVE",
+            role: { in: ["FIRM_ADMIN", "ACUMON_ADMIN"] },
+          },
+          include: { user: { select: { email: true } } },
+        })
+      : [];
+
+  const dedupeKey = `${input.affectedTenantId}:${input.failedAtSeq}`;
+  const subject = `CRITICAL: Audit chain integrity violation detected — ${input.affectedTenantName}`;
+  const summary = `Hash mismatch detected at seq ${input.failedAtSeq}. Manual investigation required.`;
+  const body = [
+    `The daily audit chain verification has detected a hash mismatch in the per-tenant audit chain.`,
+    "",
+    `Affected tenant: ${input.affectedTenantName} (${input.affectedTenantSlug})`,
+    `First failing event sequence: ${input.failedAtSeq}`,
+    "",
+    `This indicates one of: (a) direct DB write that bypassed the immutability trigger,`,
+    `(b) a backup restore that didn't preserve hash linkage, or (c) a code-path bug.`,
+    "",
+    `Open /${input.affectedTenantSlug}/admin/audit for the verification history.`,
+    `Compare the affected seq against your most recent verified backup before taking any action.`,
+    `Per the DPA, contractually-relevant chain integrity is a 24-hour notification obligation —`,
+    `confirm whether the affected events touch a personal-data breach record (PRD §12.9) and`,
+    `notify Acumon's DPO if so.`,
+  ].join("\n");
+
+  let dispatched = 0;
+  for (const r of affectedRows) {
+    if (!r.user.email) continue;
+    await dispatchNotification({
+      tenantId: input.affectedTenantId,
+      membershipId: r.id,
+      toEmail: r.user.email,
+      kind: "audit_chain_tampered",
+      dedupeKey,
+      subject,
+      summary,
+      text: body,
+      href: `/${input.affectedTenantSlug}/admin/audit`,
+      payload: {
+        affectedTenantSlug: input.affectedTenantSlug,
+        failedAtSeq: input.failedAtSeq,
+        recipientReason: "affected_firm_admin",
+      },
+    });
+    dispatched += 1;
+  }
+  for (const r of operatorRows) {
+    if (!r.user.email) continue;
+    await dispatchNotification({
+      tenantId: operator!.id,
+      membershipId: r.id,
+      toEmail: r.user.email,
+      kind: "audit_chain_tampered",
+      dedupeKey,
+      subject,
+      summary,
+      text: body,
+      payload: {
+        affectedTenantSlug: input.affectedTenantSlug,
+        failedAtSeq: input.failedAtSeq,
+        recipientReason: "acumon_operator",
+      },
+    });
+    dispatched += 1;
+  }
+  return { recipients: dispatched };
+}

@@ -42,7 +42,8 @@ DECLARE
     'NotificationInbox',
     'WebhookSubscription',
     'WebhookDelivery',
-    'ApiKey'
+    'ApiKey',
+    'AuditChainVerification'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

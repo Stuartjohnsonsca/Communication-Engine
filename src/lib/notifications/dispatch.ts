@@ -42,7 +42,8 @@ export type NotificationKind =
   | "adherence_escalation"
   | "totp_reset_by_admin"
   | "sign_in_new_device"
-  | "cron_stalled";
+  | "cron_stalled"
+  | "audit_chain_tampered";
 
 export type DispatchResult = {
   alreadySent: boolean;

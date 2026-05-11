@@ -7,6 +7,7 @@ import { listAuditEvents, resolveAuditActor, type AuditListFilters } from "@/lib
 import { getT, resolveLocale } from "@/lib/i18n";
 import VerifyChainButton from "./VerifyChainButton";
 import AuditRow from "./AuditRow";
+import ChainVerificationCard from "./ChainVerificationCard";
 
 type SearchParams = {
   event?: string;
@@ -159,6 +160,8 @@ export default async function AuditPage({
           )}
         </div>
       </div>
+
+      <ChainVerificationCard tenantId={ctx.tenant.id} />
 
       <form className="card space-y-3" method="get">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
