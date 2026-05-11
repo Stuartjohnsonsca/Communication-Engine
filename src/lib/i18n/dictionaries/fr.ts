@@ -115,6 +115,9 @@ export const fr: Dictionary = {
     badCodeError:
       "Ce code ne correspond pas. Essayez le suivant affiché par votre application d'authentification.",
     rateLimitedError: "Trop de tentatives. Réessayez dans un instant.",
+    stepUpHeading: "Confirmer avec votre authentificateur",
+    stepUpDescription:
+      "Cette action nécessite une nouvelle confirmation à deux facteurs. Saisissez le code actuel de votre application d'authentification pour continuer.",
   },
   sessions: {
     heading: "Sessions actives",

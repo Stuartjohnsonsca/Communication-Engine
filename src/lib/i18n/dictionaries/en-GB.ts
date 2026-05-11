@@ -116,6 +116,9 @@ export const enGB: Dictionary = {
     continueButton: "Continue",
     badCodeError: "That code didn't match. Try the next one your authenticator displays.",
     rateLimitedError: "Too many attempts. Try again shortly.",
+    stepUpHeading: "Confirm with your authenticator",
+    stepUpDescription:
+      "This action requires a fresh second-factor confirmation. Enter the current code from your authenticator app to proceed.",
   },
   sessions: {
     heading: "Active sessions",
@@ -230,6 +233,8 @@ export type Dictionary = {
     continueButton: string;
     badCodeError: string;
     rateLimitedError: string;
+    stepUpHeading: string;
+    stepUpDescription: string;
   };
   sessions: {
     heading: string;

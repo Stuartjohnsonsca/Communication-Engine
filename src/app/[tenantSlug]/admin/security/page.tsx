@@ -17,6 +17,7 @@ import {
   MAX_ABSOLUTE_TIMEOUT_MINUTES,
 } from "@/lib/auth/sessions";
 import { updateTenantAllowlist, AllowlistValidationError } from "@/lib/auth/ip-allowlist";
+import { requireStepUp, resolveCurrentSessionId, StepUpRequired } from "@/lib/auth/totp";
 
 /**
  * Tenant-wide 2FA policy. The Firm Administrator can require every active
@@ -115,11 +116,40 @@ export default async function SecurityPage({
     revalidatePath(`/${tenantSlug}/admin/security`);
   }
 
+  // Shared step-up gate for sensitive mutations on this page. The
+  // helper redirects to /auth/2fa?stepUp=1 with `next` set to the
+  // current page so the User lands back here after re-verifying.
+  // On stale/no-totp it never returns (redirects via Next.js); on
+  // fresh it returns normally.
+  async function gateStepUp(opKey: string) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) redirect("/login");
+    const sessionId = await resolveCurrentSessionId();
+    try {
+      await requireStepUp({
+        sessionId,
+        userId: inner.user.id,
+        tenantStepUpMaxAgeMinutes: inner.tenant.stepUpMaxAgeMinutes,
+        nextUrl: `/${tenantSlug}/admin/security`,
+        opKey,
+      });
+    } catch (err) {
+      if (err instanceof StepUpRequired) {
+        redirect(
+          `/${tenantSlug}/auth/2fa?stepUp=1&op=${encodeURIComponent(err.opKey)}&next=${encodeURIComponent(err.nextUrl)}`,
+        );
+      }
+      throw err;
+    }
+  }
+
   async function updateTimeoutsAction(formData: FormData) {
     "use server";
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
     requirePermission(inner.membership.role, "tenant:configure-session-timeout");
+    await gateStepUp("session-timeouts-change");
     function parse(raw: FormDataEntryValue | null): number | null {
       if (typeof raw !== "string") return null;
       const trimmed = raw.trim();
@@ -175,6 +205,7 @@ export default async function SecurityPage({
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
     requirePermission(inner.membership.role, "tenant:configure-ip-allowlist");
+    await gateStepUp("ip-allowlist-change");
     const raw = (formData.get("allowedIpCidrs") as string | null) ?? "";
     // Split on newline OR comma so admins can paste either format.
     const lines = raw.split(/[\n,]/);
@@ -200,6 +231,12 @@ export default async function SecurityPage({
     if (!inner) throw new Error("forbidden");
     requirePermission(inner.membership.role, "tenant:configure-totp-policy");
     const desired = (formData.get("requireTotp") as string | null) === "on";
+    // Only gate step-up when the policy actually changes — a stable
+    // form re-submit is a no-op below and shouldn't trigger a fresh
+    // challenge dialog.
+    if (inner.tenant.requireTotp !== desired) {
+      await gateStepUp("totp-policy-change");
+    }
     if (inner.tenant.requireTotp === desired) return;
     await superDb.tenant.update({
       where: { id: inner.tenant.id },

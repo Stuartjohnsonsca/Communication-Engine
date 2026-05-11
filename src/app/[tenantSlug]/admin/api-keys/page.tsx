@@ -11,6 +11,7 @@ import {
   ApiKeyValidationError,
   ScopeError,
 } from "@/lib/auth/api-keys";
+import { requireStepUp, resolveCurrentSessionId, StepUpRequired } from "@/lib/auth/totp";
 
 /**
  * Programmatic API keys admin (post-PRD hardening item 16).
@@ -67,6 +68,26 @@ export default async function ApiKeysPage({
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
     requirePermission(inner.membership.role, "apikeys:create");
+    // Post-PRD hardening item 18 — step-up gate. Issuing an API key
+    // hands a long-lived bearer credential to a third party; a stolen
+    // open session should not be able to do this from across the room.
+    const sessionId = await resolveCurrentSessionId();
+    try {
+      await requireStepUp({
+        sessionId,
+        userId: inner.user.id,
+        tenantStepUpMaxAgeMinutes: inner.tenant.stepUpMaxAgeMinutes,
+        nextUrl: `/${tenantSlug}/admin/api-keys`,
+        opKey: "api-key-create",
+      });
+    } catch (err) {
+      if (err instanceof StepUpRequired) {
+        redirect(
+          `/${tenantSlug}/auth/2fa?stepUp=1&op=${encodeURIComponent(err.opKey)}&next=${encodeURIComponent(err.nextUrl)}`,
+        );
+      }
+      throw err;
+    }
     const name = (formData.get("name") as string | null) ?? "";
     const wildcard = (formData.get("wildcard") as string | null) === "on";
     const scopes = wildcard

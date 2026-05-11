@@ -294,6 +294,7 @@ enum AuditEventType {
   API_KEY_USED
   TENANT_IP_ALLOWLIST_CHANGED
   IP_ALLOWLIST_DENIED
+  STEP_UP_VERIFIED
 }
 
 enum BillingPeriodStatus {
@@ -744,6 +745,16 @@ model Tenant {
   /// shape before persisting so malformed entries can't reach the
   /// runtime matcher. Both IPv4 and IPv6 are supported.
   allowedIpCidrs                       String[]     @default([])
+  /// Post-PRD hardening item 18 — step-up authentication freshness
+  /// window. Null = inherit platform default (5 minutes). Cross-tenant
+  /// Users get the strictest non-null value across their active
+  /// memberships (same pattern as session timeouts). Applies to
+  /// high-blast-radius operations: IP allowlist edits, TOTP policy
+  /// flips, session timeout edits, API key creation, webhook sub
+  /// creation. A request whose `Session.totpVerifiedAt` is older
+  /// than this window is redirected to `/auth/2fa?stepUp=1` to
+  /// re-challenge before the operation proceeds.
+  stepUpMaxAgeMinutes                  Int?
   createdAt                            DateTime     @default(now())
   updatedAt                            DateTime     @updatedAt
 

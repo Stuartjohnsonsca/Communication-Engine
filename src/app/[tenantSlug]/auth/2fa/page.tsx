@@ -8,6 +8,7 @@ import {
   consumeRecoveryCode,
   getEnrollmentStatus,
   resolveCurrentSessionId,
+  recordStepUpVerified,
 } from "@/lib/auth/totp";
 import { rateLimit } from "@/lib/ratelimit";
 
@@ -36,7 +37,7 @@ export default async function TwoFactorChallengePage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string }>;
-  searchParams: Promise<{ next?: string; error?: string }>;
+  searchParams: Promise<{ next?: string; error?: string; stepUp?: string; op?: string }>;
 }) {
   const { tenantSlug } = await params;
   const sp = await searchParams;
@@ -46,8 +47,15 @@ export default async function TwoFactorChallengePage({
   const totp = await getEnrollmentStatus(ctx.user.id);
   if (!totp.enrolled) redirect(`/${tenantSlug}/account`);
 
+  // Post-PRD hardening item 18 — step-up mode. When `?stepUp=1` is set
+  // we ALWAYS re-prompt, even if `Session.totpVerifiedAt` is already
+  // stamped. This is the freshness-window challenge for sensitive
+  // operations (IP allowlist edits, API key creation, etc.). Regular
+  // post-sign-in challenges still short-circuit when already verified.
+  const isStepUp = sp.stepUp === "1";
+  const opKey = sp.op?.trim() || "";
   const sessionId = await resolveCurrentSessionId();
-  if (sessionId) {
+  if (sessionId && !isStepUp) {
     const session = await superDb.session.findUnique({
       where: { id: sessionId },
       select: { totpVerifiedAt: true },
@@ -65,6 +73,8 @@ export default async function TwoFactorChallengePage({
     if (!inner) redirect("/login");
     const rawCode = ((formData.get("code") as string | null) ?? "").trim();
     const rawNext = (formData.get("next") as string | null) ?? "";
+    const innerStepUp = (formData.get("stepUp") as string | null) === "1";
+    const innerOpKey = ((formData.get("op") as string | null) ?? "").trim();
     const safe = sanitiseNext(rawNext, tenantSlug);
 
     const rl = await rateLimit({
@@ -76,7 +86,10 @@ export default async function TwoFactorChallengePage({
       membershipId: inner.membership.id,
     });
     if (!rl.allowed) {
-      redirect(`/${tenantSlug}/auth/2fa?error=rate-limited&next=${encodeURIComponent(safe)}`);
+      const qs = innerStepUp
+        ? `?stepUp=1&op=${encodeURIComponent(innerOpKey)}&error=rate-limited&next=${encodeURIComponent(safe)}`
+        : `?error=rate-limited&next=${encodeURIComponent(safe)}`;
+      redirect(`/${tenantSlug}/auth/2fa${qs}`);
     }
 
     const sid = await resolveCurrentSessionId();
@@ -93,7 +106,27 @@ export default async function TwoFactorChallengePage({
     }
 
     if (!ok) {
-      redirect(`/${tenantSlug}/auth/2fa?error=bad-code&next=${encodeURIComponent(safe)}`);
+      const qs = innerStepUp
+        ? `?stepUp=1&op=${encodeURIComponent(innerOpKey)}&error=bad-code&next=${encodeURIComponent(safe)}`
+        : `?error=bad-code&next=${encodeURIComponent(safe)}`;
+      redirect(`/${tenantSlug}/auth/2fa${qs}`);
+    }
+
+    // Successful step-up — write a STEP_UP_VERIFIED audit row so an
+    // audit reviewer can scan for sensitive-operation step-ups
+    // specifically (distinct from a regular post-sign-in
+    // TOTP_VERIFIED). Best-effort; failure here MUST NOT prevent the
+    // User from proceeding to their gated operation.
+    if (innerStepUp) {
+      try {
+        await recordStepUpVerified({
+          tenantId: inner.tenant.id,
+          actorMembershipId: inner.membership.id,
+          opKey: innerOpKey || "unspecified",
+        });
+      } catch {
+        // intentionally swallowed — see comment above.
+      }
     }
 
     revalidatePath(`/${tenantSlug}`, "layout");
@@ -103,8 +136,17 @@ export default async function TwoFactorChallengePage({
   return (
     <div className="mx-auto max-w-md space-y-6 py-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t("twofa.challengeHeading")}</h1>
-        <p className="mt-1 text-sm text-ink/70">{t("twofa.challengeDescription")}</p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {isStepUp ? t("twofa.stepUpHeading") : t("twofa.challengeHeading")}
+        </h1>
+        <p className="mt-1 text-sm text-ink/70">
+          {isStepUp ? t("twofa.stepUpDescription") : t("twofa.challengeDescription")}
+        </p>
+        {isStepUp && opKey && (
+          <p className="mt-1 text-xs text-ink/50">
+            <code className="rounded bg-ink/5 px-1 py-0.5 font-mono">{opKey}</code>
+          </p>
+        )}
       </div>
 
       {sp.error === "bad-code" && (
@@ -120,6 +162,8 @@ export default async function TwoFactorChallengePage({
 
       <form action={verifyAction} className="card space-y-3">
         <input type="hidden" name="next" value={safeNext} />
+        {isStepUp && <input type="hidden" name="stepUp" value="1" />}
+        {isStepUp && opKey && <input type="hidden" name="op" value={opKey} />}
         <div>
           <label className="label" htmlFor="totp-code">
             {t("twofa.enterCodeLabel")}

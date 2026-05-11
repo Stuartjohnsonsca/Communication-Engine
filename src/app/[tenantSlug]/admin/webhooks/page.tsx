@@ -11,6 +11,7 @@ import {
   WebhookValidationError,
 } from "@/lib/webhooks";
 import { superDb } from "@/lib/db";
+import { requireStepUp, resolveCurrentSessionId, StepUpRequired } from "@/lib/auth/totp";
 
 /**
  * Outbound webhook subscriptions admin (post-PRD hardening item 14).
@@ -99,6 +100,28 @@ export default async function WebhooksPage({
     const inner = await getTenantContext(tenantSlug);
     if (!inner) throw new Error("forbidden");
     requirePermission(inner.membership.role, "webhooks:configure");
+    // Post-PRD hardening item 18 — step-up gate. Creating a webhook
+    // subscription causes future events to leave the platform with
+    // a signing secret; a stolen open session should not be able to
+    // do this from across the room. Update/delete don't gate — the
+    // signing secret stays the same; only the wire surface changes.
+    const sessionId = await resolveCurrentSessionId();
+    try {
+      await requireStepUp({
+        sessionId,
+        userId: inner.user.id,
+        tenantStepUpMaxAgeMinutes: inner.tenant.stepUpMaxAgeMinutes,
+        nextUrl: `/${tenantSlug}/admin/webhooks`,
+        opKey: "webhook-subscription-create",
+      });
+    } catch (err) {
+      if (err instanceof StepUpRequired) {
+        redirect(
+          `/${tenantSlug}/auth/2fa?stepUp=1&op=${encodeURIComponent(err.opKey)}&next=${encodeURIComponent(err.nextUrl)}`,
+        );
+      }
+      throw err;
+    }
     const name = (formData.get("name") as string | null) ?? "";
     const url = (formData.get("url") as string | null) ?? "";
     const wildcard = (formData.get("wildcard") as string | null) === "on";
