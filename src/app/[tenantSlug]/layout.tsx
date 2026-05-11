@@ -157,6 +157,7 @@ export default async function TenantLayout({
     ...(hasPermission(ctx.membership.role, "languages:read")
       ? [{ href: `/${tenantSlug}/languages`, label: t("nav.languages") }]
       : []),
+    { href: `/${tenantSlug}/help`, label: t("nav.help") },
     { href: `/${tenantSlug}/account`, label: t("nav.account") },
     { href: `/${tenantSlug}/admin/adherence`, label: t("nav.firmAdherence") },
     { href: `/${tenantSlug}/admin/audit`, label: t("nav.auditLog") },

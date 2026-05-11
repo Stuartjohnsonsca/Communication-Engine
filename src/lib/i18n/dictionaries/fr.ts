@@ -55,6 +55,7 @@ export const fr: Dictionary = {
     webhooks: "Webhooks",
     apiKeys: "Clés d'API",
     systemHealth: "Santé système",
+    help: "Aide & guide",
   },
   shell: {
     openNavigation: "Ouvrir la navigation",
