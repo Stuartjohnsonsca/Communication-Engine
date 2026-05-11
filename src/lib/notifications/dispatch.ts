@@ -40,7 +40,8 @@ export type NotificationKind =
   | "sentiment_escalation"
   | "breach_ack_required"
   | "adherence_escalation"
-  | "totp_reset_by_admin";
+  | "totp_reset_by_admin"
+  | "sign_in_new_device";
 
 export type DispatchResult = {
   alreadySent: boolean;

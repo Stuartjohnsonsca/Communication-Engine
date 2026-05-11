@@ -239,3 +239,53 @@ export async function dispatchBreachAckRequired(input: {
   }
   return { recipients: recipients.length };
 }
+
+// ─── Sign-in anomaly: new device alert (post-PRD hardening item 21) ───────
+
+export async function dispatchSignInNewDevice(input: {
+  tenantId: string;
+  membershipId: string;
+  toEmail: string;
+  sessionId: string;
+  deviceLabel: string;
+  ipMasked: string;
+  reasons: Array<"new-browser-os" | "new-ip-block">;
+}): Promise<{ recipients: number }> {
+  const reasonText =
+    input.reasons.includes("new-browser-os") && input.reasons.includes("new-ip-block")
+      ? "new device and new network"
+      : input.reasons.includes("new-browser-os")
+        ? "new device"
+        : "new network";
+  const subject = `New sign-in detected (${reasonText})`;
+  const summary = `${input.deviceLabel} from ${input.ipMasked}`;
+  const body = [
+    `A sign-in to your Acumon account was just detected from a ${reasonText}.`,
+    "",
+    `Device: ${input.deviceLabel}`,
+    `IP: ${input.ipMasked}`,
+    "",
+    `If this was you, no action is needed.`,
+    `If this WASN'T you, sign in and revoke the session immediately from /account,`,
+    `then contact your Firm Administrator. The detection is recorded on the audit chain.`,
+  ].join("\n");
+
+  await dispatchNotification({
+    tenantId: input.tenantId,
+    membershipId: input.membershipId,
+    toEmail: input.toEmail,
+    kind: "sign_in_new_device",
+    dedupeKey: input.sessionId,
+    subject,
+    summary,
+    text: body,
+    href: `/account`,
+    payload: {
+      sessionId: input.sessionId,
+      deviceLabel: input.deviceLabel,
+      ipMasked: input.ipMasked,
+      reasons: input.reasons,
+    },
+  });
+  return { recipients: 1 };
+}

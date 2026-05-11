@@ -127,6 +127,9 @@ export const enGB: Dictionary = {
     none: "No active sessions.",
     thisDevice: "This device",
     twofaVerified: "2FA verified",
+    newDevice: "New device",
+    newDeviceDescription:
+      "This sign-in came from a device or network you haven't used before. You should have received an email at the time. If it wasn't you, revoke the session immediately and contact your Firm Administrator.",
     signedIn: "Signed in",
     lastSeen: "Last seen",
     revoke: "Revoke",
@@ -269,6 +272,8 @@ export type Dictionary = {
     none: string;
     thisDevice: string;
     twofaVerified: string;
+    newDevice: string;
+    newDeviceDescription: string;
     signedIn: string;
     lastSeen: string;
     revoke: string;

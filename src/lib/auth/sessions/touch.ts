@@ -24,7 +24,7 @@ export async function touchSession(sessionId: string): Promise<void> {
 
 /**
  * Lazy-populate `userAgent` / `ipAddress` on first observation. Both fields
- * are set together inside one UPDATE that only fires when BOTH columns are
+ * are set together inside one UPDATE that only fires when EITHER column is
  * still null — keeps the original capture immutable so a later request with
  * spoofed headers can't rewrite the row.
  *
@@ -32,17 +32,21 @@ export async function touchSession(sessionId: string): Promise<void> {
  * headers (NextAuth invokes it from a callback that only carries the user +
  * provider), which is why we capture lazily from the tenant layout on the
  * very next request after sign-in.
+ *
+ * Returns `firstObservation: true` when the UPDATE flipped at least one
+ * row — the sign-in anomaly detector (post-PRD hardening item 21) keys off
+ * this so the classifier + notification fire at most once per session.
  */
 export async function observeSessionMetadata(
   sessionId: string,
   userAgent: string | null | undefined,
   ipAddress: string | null | undefined,
-): Promise<void> {
-  if (!sessionId) return;
+): Promise<{ firstObservation: boolean }> {
+  if (!sessionId) return { firstObservation: false };
   const ua = userAgent && userAgent.length > 0 ? userAgent.slice(0, 512) : null;
   const ip = ipAddress && ipAddress.length > 0 ? ipAddress.slice(0, 64) : null;
-  if (!ua && !ip) return;
-  await superDb.$executeRaw`
+  if (!ua && !ip) return { firstObservation: false };
+  const affected = await superDb.$executeRaw`
     UPDATE "Session"
        SET "userAgent" = COALESCE("userAgent", ${ua}),
            "ipAddress" = COALESCE("ipAddress", ${ip})
@@ -50,4 +54,5 @@ export async function observeSessionMetadata(
        AND "revokedAt" IS NULL
        AND ("userAgent" IS NULL OR "ipAddress" IS NULL)
   `;
+  return { firstObservation: affected > 0 };
 }

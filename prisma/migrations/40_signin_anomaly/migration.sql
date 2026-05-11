@@ -1,0 +1,34 @@
+-- Post-PRD hardening item 21: sign-in anomaly detection.
+--
+-- The auth lifecycle now has prevention (TOTP / IP allowlist / rate limit),
+-- response (per-session revoke, admin TOTP reset), and audit (item 20),
+-- but no detection layer. A stolen magic-link email + a non-allowlisted IP
+-- range + a User whose tenant doesn't require TOTP could still let an
+-- attacker reach `/account` and `/<tenant>/dashboard` undetected.
+--
+-- This item adds DETECTION:
+--   * On the first observation of each `Session`'s UA + IP (`observeSessionMetadata`
+--     in `src/lib/auth/sessions/touch.ts`), classify the session against
+--     the User's prior 90-day session history.
+--   * 'familiar'      — UA family + IP block matches at least one prior session.
+--   * 'new-device'    — UA family OR IP block differs from every prior session.
+--   * 'first-session' — no prior sessions exist (legitimate first sign-in).
+--   * 'new-device' triggers a `SIGN_IN_NEW_DEVICE` audit event on the User's
+--     primary active tenant chain, plus an immediate notification to the
+--     User's own work email ("New sign-in from <browser> on <os> at <ipMasked>.
+--     If this wasn't you, revoke the session and contact your administrator.").
+--   * 'first-session' is silent — every User has to sign in for the first
+--     time once; alerting on it is noise.
+--
+-- Notification kind is TEXT in the DB (consistent with the rest of the
+-- notifications module since item 6) so no enum migration needed there.
+-- Dedupe key = `Session.id` so a re-observation pass (which is conditional
+-- UPDATE / no-op) never re-dispatches; an attacker who refreshes the page
+-- gets exactly one alert per stolen session.
+--
+-- No new model — the existing `Session` row already carries `userAgent` +
+-- `ipAddress` from item 13. The classifier reads `Session` history; the
+-- audit chain captures the detection event; the notification module
+-- (item 6) carries the alert through the User's inbox + email.
+
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'SIGN_IN_NEW_DEVICE';

@@ -296,6 +296,7 @@ enum AuditEventType {
   IP_ALLOWLIST_DENIED
   STEP_UP_VERIFIED
   TOTP_RESET_BY_ADMIN
+  SIGN_IN_NEW_DEVICE
 }
 
 enum BillingPeriodStatus {

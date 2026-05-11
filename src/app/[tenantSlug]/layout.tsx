@@ -17,6 +17,8 @@ import {
   enforceSessionTimeout,
 } from "@/lib/auth/sessions";
 import { evaluateIpAllowlist } from "@/lib/auth/ip-allowlist";
+import { detectAndNotify } from "@/lib/auth/anomaly";
+import { reportError } from "@/lib/observability";
 
 export default async function TenantLayout({
   children,
@@ -51,10 +53,26 @@ export default async function TenantLayout({
     if (timeout.expired) {
       redirect(`/login?timeout=${timeout.reason}`);
     }
-    await Promise.all([
+    const ua = h.get("user-agent");
+    const ip = ipFromHeaders(h);
+    const [, observation] = await Promise.all([
       touchSession(sessionId),
-      observeSessionMetadata(sessionId, h.get("user-agent"), ipFromHeaders(h)),
+      observeSessionMetadata(sessionId, ua, ip),
     ]);
+    // Post-PRD hardening item 21 — sign-in anomaly detection. Fires exactly
+    // once per session, on the very first layout pass that captures UA + IP.
+    // Fire-and-forget under `reportError` — detection must never block a
+    // legitimate User from reaching their tenant page.
+    if (observation.firstObservation) {
+      void detectAndNotify({
+        sessionId,
+        userId: ctx.user.id,
+        userAgent: ua,
+        ipAddress: ip,
+      }).catch((err) =>
+        reportError(err, { extra: { scope: "anomaly:detect", sessionId } }),
+      );
+    }
   }
   // Post-PRD hardening item 17 — tenant IP allowlist. Evaluated BEFORE
   // the TOTP gate so a misconfigured IP shows the same access-denied

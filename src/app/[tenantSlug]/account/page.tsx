@@ -53,6 +53,25 @@ export default async function AccountPage({
   ]);
   if (!member) redirect("/login");
 
+  // Post-PRD hardening item 21 — surface which sessions were flagged as
+  // new-device by the anomaly detector. Audit events land on the User's
+  // primary tenant chain; we don't care which tenant chain emitted them
+  // here — the User owns the session globally.
+  const newDeviceSessionIds = new Set<string>(
+    sessions.length === 0
+      ? []
+      : (
+          await superDb.auditEvent.findMany({
+            where: {
+              eventType: "SIGN_IN_NEW_DEVICE",
+              subjectType: "Session",
+              subjectId: { in: sessions.map((s) => s.id) },
+            },
+            select: { subjectId: true },
+          })
+        ).map((e) => e.subjectId),
+  );
+
   const state = getMemberLifecycleState(member);
 
   async function revokeAction(formData: FormData) {
@@ -409,6 +428,14 @@ export default async function AccountPage({
                     {s.totpVerifiedAt && (
                       <span className="tag bg-sky-50 text-sky-800">
                         {t("sessions.twofaVerified")}
+                      </span>
+                    )}
+                    {newDeviceSessionIds.has(s.id) && (
+                      <span
+                        className="tag bg-amber-50 text-amber-800"
+                        title={t("sessions.newDeviceDescription")}
+                      >
+                        {t("sessions.newDevice")}
                       </span>
                     )}
                   </div>

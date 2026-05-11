@@ -126,6 +126,9 @@ export const fr: Dictionary = {
     none: "Aucune session active.",
     thisDevice: "Cet appareil",
     twofaVerified: "2FA vérifié",
+    newDevice: "Nouvel appareil",
+    newDeviceDescription:
+      "Cette connexion provient d'un appareil ou d'un réseau que vous n'avez pas utilisé auparavant. Vous devriez avoir reçu un courriel à ce moment-là. Si ce n'était pas vous, révoquez immédiatement la session et contactez votre Administrateur du cabinet.",
     signedIn: "Connecté le",
     lastSeen: "Vu pour la dernière fois",
     revoke: "Révoquer",
