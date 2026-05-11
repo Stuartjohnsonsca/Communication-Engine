@@ -1,15 +1,37 @@
 import { PrismaClient } from "@prisma/client";
+import {
+  clampStatementTimeoutMs,
+  getTenantStatementTimeoutMs,
+  installSlowQueryLogger,
+} from "./db-observability";
 
 declare global {
   // eslint-disable-next-line no-var
   var __prisma: PrismaClient | undefined;
 }
 
-export const prisma =
-  global.__prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+function buildPrismaClient(): PrismaClient {
+  const isDev = process.env.NODE_ENV === "development";
+  // We use event-mode for the "query" channel so the slow-query logger can
+  // pick up duration; warn/error stay on stdout so Prisma's own messages
+  // still surface in dev logs.
+  const client = new PrismaClient({
+    log: isDev
+      ? [
+          { emit: "event", level: "query" },
+          { emit: "stdout", level: "warn" },
+          { emit: "stdout", level: "error" },
+        ]
+      : [
+          { emit: "event", level: "query" },
+          { emit: "stdout", level: "error" },
+        ],
   });
+  installSlowQueryLogger(client);
+  return client;
+}
+
+export const prisma = global.__prisma ?? buildPrismaClient();
 
 if (process.env.NODE_ENV !== "production") global.__prisma = prisma;
 
@@ -39,9 +61,17 @@ const TENANT_DB_ROLE = (() => {
  *
  * Defence in depth: even if a query forgets `where: { tenantId }`, RLS
  * blocks rows from other tenants.
+ *
+ * Per-transaction `statement_timeout` is set before any tenant work runs —
+ * a hung query can't pin a pool connection indefinitely. Override the
+ * default (15s) with `{ statementTimeoutMs }` for cron sweeps or backfills
+ * that legitimately need longer.
  */
-export function tenantDb(tenantId: string) {
+export function tenantDb(tenantId: string, opts?: { statementTimeoutMs?: number }) {
   if (!tenantId) throw new Error("tenantDb: tenantId required");
+  const stmtTimeoutMs = clampStatementTimeoutMs(
+    opts?.statementTimeoutMs ?? getTenantStatementTimeoutMs(),
+  );
 
   return prisma.$extends({
     name: "tenant-rls",
@@ -56,6 +86,10 @@ export function tenantDb(tenantId: string) {
       //   - tx.model.operation(args) returned rows scoped to the policy.
       $allOperations: async ({ args, model, operation }) => {
         return prisma.$transaction(async (tx) => {
+          // statement_timeout first: binds the ceiling before any other op,
+          // including the set_config call below — protects against a hostile
+          // GUC value from somehow triggering a hang.
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${stmtTimeoutMs}`);
           await tx.$executeRawUnsafe(
             `SELECT set_config('app.current_tenant', $1, true)`,
             tenantId,
