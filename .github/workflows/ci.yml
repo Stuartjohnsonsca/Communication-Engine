@@ -9,6 +9,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # prisma 6+ resolves env() at validate/format time; supply stub URLs so
+    # the static checks run without needing a real DB.
+    env:
+      DATABASE_URL: postgresql://stub:stub@localhost:5432/stub
+      DIRECT_URL: postgresql://stub:stub@localhost:5432/stub
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
