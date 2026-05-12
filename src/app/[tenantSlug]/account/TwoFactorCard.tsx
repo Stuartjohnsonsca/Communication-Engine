@@ -26,10 +26,15 @@ type InitiationResult = {
   recoveryCodes: string[];
 };
 
+type RegenerateResult =
+  | { ok: true; recoveryCodes: string[] }
+  | { ok: false; reason: string };
+
 type ServerActions = {
   initiate: () => Promise<InitiationResult>;
   confirm: (code: string) => Promise<{ ok: boolean; reason?: string }>;
   disable: (code: string) => Promise<{ ok: boolean; reason?: string }>;
+  regenerateRecovery: (code: string) => Promise<RegenerateResult>;
 };
 
 export function TwoFactorCard({
@@ -62,6 +67,11 @@ export function TwoFactorCard({
     disableConfirm: string;
     disableFailed: string;
     never: string;
+    regenerateButton: string;
+    regenerateDescription: string;
+    regenerateHeading: string;
+    regenerateSuccess: string;
+    regenerateFailed: string;
   };
 }) {
   const [phase, setPhase] = useState<
@@ -69,6 +79,8 @@ export function TwoFactorCard({
     | { kind: "enrolling"; initiation: InitiationResult; code: string; error: string | null }
     | { kind: "post-enrolled"; recoveryCodes: string[] }
     | { kind: "disabling"; code: string; error: string | null }
+    | { kind: "regenerating-recovery"; code: string; error: string | null }
+    | { kind: "post-regenerated"; recoveryCodes: string[] }
   >({ kind: "idle" });
   const [pending, startTransition] = useTransition();
 
@@ -92,6 +104,20 @@ export function TwoFactorCard({
   const cancelEnroll = () => setPhase({ kind: "idle" });
 
   const beginDisable = () => setPhase({ kind: "disabling", code: "", error: null });
+
+  const beginRegenerate = () =>
+    setPhase({ kind: "regenerating-recovery", code: "", error: null });
+
+  const submitRegenerate = () =>
+    startTransition(async () => {
+      if (phase.kind !== "regenerating-recovery") return;
+      const res = await actions.regenerateRecovery(phase.code);
+      if (res.ok) {
+        setPhase({ kind: "post-regenerated", recoveryCodes: res.recoveryCodes });
+      } else {
+        setPhase({ ...phase, error: copy.regenerateFailed });
+      }
+    });
 
   const submitDisable = () =>
     startTransition(async () => {
@@ -138,15 +164,20 @@ export function TwoFactorCard({
       )}
 
       {phase.kind === "idle" && (
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           {!status.enrolled ? (
             <button type="button" className="btn btn-primary text-sm" onClick={beginEnroll} disabled={pending}>
               {copy.enableButton}
             </button>
           ) : (
-            <button type="button" className="btn text-sm" onClick={beginDisable} disabled={pending}>
-              {copy.disableButton}
-            </button>
+            <>
+              <button type="button" className="btn text-sm" onClick={beginRegenerate} disabled={pending}>
+                {copy.regenerateButton}
+              </button>
+              <button type="button" className="btn text-sm" onClick={beginDisable} disabled={pending}>
+                {copy.disableButton}
+              </button>
+            </>
           )}
         </div>
       )}
@@ -205,6 +236,68 @@ export function TwoFactorCard({
         <div className="space-y-2">
           <div className="rounded border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
             {copy.recoveryHeading}
+          </div>
+          <p className="text-xs text-ink/70">{copy.recoveryWarning}</p>
+          <ul className="grid grid-cols-2 gap-1 font-mono text-sm">
+            {phase.recoveryCodes.map((c) => (
+              <li key={c} className="rounded bg-ink/5 px-2 py-1">
+                {c}
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-end">
+            <button type="button" className="btn text-sm" onClick={() => setPhase({ kind: "idle" })}>
+              {copy.cancel}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {phase.kind === "regenerating-recovery" && (
+        <div className="space-y-3">
+          <p className="text-sm text-ink/70">{copy.regenerateDescription}</p>
+          <div>
+            <label className="label" htmlFor="totp-regen-code">
+              {copy.enterCodeLabel}
+            </label>
+            <input
+              id="totp-regen-code"
+              className="input"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              pattern="[0-9]{6}"
+              value={phase.code}
+              onChange={(e) =>
+                setPhase({ ...phase, code: e.target.value.replace(/\D/g, "").slice(0, 6) })
+              }
+            />
+            {phase.error && <p className="mt-1 text-xs text-red-700">{phase.error}</p>}
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className="text-xs text-ink/60 underline"
+              onClick={() => setPhase({ kind: "idle" })}
+            >
+              {copy.cancel}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary text-sm"
+              onClick={submitRegenerate}
+              disabled={pending || phase.code.length !== 6}
+            >
+              {copy.submitCode}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {phase.kind === "post-regenerated" && (
+        <div className="space-y-2">
+          <div className="rounded border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
+            {copy.regenerateSuccess}
           </div>
           <p className="text-xs text-ink/70">{copy.recoveryWarning}</p>
           <ul className="grid grid-cols-2 gap-1 font-mono text-sm">

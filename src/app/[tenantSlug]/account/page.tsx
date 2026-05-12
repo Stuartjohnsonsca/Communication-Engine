@@ -19,6 +19,7 @@ import {
   verifyEnrollment,
   verifyChallenge,
   consumeRecoveryCode,
+  regenerateRecoveryCodes,
   disable as disableTotp,
   resolveCurrentSessionId,
 } from "@/lib/auth/totp";
@@ -174,6 +175,35 @@ export default async function AccountPage({
       return { ok: true as const };
     }
     return { ok: false as const, reason: res.reason };
+  }
+
+  async function regenerateRecoveryAction(code: string) {
+    "use server";
+    const inner = await getTenantContext(tenantSlug);
+    if (!inner) throw new Error("forbidden");
+    if (!hasPermission(inner.membership.role, "auth:configure-totp")) {
+      throw new Error("forbidden");
+    }
+    const rl = await rateLimit({
+      identity: { kind: "membership", value: inner.membership.id },
+      scope: "totp-regen-recovery",
+      limit: 6,
+      windowSeconds: 60,
+      tenantId: inner.tenant.id,
+      membershipId: inner.membership.id,
+    });
+    if (!rl.allowed) return { ok: false as const, reason: "rate-limited" as const };
+    const sessionId = await resolveCurrentSessionId();
+    if (!sessionId) return { ok: false as const, reason: "no-session" as const };
+    const cleaned = code.replace(/\s+/g, "").slice(0, 6);
+    const res = await regenerateRecoveryCodes({
+      userId: inner.user.id,
+      sessionId,
+      code: cleaned,
+    });
+    if (!res.ok) return { ok: false as const, reason: res.reason };
+    revalidatePath(`/${tenantSlug}/account`);
+    return { ok: true as const, recoveryCodes: res.recoveryCodes };
   }
 
   async function disableTotpAction(code: string) {
@@ -408,6 +438,7 @@ export default async function AccountPage({
           initiate: initiateTotpAction,
           confirm: confirmTotpAction,
           disable: disableTotpAction,
+          regenerateRecovery: regenerateRecoveryAction,
         }}
         copy={{
           heading: t("twofa.accountHeading"),
@@ -430,6 +461,11 @@ export default async function AccountPage({
           disableConfirm: t("twofa.disableConfirm"),
           disableFailed: t("twofa.disableFailed"),
           never: t("twofa.never"),
+          regenerateButton: t("twofa.regenerateButton"),
+          regenerateDescription: t("twofa.regenerateDescription"),
+          regenerateHeading: t("twofa.regenerateHeading"),
+          regenerateSuccess: t("twofa.regenerateSuccess"),
+          regenerateFailed: t("twofa.regenerateFailed"),
         }}
       />
 

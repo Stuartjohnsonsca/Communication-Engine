@@ -128,6 +128,14 @@ export const fr: Dictionary = {
     stepUpHeading: "Confirmer avec votre authentificateur",
     stepUpDescription:
       "Cette action nécessite une nouvelle confirmation à deux facteurs. Saisissez le code actuel de votre application d'authentification pour continuer.",
+    regenerateButton: "Régénérer les codes de récupération",
+    regenerateDescription:
+      "Émet une nouvelle série de codes de récupération à usage unique. Vos codes existants seront invalidés. L'authentification à deux facteurs reste activée ; l'ancien ensemble est remplacé de manière atomique. Saisissez un code d'authentification actuel pour confirmer la possession de l'appareil.",
+    regenerateHeading: "Régénérer les codes de récupération",
+    regenerateSuccess:
+      "Nouveaux codes de récupération générés. Conservez-les dès maintenant — vos anciens codes ne fonctionnent plus.",
+    regenerateFailed:
+      "Ce code ne correspond pas. Essayez le suivant affiché par votre application d'authentification.",
   },
   sessions: {
     heading: "Sessions actives",

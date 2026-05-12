@@ -129,6 +129,13 @@ export const enGB: Dictionary = {
     stepUpHeading: "Confirm with your authenticator",
     stepUpDescription:
       "This action requires a fresh second-factor confirmation. Enter the current code from your authenticator app to proceed.",
+    regenerateButton: "Regenerate recovery codes",
+    regenerateDescription:
+      "Issue a fresh set of single-use recovery codes. Your existing codes will be invalidated. Two-factor authentication stays enabled; the prior set is replaced atomically. Enter a current authenticator code to confirm device possession.",
+    regenerateHeading: "Regenerate recovery codes",
+    regenerateSuccess:
+      "New recovery codes generated. Save them now — your previous codes no longer work.",
+    regenerateFailed: "That code didn't match. Try the next one your authenticator displays.",
   },
   sessions: {
     heading: "Active sessions",
@@ -308,6 +315,11 @@ export type Dictionary = {
     rateLimitedError: string;
     stepUpHeading: string;
     stepUpDescription: string;
+    regenerateButton: string;
+    regenerateDescription: string;
+    regenerateHeading: string;
+    regenerateSuccess: string;
+    regenerateFailed: string;
   };
   sessions: {
     heading: string;

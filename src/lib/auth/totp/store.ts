@@ -192,6 +192,66 @@ export async function consumeRecoveryCode({
   return { ok: true, remaining: remaining.length };
 }
 
+/**
+ * Item 48 — regenerate recovery codes in place, without disabling 2FA.
+ *
+ * Requires a fresh TOTP code as proof of device possession; a leaked
+ * cookie-only session must not be able to mint a new set of codes
+ * (which would let an attacker bypass the device on a future login).
+ * On success, replaces `recoveryCodesHashed` with the new hashed set
+ * and returns the plaintext codes ONCE for the caller to display.
+ * Stamps `lastUsedAt` like every other successful TOTP verification
+ * and writes a `TOTP_RECOVERY_CODES_REGENERATED` audit event with
+ * counts only (no codes, no hashes).
+ *
+ * Refuses on:
+ *   - User not enrolled (returns `not-enrolled`)
+ *   - Bad TOTP code (returns `bad-code` + writes TOTP_VERIFICATION_FAILED
+ *     so brute-force attempts surface in the audit chain)
+ */
+export async function regenerateRecoveryCodes({
+  userId,
+  sessionId,
+  code,
+}: {
+  userId: string;
+  sessionId: string;
+  code: string;
+}): Promise<
+  | { ok: true; recoveryCodes: string[] }
+  | { ok: false; reason: "not-enrolled" | "bad-code" }
+> {
+  const row = await superDb.userTotp.findUnique({ where: { userId } });
+  if (!row || !row.verifiedAt || row.disabledAt) return { ok: false, reason: "not-enrolled" };
+  const { secret } = decryptJson<{ secret: string }>(row.secretEncrypted);
+  const match = verifyTotp(secret, code);
+  if (!match) {
+    await writeAuditOnPrimaryTenant({
+      userId,
+      eventType: "TOTP_VERIFICATION_FAILED",
+      payload: { kind: "regen-recovery" },
+    });
+    return { ok: false, reason: "bad-code" };
+  }
+  const priorRemaining = row.recoveryCodesHashed.length;
+  const codes = generateRecoveryCodes();
+  const hashed = codes.map(hashRecoveryCode);
+  await superDb.userTotp.update({
+    where: { userId },
+    data: { recoveryCodesHashed: hashed, lastUsedAt: new Date() },
+  });
+  // Bump the session's TOTP-verified stamp — the user just proved
+  // device possession with a fresh code, which is also what step-up
+  // verification looks for elsewhere.
+  await stampSessionVerified(sessionId);
+  await writeAuditOnPrimaryTenant({
+    userId,
+    eventType: "TOTP_RECOVERY_CODES_REGENERATED",
+    payload: { count: codes.length, priorRemaining },
+  });
+  return { ok: true, recoveryCodes: codes };
+}
+
 export async function getEnrollmentStatus(userId: string): Promise<{
   enrolled: boolean;
   recoveryCodesRemaining: number;
@@ -253,7 +313,8 @@ async function writeAuditOnPrimaryTenant({
     | "TOTP_DISABLED"
     | "TOTP_VERIFIED"
     | "TOTP_VERIFICATION_FAILED"
-    | "TOTP_RECOVERY_CODE_USED";
+    | "TOTP_RECOVERY_CODE_USED"
+    | "TOTP_RECOVERY_CODES_REGENERATED";
   payload: Record<string, unknown>;
 }): Promise<void> {
   const tenantId = await primaryActiveTenantId(userId);

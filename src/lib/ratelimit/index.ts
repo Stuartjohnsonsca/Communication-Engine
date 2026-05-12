@@ -53,6 +53,7 @@ export type RateLimitScope =
   | "totp-enroll"
   | "totp-disable"
   | "totp-challenge"
+  | "totp-regen-recovery"
   | "api-key-auth"
   | "security-txt"
   | "default";

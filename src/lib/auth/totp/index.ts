@@ -19,6 +19,7 @@ export {
   verifyEnrollment,
   verifyChallenge,
   consumeRecoveryCode,
+  regenerateRecoveryCodes,
   disable,
   getEnrollmentStatus,
 } from "./store";

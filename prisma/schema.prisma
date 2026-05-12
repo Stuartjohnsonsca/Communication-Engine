@@ -300,6 +300,11 @@ enum AuditEventType {
   TOTP_VERIFIED
   TOTP_VERIFICATION_FAILED
   TOTP_RECOVERY_CODE_USED
+  /// Post-PRD hardening item 48 — the User regenerated their TOTP
+  /// recovery code set without disabling 2FA (requires a current TOTP
+  /// code as proof of device possession). Payload carries `{ count,
+  /// priorRemaining }` but no plaintext / hashes.
+  TOTP_RECOVERY_CODES_REGENERATED
   TENANT_TOTP_REQUIREMENT_CHANGED
   SESSION_REVOKED
   SESSION_REVOKED_BY_ADMIN
