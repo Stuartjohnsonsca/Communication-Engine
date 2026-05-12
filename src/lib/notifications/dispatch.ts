@@ -59,7 +59,14 @@ export type NotificationKind =
   /// promised "respond within N hours" and the engine is now
   /// silently in breach of that promise. Not opt-outable: the FCG
   /// commitment is the engine's central value prop.
-  | "draft_stale";
+  | "draft_stale"
+  /// Post-PRD item 59 — mandatory operational alert. The auto-draft
+  /// circuit breaker tripped (N failed LLM calls in M minutes) and
+  /// auto-paused the tenant. Surface to every FIRM_ADMIN so a
+  /// human can investigate before resuming. Not opt-outable: muting
+  /// this would mean the engine could silently stop drafting for
+  /// hours without anyone noticing.
+  | "auto_draft_auto_paused";
 
 export type DispatchResult = {
   alreadySent: boolean;

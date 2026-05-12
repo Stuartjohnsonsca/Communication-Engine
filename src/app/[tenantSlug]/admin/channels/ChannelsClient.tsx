@@ -271,20 +271,65 @@ export default function ChannelsClient({
       </div>
 
       {autoDraftPause.pausedAt && (
-        <div className="card border-amber-400 bg-amber-50">
+        <div
+          className={`card ${
+            autoDraftPause.pausedByName === "(circuit-breaker)"
+              ? "border-red-400 bg-red-50"
+              : "border-amber-400 bg-amber-50"
+          }`}
+        >
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-amber-900">
-                Auto-draft is paused
+              <div
+                className={`text-sm font-medium ${
+                  autoDraftPause.pausedByName === "(circuit-breaker)"
+                    ? "text-red-900"
+                    : "text-amber-900"
+                }`}
+              >
+                {autoDraftPause.pausedByName === "(circuit-breaker)"
+                  ? "Auto-draft was paused by the circuit breaker"
+                  : "Auto-draft is paused"}
               </div>
-              <p className="mt-1 text-xs text-amber-900/80">
-                Background drafting from ingested inbound is halted for this
-                tenant. The 5-minute cron still runs (skip rows appear in
-                history below) and User-pasted drafting via /drafts/new
-                continues to work. Resume when you're ready to let the engine
-                produce drafts again.
+              <p
+                className={`mt-1 text-xs ${
+                  autoDraftPause.pausedByName === "(circuit-breaker)"
+                    ? "text-red-900/80"
+                    : "text-amber-900/80"
+                }`}
+              >
+                {autoDraftPause.pausedByName === "(circuit-breaker)" ? (
+                  <>
+                    Repeated LLM failures tripped the auto-pause safeguard.
+                    Investigate the failed calls on{" "}
+                    <a
+                      className="underline"
+                      href={`/${tenantSlug}/admin/usage`}
+                    >
+                      /admin/usage
+                    </a>{" "}
+                    before resuming — the failure source is usually a provider
+                    outage, a rate-limited API key, or a scoped model
+                    misconfiguration. Background drafting is halted; ad-hoc
+                    User drafting via /drafts/new still works.
+                  </>
+                ) : (
+                  <>
+                    Background drafting from ingested inbound is halted for
+                    this tenant. The 5-minute cron still runs (skip rows
+                    appear in history below) and User-pasted drafting via
+                    /drafts/new continues to work. Resume when you're ready
+                    to let the engine produce drafts again.
+                  </>
+                )}
               </p>
-              <p className="mt-1 text-xs text-amber-900/70">
+              <p
+                className={`mt-1 text-xs ${
+                  autoDraftPause.pausedByName === "(circuit-breaker)"
+                    ? "text-red-900/70"
+                    : "text-amber-900/70"
+                }`}
+              >
                 Paused {autoDraftPause.pausedAt.slice(0, 16).replace("T", " ")}
                 {autoDraftPause.pausedByName && (
                   <> by {autoDraftPause.pausedByName}</>

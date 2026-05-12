@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { reportError } from "@/lib/observability";
 import { produceDraftFromInbound } from "./produce-from-inbound";
+import { evaluateAutoPauseCircuitBreaker } from "./circuit-breaker";
 
 /**
  * Items 50 + 51 — continuous-background draft producer + operator
@@ -152,6 +153,65 @@ export async function runAutoDraftSweep(opts?: {
   };
 
   for (const t of tenants) {
+    // Item 59 — circuit breaker. Evaluated once per tenant per pass
+    // BEFORE iterating inbound. A trip auto-pauses the tenant + audits
+    // + notifies FIRM_ADMINs, then this pass skips iteration (subsequent
+    // `produceDraftFromInbound` calls would short-circuit anyway via
+    // item 58's defence-in-depth gate, but skipping here avoids a per-
+    // inbound DB read for nothing). The CRON source only — operator
+    // backfill is an explicit human decision and shouldn't be blocked
+    // by a recent failure burst.
+    if (source === "CRON") {
+      try {
+        const breaker = await evaluateAutoPauseCircuitBreaker({
+          tenantId: t.id,
+          now,
+        });
+        if (breaker.result === "auto_paused" || breaker.result === "already_paused") {
+          // Persist a sweep-run row so the operator sees a CRON pass
+          // happened but produced nothing for this tenant. Skip-reasons
+          // histogram stays empty; the cause is the pause state, not
+          // a per-inbound skip code.
+          try {
+            await superDb.autoDraftSweepRun.create({
+              data: {
+                tenantId: t.id,
+                source,
+                triggeredByMembershipId,
+                startedAt: now,
+                windowHours,
+                maxPerTenant,
+                candidates: 0,
+                produced: 0,
+                skipped: 0,
+                errored: 0,
+                skipReasons: {} as Prisma.InputJsonValue,
+              },
+            });
+          } catch (err) {
+            reportError(
+              err,
+              {
+                route: "lib/drafts/auto-sweep",
+                tenantId: t.id,
+                extra: { stage: "persist_sweep_run_paused", source },
+              },
+              "auto-draft sweep run persist failed",
+            );
+          }
+          continue;
+        }
+      } catch (err) {
+        reportError(
+          err,
+          { route: "lib/drafts/auto-sweep", tenantId: t.id },
+          "auto-draft circuit breaker evaluation failed",
+        );
+        // Fall through to normal iteration on breaker failure — better
+        // to keep producing than to block on the breaker itself.
+      }
+    }
+
     const candidates = await superDb.ingestedMessage.findMany({
       where: {
         tenantId: t.id,
