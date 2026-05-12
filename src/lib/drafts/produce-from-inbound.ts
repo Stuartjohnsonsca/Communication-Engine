@@ -5,6 +5,7 @@ import { produceDraft } from "@/lib/ai/agents/draftAgent";
 import { classifyAndRecordInbound } from "@/lib/sentiment/record";
 import { getMemberLifecycleState, isDraftingPermitted } from "@/lib/lifecycle";
 import { reportError } from "@/lib/observability";
+import { dispatchNotification } from "@/lib/notifications/dispatch";
 
 /**
  * Item 50 — produce a Draft for an ingested inbound message **without
@@ -317,6 +318,67 @@ export async function produceDraftFromInbound(input: {
           lastError: errorMessage,
         },
       });
+      // Item 63 — mandatory notification to every active FIRM_ADMIN.
+      // Without this, quarantined inbound only surfaces by visiting
+      // /admin/channels, and a small backlog can grow silently. We
+      // resolve `tenant.name` + admins lazily INSIDE the quarantine
+      // branch so the per-failure happy path pays nothing.
+      const tenant = await superDb.tenant.findUnique({
+        where: { id: input.tenantId },
+        select: { name: true },
+      });
+      const admins = await superDb.membership.findMany({
+        where: {
+          tenantId: input.tenantId,
+          role: "FIRM_ADMIN",
+          status: "ACTIVE",
+        },
+        include: { user: { select: { email: true } } },
+      });
+      const senderLabel = ingested.sender?.trim() || "(no sender)";
+      const subjectLabel = ingested.subject?.trim() || "(no subject)";
+      const dedupeKey = `quarantined:${ingested.id}`;
+      for (const m of admins) {
+        if (!m.user.email) continue;
+        try {
+          await dispatchNotification({
+            tenantId: input.tenantId,
+            membershipId: m.id,
+            toEmail: m.user.email,
+            kind: "inbound_draft_quarantined",
+            dedupeKey,
+            subject: `[${tenant?.name ?? "tenant"}] Inbound quarantined — investigate before retry`,
+            text:
+              `An inbound message failed ${attemptCount} consecutive draft attempts and has ` +
+              `been quarantined. The auto-draft sweep will skip it on subsequent ticks until ` +
+              `an operator manually retries from /admin/channels.\n\n` +
+              `Sender: ${senderLabel}\n` +
+              `Subject: ${subjectLabel}\n` +
+              `Last error: ${errorMessage}\n\n` +
+              `Common causes: malformed encoding, oversized attachment, prompt-template ` +
+              `rejection. Investigate, then press Retry on /admin/channels to put the row ` +
+              `back in the candidate pool.`,
+            summary: `Quarantined: ${subjectLabel}`,
+            href: `/admin/channels`,
+            payload: {
+              ingestedMessageId: ingested.id,
+              attemptCount,
+              lastError: errorMessage,
+            },
+          });
+        } catch (notifyErr) {
+          reportError(
+            notifyErr,
+            {
+              route: "lib/drafts/produce-from-inbound",
+              tenantId: input.tenantId,
+              membershipId: m.id,
+              extra: { ingestedMessageId: ingested.id },
+            },
+            "quarantine notification dispatch failed",
+          );
+        }
+      }
     }
     throw err;
   }

@@ -73,7 +73,20 @@ export type NotificationKind =
   /// online and don't go investigating a "stuck" pause. Not
   /// opt-outable: pairs with `auto_draft_auto_paused` — muting one
   /// side leaves operators with an incomplete picture.
-  | "auto_draft_auto_resumed";
+  | "auto_draft_auto_resumed"
+  /// Post-PRD item 63 — mandatory operational alert. A single
+  /// IngestedMessage failed `QUARANTINE_THRESHOLD` consecutive
+  /// draft attempts and has been removed from the sweep candidate
+  /// pool. Push-notify FIRM_ADMINs so they can investigate before
+  /// a backlog accumulates — without this, operators only find
+  /// quarantined inbound by visiting /admin/channels. Not
+  /// opt-outable: quarantine means "we tried three times and gave
+  /// up," which is a real customer-facing service gap. dedupeKey
+  /// uses the IngestedMessage id so each broken inbound fires at
+  /// most once (re-quarantine after operator unquarantine
+  /// deliberately does NOT re-fire — the operator already knew
+  /// about the row).
+  | "inbound_draft_quarantined";
 
 export type DispatchResult = {
   alreadySent: boolean;

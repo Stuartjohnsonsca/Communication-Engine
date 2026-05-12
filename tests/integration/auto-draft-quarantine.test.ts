@@ -138,11 +138,21 @@ describe("quarantine — per-inbound failure budget", () => {
     expect(after!.quarantineReason).toBeNull();
   });
 
-  it("threshold reached → quarantines + audits", async () => {
+  it("threshold reached → quarantines + audits + notifies admins", async () => {
     const tenant = await createTestTenant();
     const { membership } = await createTestUserAndMembership(tenant.id, {
       role: "USER",
       email: uniqueEmail("u"),
+    });
+    // Item 63 — admins must be notified on quarantine. Seed two
+    // FIRM_ADMINs + one USER; the USER must NOT be notified.
+    const a1 = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("a1"),
+    });
+    const a2 = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("a2"),
     });
     await commitMinimalFcg(tenant.id);
     const channel = await setupChannel(tenant.id, membership.id);
@@ -181,6 +191,15 @@ describe("quarantine — per-inbound failure budget", () => {
     expect(audits.length).toBe(1);
     const payload = audits[0]!.payload as Record<string, unknown>;
     expect(payload.attemptCount).toBe(QUARANTINE_THRESHOLD);
+
+    // Notifications fanned out to every FIRM_ADMIN, with dedupeKey
+    // including the IngestedMessage id (single fire per inbound).
+    const dispatches = await superDb.notificationDispatch.findMany({
+      where: { tenantId: tenant.id, kind: "inbound_draft_quarantined" },
+    });
+    const notifiedIds = dispatches.map((d) => d.membershipId).sort();
+    expect(notifiedIds).toEqual([a1.membership.id, a2.membership.id].sort());
+    expect(dispatches[0]!.dedupeKey).toBe(`quarantined:${im.id}`);
   });
 
   it("quarantined inbound returns 'quarantined' skip code without an LLM call", async () => {
