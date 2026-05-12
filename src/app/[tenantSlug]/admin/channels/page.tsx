@@ -2,6 +2,10 @@ import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { ALL_KINDS } from "@/lib/channels/registry";
+import {
+  getChannelHealthSnapshot,
+  SILENCE_WARN_DAYS,
+} from "@/lib/channels/health";
 import ChannelsClient from "./ChannelsClient";
 
 export default async function ChannelsPage({
@@ -34,6 +38,14 @@ export default async function ChannelsPage({
     realOAuth: m.realOAuthAvailable(),
   }));
 
+  // Item 57 — per-channel ingest activity snapshot. ACTIVE channel +
+  // active auth + grace-window passed + no inbound in the silence
+  // window flags `silent`. Renders inline alongside each channel row.
+  const health = await getChannelHealthSnapshot({
+    tenantId: ctx.tenant.id,
+    channels: channels.map((c) => ({ id: c.id, status: c.status })),
+  });
+
   // Item 52 — recent auto-draft sweep runs for this tenant. Surfaces
   // the same counts the operator sees in the backfill confirmation
   // toast, plus the cron-driven runs they never explicitly trigger.
@@ -49,16 +61,25 @@ export default async function ChannelsPage({
   return (
     <ChannelsClient
       tenantSlug={tenantSlug}
-      channels={channels.map((c) => ({
-        id: c.id,
-        kind: c.kind,
-        status: c.status,
-        dpiaApproved: c.dpiaApproved,
-        createdAt: c.createdAt.toISOString(),
-        scope: c.auths[0]?.scope ?? null,
-        expiresAt: c.auths[0]?.expiresAt?.toISOString() ?? null,
-        messageCount: c._count.messages,
-      }))}
+      silenceWarnDays={SILENCE_WARN_DAYS}
+      channels={channels.map((c) => {
+        const h = health.get(c.id);
+        return {
+          id: c.id,
+          kind: c.kind,
+          status: c.status,
+          dpiaApproved: c.dpiaApproved,
+          createdAt: c.createdAt.toISOString(),
+          scope: c.auths[0]?.scope ?? null,
+          expiresAt: c.auths[0]?.expiresAt?.toISOString() ?? null,
+          messageCount: c._count.messages,
+          lastInboundAt: h?.lastInboundAt?.toISOString() ?? null,
+          lastOutboundAt: h?.lastOutboundAt?.toISOString() ?? null,
+          inboundCount7d: h?.inboundCount7d ?? 0,
+          inboundCount30d: h?.inboundCount30d ?? 0,
+          silent: h?.silent ?? false,
+        };
+      })}
       kinds={kinds}
       sweepRuns={sweepRuns.map((r) => ({
         id: r.id,

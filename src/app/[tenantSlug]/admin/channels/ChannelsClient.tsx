@@ -11,6 +11,14 @@ type ChannelRow = {
   scope: string | null;
   expiresAt: string | null;
   messageCount: number;
+  // Item 57 — per-channel ingest activity. Serialised from
+  // ChannelHealth (the snapshot lives server-side; we only ship the
+  // bits the table needs).
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+  inboundCount7d: number;
+  inboundCount30d: number;
+  silent: boolean;
 };
 
 type KindOption = {
@@ -61,11 +69,13 @@ export default function ChannelsClient({
   channels,
   kinds,
   sweepRuns,
+  silenceWarnDays,
 }: {
   tenantSlug: string;
   channels: ChannelRow[];
   kinds: KindOption[];
   sweepRuns: SweepRunRow[];
+  silenceWarnDays: number;
 }) {
   const [selectedKind, setSelectedKind] = useState(kinds[0]?.kind ?? "");
   const [pending, startTransition] = useTransition();
@@ -208,6 +218,12 @@ export default function ChannelsClient({
   const kindLabel = (k: string) => kinds.find((x) => x.kind === k)?.label ?? k;
   const selectedMeta = kinds.find((k) => k.kind === selectedKind);
 
+  // Item 57 — silence banner. ACTIVE channels with active auth that
+  // have been silent past the warn window. Token-expiry warnings are
+  // a separate cron (item 53); this fires for the case where the
+  // token is still valid but nothing is arriving.
+  const silentChannels = channels.filter((c) => c.silent);
+
   return (
     <div className="space-y-4">
       <div>
@@ -217,6 +233,33 @@ export default function ChannelsClient({
           365, Google Workspace, Slack. Personal channels are excluded by design (PRD §5.1.1).
         </p>
       </div>
+
+      {silentChannels.length > 0 && (
+        <div className="card border-amber-300 bg-amber-50/60">
+          <div className="text-sm font-medium text-amber-900">
+            {silentChannels.length === 1
+              ? "1 channel is silent"
+              : `${silentChannels.length} channels are silent`}
+          </div>
+          <p className="mt-1 text-xs text-amber-900/80">
+            No inbound messages in the last {silenceWarnDays} days despite an
+            active token. Token-expiry warnings fire separately; this is the
+            "token still works but nothing is arriving" mode — common causes
+            are scope downgrades made outside the platform, provider rate
+            limits, or a polled folder being moved or emptied.
+          </p>
+          <ul className="mt-2 list-disc pl-4 text-xs text-amber-900/80">
+            {silentChannels.map((c) => (
+              <li key={c.id}>
+                {kindLabel(c.kind)} — last inbound{" "}
+                {c.lastInboundAt
+                  ? c.lastInboundAt.slice(0, 10)
+                  : "never"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Add a channel</h2>
@@ -395,7 +438,9 @@ export default function ChannelsClient({
                 <th className="py-1 pr-3">Kind</th>
                 <th className="py-1 pr-3">Status</th>
                 <th className="py-1 pr-3">DPIA</th>
-                <th className="py-1 pr-3">Messages</th>
+                <th className="py-1 pr-3">Last inbound</th>
+                <th className="py-1 pr-3">In · 7d / 30d</th>
+                <th className="py-1 pr-3">Total</th>
                 <th className="py-1 pr-3">Token expires</th>
                 <th className="py-1 pr-3">Actions</th>
               </tr>
@@ -426,7 +471,33 @@ export default function ChannelsClient({
                         <span className="text-ink/50">pending</span>
                       )}
                     </td>
-                    <td className="py-2 pr-3">{c.messageCount}</td>
+                    <td className="py-2 pr-3 text-xs">
+                      {c.lastInboundAt ? (
+                        <span
+                          className={c.silent ? "text-amber-700 font-medium" : "text-ink/70"}
+                        >
+                          {c.lastInboundAt.slice(0, 10)}
+                          {c.silent && (
+                            <span className="ml-1 tag bg-amber-100 text-amber-900">
+                              silent
+                            </span>
+                          )}
+                        </span>
+                      ) : c.silent ? (
+                        <span className="text-amber-700 font-medium">
+                          never
+                          <span className="ml-1 tag bg-amber-100 text-amber-900">
+                            silent
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-ink/40">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-ink/70 tabular-nums">
+                      {c.inboundCount7d} / {c.inboundCount30d}
+                    </td>
+                    <td className="py-2 pr-3 tabular-nums">{c.messageCount}</td>
                     <td className="py-2 pr-3 text-xs text-ink/60">
                       {c.expiresAt ? c.expiresAt.slice(0, 10) : "—"}
                     </td>
