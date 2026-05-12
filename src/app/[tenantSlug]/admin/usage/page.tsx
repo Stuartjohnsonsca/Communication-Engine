@@ -2,7 +2,11 @@ import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { hasPermission } from "@/lib/rbac";
 import { superDb } from "@/lib/db";
-import { estimateCostMinor } from "@/lib/ai/usage";
+import {
+  estimateCostMinor,
+  aggregateFailures,
+  type FailedCallRow,
+} from "@/lib/ai/usage";
 
 /**
  * Post-PRD hardening item 55 — per-tenant LLM usage observability.
@@ -62,6 +66,7 @@ export default async function UsagePage({
   const rows = await superDb.llmCall.findMany({
     where: { tenantId: ctx.tenant.id, createdAt: { gte: since } },
     select: {
+      id: true,
       role: true,
       context: true,
       model: true,
@@ -72,6 +77,7 @@ export default async function UsagePage({
       cacheReadTokens: true,
       cacheCreationTokens: true,
       succeeded: true,
+      errorMessage: true,
       createdAt: true,
     },
     orderBy: { createdAt: "desc" },
@@ -125,15 +131,37 @@ export default async function UsagePage({
     bump(byMembership, r.membershipId ?? "system");
   }
 
-  // Membership labels for the top-5 spenders.
+  // Item 60 — recent failures + grouped failure modes.
+  const failureRows: FailedCallRow[] = rows
+    .filter((r) => !r.succeeded)
+    .map((r) => ({
+      id: r.id,
+      role: r.role,
+      context: r.context,
+      model: r.model,
+      provider: r.provider,
+      membershipId: r.membershipId ?? null,
+      errorMessage: r.errorMessage ?? null,
+      createdAt: r.createdAt,
+    }));
+  const failureAggregate = aggregateFailures(failureRows);
+
+  // Membership labels for the top-5 spenders + every recent-failure
+  // membership so the failures table shows names rather than ids.
   const topMembershipIds = Array.from(byMembership.entries())
     .filter(([k]) => k !== "system")
     .sort((a, b) => b[1].costMinor - a[1].costMinor)
     .slice(0, 5)
     .map(([k]) => k);
-  const memberships = topMembershipIds.length
+  const failureMembershipIds = failureAggregate.recent
+    .map((r) => r.membershipId)
+    .filter((id): id is string => id !== null);
+  const allMembershipIds = Array.from(
+    new Set([...topMembershipIds, ...failureMembershipIds]),
+  );
+  const memberships = allMembershipIds.length
     ? await superDb.membership.findMany({
-        where: { id: { in: topMembershipIds } },
+        where: { id: { in: allMembershipIds } },
         include: { user: { select: { email: true, name: true } } },
       })
     : [];
@@ -234,6 +262,105 @@ export default async function UsagePage({
               })}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {failureAggregate.totalFailures > 0 && (
+        <section className="card border-red-200 bg-red-50/30 space-y-3">
+          <div>
+            <h2 className="text-base font-medium text-red-900">
+              Recent failures ({failureAggregate.totalFailures})
+            </h2>
+            <p className="text-xs text-red-900/70">
+              Failed LLM calls in the last {windowDays} days. Grouped by error
+              message prefix. The auto-draft circuit breaker (
+              <code className="text-xs">/admin/channels</code>) pauses the
+              tenant after 5 such failures in 30 minutes for the
+              <code className="mx-1">auto-draft</code>context — check these
+              rows first when investigating a circuit-breaker trip.
+            </p>
+          </div>
+
+          {failureAggregate.byMessage.length > 0 && (
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wider text-ink/50">
+                <tr>
+                  <th className="py-1 pr-3">Message</th>
+                  <th className="py-1 pr-3">Count</th>
+                  <th className="py-1 pr-3">Contexts</th>
+                  <th className="py-1 pr-3">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {failureAggregate.byMessage.slice(0, 10).map((g) => (
+                  <tr key={g.normalisedMessage} className="border-t border-ink/5 align-top">
+                    <td className="py-2 pr-3 max-w-[40ch]">
+                      <code className="text-xs break-words">
+                        {g.exemplarMessage}
+                      </code>
+                    </td>
+                    <td className="py-2 pr-3 font-medium tabular-nums">{g.count}</td>
+                    <td className="py-2 pr-3 text-xs">
+                      {Array.from(g.contexts).map((c) => (
+                        <span key={c} className="tag bg-ink/[0.04] mr-1">
+                          <code className="text-[10px]">{c}</code>
+                        </span>
+                      ))}
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-ink/60">
+                      {g.lastSeenAt.toISOString().slice(0, 16).replace("T", " ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div>
+            <h3 className="text-xs uppercase tracking-wider text-ink/50">
+              Last {Math.min(failureAggregate.recent.length, 20)} failed calls
+            </h3>
+            <table className="mt-2 w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wider text-ink/50">
+                <tr>
+                  <th className="py-1 pr-3">When</th>
+                  <th className="py-1 pr-3">Role</th>
+                  <th className="py-1 pr-3">Context</th>
+                  <th className="py-1 pr-3">Model</th>
+                  <th className="py-1 pr-3">Member</th>
+                  <th className="py-1 pr-3">Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {failureAggregate.recent.map((r) => (
+                  <tr key={r.id} className="border-t border-ink/5 align-top">
+                    <td className="py-2 pr-3 text-xs text-ink/60">
+                      {r.createdAt.toISOString().slice(0, 16).replace("T", " ")}
+                    </td>
+                    <td className="py-2 pr-3 text-xs">
+                      <code>{r.role}</code>
+                    </td>
+                    <td className="py-2 pr-3 text-xs">
+                      <code>{r.context}</code>
+                    </td>
+                    <td className="py-2 pr-3 text-xs">
+                      <code>{r.model}</code>
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-ink/70">
+                      {r.membershipId
+                        ? (membershipLabel.get(r.membershipId) ?? r.membershipId)
+                        : "system"}
+                    </td>
+                    <td className="py-2 pr-3 text-xs max-w-[40ch]">
+                      <code className="break-words text-red-900">
+                        {r.errorMessage ?? "(no message)"}
+                      </code>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 

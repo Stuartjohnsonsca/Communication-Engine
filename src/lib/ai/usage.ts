@@ -156,3 +156,98 @@ export function estimateCostMinor(row: {
     1_000_000;
   return Math.round(cost);
 }
+
+/**
+ * Post-PRD hardening item 60 — failed-call aggregation.
+ *
+ * Item 59's circuit breaker dispatches a notification that says
+ * "investigate the failed calls on /admin/usage" — but the page
+ * only showed a count. This helper groups failures by normalised
+ * error message + surfaces the most recent N for the diagnostic
+ * detail view.
+ *
+ * Normalisation is intentionally coarse: truncate to the first
+ * `NORMALISED_MESSAGE_LEN` characters, lowercase. That collapses
+ * variable suffixes (request IDs, timestamps, retry counters)
+ * while keeping the operator-meaningful prefix (`rate_limit_error`,
+ * `connection refused`, `529 overloaded`, etc.). Anything more
+ * sophisticated (regex strip, n-gram clustering) earns its
+ * complexity only if real-world traffic shows the simple version
+ * under-grouping — easy to revisit.
+ */
+export const NORMALISED_MESSAGE_LEN = 80;
+
+export type FailedCallRow = {
+  id: string;
+  role: string;
+  context: string;
+  model: string;
+  provider: string;
+  membershipId: string | null;
+  errorMessage: string | null;
+  createdAt: Date;
+};
+
+export type FailureGroup = {
+  normalisedMessage: string;
+  count: number;
+  exemplarMessage: string;
+  lastSeenAt: Date;
+  contexts: Set<string>;
+};
+
+export type FailureAggregate = {
+  totalFailures: number;
+  /// Failure groups sorted by count desc, then lastSeenAt desc.
+  byMessage: FailureGroup[];
+  /// Most recent N failures (default 20), newest first. Each row is
+  /// the original `FailedCallRow` so the UI can render per-row
+  /// timestamps + membership labels.
+  recent: FailedCallRow[];
+};
+
+export function normaliseErrorMessage(msg: string | null): string {
+  if (!msg) return "(no message)";
+  return msg.trim().slice(0, NORMALISED_MESSAGE_LEN).toLowerCase();
+}
+
+export function aggregateFailures(
+  rows: ReadonlyArray<FailedCallRow>,
+  opts?: { recentLimit?: number },
+): FailureAggregate {
+  const recentLimit = opts?.recentLimit ?? 20;
+  const groups = new Map<string, FailureGroup>();
+  for (const r of rows) {
+    const key = normaliseErrorMessage(r.errorMessage);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (r.createdAt > existing.lastSeenAt) existing.lastSeenAt = r.createdAt;
+      existing.contexts.add(r.context);
+    } else {
+      groups.set(key, {
+        normalisedMessage: key,
+        count: 1,
+        // The exemplar preserves the original casing + full message
+        // for the operator to read. First-seen wins; subsequent rows
+        // in the same bucket don't overwrite.
+        exemplarMessage: r.errorMessage ?? "(no message)",
+        lastSeenAt: r.createdAt,
+        contexts: new Set([r.context]),
+      });
+    }
+  }
+  const byMessage = Array.from(groups.values()).sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return b.lastSeenAt.getTime() - a.lastSeenAt.getTime();
+  });
+  // Recent: newest first (caller passes rows in any order; don't assume).
+  const recent = [...rows]
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(0, recentLimit);
+  return {
+    totalFailures: rows.length,
+    byMessage,
+    recent,
+  };
+}
