@@ -479,3 +479,143 @@ describe("computeDraftRollup — FCG-window adherence (item 66)", () => {
     expect(r.fcgWindow.withinWindowRate).toBeNull();
   });
 });
+
+/**
+ * Post-PRD item 67 — per-Member FCG-window adherence in the top-drafters
+ * breakdown. The firm-wide block (item 66) gives the rate; this lets
+ * a FIRM_ADMIN see WHO is breaking the promise.
+ */
+describe("computeDraftRollup — per-Member FCG-window adherence (item 67)", () => {
+  it("attributes adherence buckets to the owning Membership", async () => {
+    const tenant = await createTestTenant();
+    const a = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("a-clean"),
+    });
+    const b = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("b-slipping"),
+    });
+
+    const base = new Date(Date.now() - 6 * 60 * 60 * 1000);
+
+    // A: 2 within, 0 after, 0 overdue → 100%
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: a.membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 20 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: a.membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 40 * 60_000),
+    });
+
+    // B: 1 within, 2 after, 1 overdue → 33%
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: b.membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 30 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: b.membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 120 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: b.membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 180 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: b.membership.id,
+      status: "PROPOSED",
+      fcgWindowDeadline: new Date(Date.now() - 60 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    const rowA = r.byMembership.find((x) => x.membershipId === a.membership.id);
+    const rowB = r.byMembership.find((x) => x.membershipId === b.membership.id);
+    expect(rowA?.fcgWindow.withinWindowRate).toBe(1);
+    expect(rowA?.fcgWindow.sentWithDeadline).toBe(2);
+    expect(rowA?.fcgWindow.openOverdue).toBe(0);
+    expect(rowB?.fcgWindow.sentWithDeadline).toBe(3);
+    expect(rowB?.fcgWindow.sentWithinWindow).toBe(1);
+    expect(rowB?.fcgWindow.sentAfterWindow).toBe(2);
+    expect(rowB?.fcgWindow.openOverdue).toBe(1);
+    expect(rowB?.fcgWindow.withinWindowRate).toBeCloseTo(1 / 3, 5);
+  });
+
+  it("per-Member adherence excludes bypassed-synth too", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("bypasser"),
+    });
+
+    const base = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    // The Member's bypass: a late-sent synth → must not affect adherence.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      synthesisedFromOutboundIngest: true,
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 30 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 120 * 60_000),
+    });
+    // The Member's only engine send — within window.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 30 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    const row = r.byMembership.find((x) => x.membershipId === membership.id);
+    // produced / sent reflect all drafts (so the FIRM_ADMIN sees bypass
+    // volume on the same row), but the adherence accounting only counts
+    // the engine send.
+    expect(row?.produced).toBe(2);
+    expect(row?.sent).toBe(2);
+    expect(row?.fcgWindow.sentWithDeadline).toBe(1);
+    expect(row?.fcgWindow.withinWindowRate).toBe(1);
+  });
+
+  it("per-Member withinWindowRate is null when the Member has no deadlined sends", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("no-dl"),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      sentMarkedAt: new Date(),
+    });
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    const row = r.byMembership.find((x) => x.membershipId === membership.id);
+    expect(row?.fcgWindow.sentWithDeadline).toBe(0);
+    expect(row?.fcgWindow.withinWindowRate).toBeNull();
+  });
+});

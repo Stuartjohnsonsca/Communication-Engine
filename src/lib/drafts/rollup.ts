@@ -112,14 +112,29 @@ export type DraftRollup = {
     avgProducedToSentMin: number | null;
     avgProducedToDiscardedMin: number | null;
   };
-  /// Top-N Memberships by `produced`. Membership label lookup is the
-  /// caller's responsibility (matches `/admin/usage` pattern).
+  /**
+   * Top-N Memberships by `produced`. Membership label lookup is the
+   * caller's responsibility (matches `/admin/usage` pattern).
+   *
+   * Item 67 — per-Member FCG-window adherence breakdown. Same rules as
+   * the firm-wide block: bypassed-synth excluded, no-deadline excluded.
+   * The point of having it per-Member is for the FIRM_ADMIN to act —
+   * "the firm rate is 60%" is interesting; "Jane is at 30%, Sam at 95%"
+   * is actionable.
+   */
   byMembership: Array<{
     membershipId: string;
     produced: number;
     sent: number;
     discarded: number;
     open: number;
+    fcgWindow: {
+      sentWithDeadline: number;
+      sentWithinWindow: number;
+      sentAfterWindow: number;
+      openOverdue: number;
+      withinWindowRate: number | null;
+    };
   }>;
 };
 
@@ -183,9 +198,21 @@ export async function computeDraftRollup(input: {
     manual_paste: emptyBucket(),
     bypassed_synth: emptyBucket(),
   };
+  // Item 67 — per-Member accumulators include the FCG-window block. The
+  // shape mirrors the firm-wide block (sentWithDeadline / within / after
+  // / openOverdue) so the page can render each Member identically.
   const byMembership = new Map<
     string,
-    { produced: number; sent: number; discarded: number; open: number }
+    {
+      produced: number;
+      sent: number;
+      discarded: number;
+      open: number;
+      fcgSentWithDeadline: number;
+      fcgSentWithinWindow: number;
+      fcgSentAfterWindow: number;
+      fcgOpenOverdue: number;
+    }
   >();
 
   // For latency we sum (ms) across rows then divide at the end.
@@ -246,23 +273,34 @@ export async function computeDraftRollup(input: {
       }
     }
 
-    // Item 66 — FCG-window adherence. Bypassed-synth drafts are
-    // excluded: they're post-hoc reconstructions of sends that already
-    // happened outside the engine, so the "did we beat the deadline"
-    // promise never applied. Drafts with no deadline are excluded for
-    // the same reason: no promise, nothing to measure.
+    // Item 66 — FCG-window adherence (firm-wide). Bypassed-synth drafts
+    // are excluded: they're post-hoc reconstructions of sends that
+    // already happened outside the engine, so the "did we beat the
+    // deadline" promise never applied. Drafts with no deadline are
+    // excluded for the same reason: no promise, nothing to measure.
+    //
+    // Item 67 — the same classification applies per-Member; we capture
+    // a single `fcgBucket` value here and use it to bump both the
+    // firm-wide counters and the per-Member ones below, so the two
+    // surfaces can't disagree about which drafts count.
+    type FcgBucket = "within" | "after" | "openOverdue" | null;
+    let fcgBucket: FcgBucket = null;
     if (source !== "bypassed_synth" && r.fcgWindowDeadline) {
       const deadline = r.fcgWindowDeadline.getTime();
       if (r.status === "SENT" && r.sentMarkedAt) {
-        fcgSentWithDeadline += 1;
-        if (r.sentMarkedAt.getTime() <= deadline) fcgSentWithinWindow += 1;
-        else fcgSentAfterWindow += 1;
+        fcgBucket = r.sentMarkedAt.getTime() <= deadline ? "within" : "after";
       } else if (r.status !== "SENT" && r.status !== "DISCARDED") {
-        // Non-terminal in-flight breach: deadline is already past but the
-        // draft hasn't been sent yet. Discards excluded (operator decided
-        // it was out of scope; not a broken promise).
-        if (deadline < now.getTime()) fcgOpenOverdue += 1;
+        if (deadline < now.getTime()) fcgBucket = "openOverdue";
       }
+    }
+    if (fcgBucket === "within") {
+      fcgSentWithDeadline += 1;
+      fcgSentWithinWindow += 1;
+    } else if (fcgBucket === "after") {
+      fcgSentWithDeadline += 1;
+      fcgSentAfterWindow += 1;
+    } else if (fcgBucket === "openOverdue") {
+      fcgOpenOverdue += 1;
     }
 
     if (r.parentId) {
@@ -277,11 +315,24 @@ export async function computeDraftRollup(input: {
           sent: 0,
           discarded: 0,
           open: 0,
+          fcgSentWithDeadline: 0,
+          fcgSentWithinWindow: 0,
+          fcgSentAfterWindow: 0,
+          fcgOpenOverdue: 0,
         };
       existing.produced += 1;
       if (r.status === "SENT") existing.sent += 1;
       else if (r.status === "DISCARDED") existing.discarded += 1;
       else existing.open += 1;
+      if (fcgBucket === "within") {
+        existing.fcgSentWithDeadline += 1;
+        existing.fcgSentWithinWindow += 1;
+      } else if (fcgBucket === "after") {
+        existing.fcgSentWithDeadline += 1;
+        existing.fcgSentAfterWindow += 1;
+      } else if (fcgBucket === "openOverdue") {
+        existing.fcgOpenOverdue += 1;
+      }
       byMembership.set(r.membershipId, existing);
     }
   }
@@ -304,7 +355,23 @@ export async function computeDraftRollup(input: {
   const topByMembership = Array.from(byMembership.entries())
     .sort((a, b) => b[1].produced - a[1].produced)
     .slice(0, topN)
-    .map(([membershipId, v]) => ({ membershipId, ...v }));
+    .map(([membershipId, v]) => ({
+      membershipId,
+      produced: v.produced,
+      sent: v.sent,
+      discarded: v.discarded,
+      open: v.open,
+      fcgWindow: {
+        sentWithDeadline: v.fcgSentWithDeadline,
+        sentWithinWindow: v.fcgSentWithinWindow,
+        sentAfterWindow: v.fcgSentAfterWindow,
+        openOverdue: v.fcgOpenOverdue,
+        withinWindowRate:
+          v.fcgSentWithDeadline > 0
+            ? v.fcgSentWithinWindow / v.fcgSentWithDeadline
+            : null,
+      },
+    }));
 
   const withinWindowRate =
     fcgSentWithDeadline > 0 ? fcgSentWithinWindow / fcgSentWithDeadline : null;

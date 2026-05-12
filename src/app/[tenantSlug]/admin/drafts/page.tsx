@@ -265,6 +265,12 @@ export default async function DraftsRollupPage({
       {rollup.byMembership.length > 0 && (
         <section className="card space-y-3">
           <h2 className="text-base font-medium">Top drafters</h2>
+          <p className="text-xs text-ink/60">
+            The within-window column applies the same exclusions as the
+            firm-wide block: bypassed-synth and no-deadline drafts don&apos;t
+            count. A Member who routinely bypasses the engine can&apos;t game
+            their adherence by sending the few engine drafts late.
+          </p>
           <table className="w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wider text-ink/50">
               <tr>
@@ -274,6 +280,8 @@ export default async function DraftsRollupPage({
                 <th className="py-1 pr-3">Discarded</th>
                 <th className="py-1 pr-3">Open</th>
                 <th className="py-1 pr-3">Send rate</th>
+                <th className="py-1 pr-3">Within window</th>
+                <th className="py-1 pr-3">Open overdue</th>
               </tr>
             </thead>
             <tbody>
@@ -290,6 +298,23 @@ export default async function DraftsRollupPage({
                     <td className="py-2 pr-3">{num(m.discarded)}</td>
                     <td className="py-2 pr-3">{num(m.open)}</td>
                     <td className="py-2 pr-3 font-medium">{pct(rate)}</td>
+                    <td className="py-2 pr-3 font-medium">
+                      {pct(m.fcgWindow.withinWindowRate)}
+                      {m.fcgWindow.sentWithDeadline > 0 && (
+                        <span className="ml-1 text-[11px] font-normal text-ink/50">
+                          ({num(m.fcgWindow.sentWithinWindow)}/{num(m.fcgWindow.sentWithDeadline)})
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {m.fcgWindow.openOverdue > 0 ? (
+                        <span className="font-medium text-red-900">
+                          {num(m.fcgWindow.openOverdue)}
+                        </span>
+                      ) : (
+                        num(0)
+                      )}
+                    </td>
                   </tr>
                 );
               })}
