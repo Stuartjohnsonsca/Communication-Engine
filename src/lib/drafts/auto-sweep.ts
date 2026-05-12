@@ -2,7 +2,10 @@ import type { Prisma } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { reportError } from "@/lib/observability";
 import { produceDraftFromInbound } from "./produce-from-inbound";
-import { evaluateAutoPauseCircuitBreaker } from "./circuit-breaker";
+import {
+  evaluateAutoPauseCircuitBreaker,
+  evaluateAutoResume,
+} from "./circuit-breaker";
 
 /**
  * Items 50 + 51 — continuous-background draft producer + operator
@@ -153,6 +156,24 @@ export async function runAutoDraftSweep(opts?: {
   };
 
   for (const t of tenants) {
+    // Item 61 — auto-resume runs BEFORE the trip check. A tenant
+    // paused under the bare `(circuit-breaker)` sentinel whose failure
+    // window has cleared gets resumed here, then the same pass falls
+    // through to iterate inbound. Operator pauses, locked sentinels,
+    // and still-failing tenants are left alone. Failures fall through
+    // to the trip check rather than blocking the sweep.
+    if (source === "CRON") {
+      try {
+        await evaluateAutoResume({ tenantId: t.id, now });
+      } catch (err) {
+        reportError(
+          err,
+          { route: "lib/drafts/auto-sweep", tenantId: t.id },
+          "auto-draft auto-resume evaluation failed",
+        );
+      }
+    }
+
     // Item 59 — circuit breaker. Evaluated once per tenant per pass
     // BEFORE iterating inbound. A trip auto-pauses the tenant + audits
     // + notifies FIRM_ADMINs, then this pass skips iteration (subsequent

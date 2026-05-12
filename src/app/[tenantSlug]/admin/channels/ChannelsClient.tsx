@@ -270,88 +270,109 @@ export default function ChannelsClient({
         </p>
       </div>
 
-      {autoDraftPause.pausedAt && (
-        <div
-          className={`card ${
-            autoDraftPause.pausedByName === "(circuit-breaker)"
-              ? "border-red-400 bg-red-50"
-              : "border-amber-400 bg-amber-50"
-          }`}
-        >
-          <div className="flex flex-wrap items-baseline justify-between gap-3">
-            <div>
-              <div
-                className={`text-sm font-medium ${
-                  autoDraftPause.pausedByName === "(circuit-breaker)"
-                    ? "text-red-900"
-                    : "text-amber-900"
-                }`}
-              >
-                {autoDraftPause.pausedByName === "(circuit-breaker)"
-                  ? "Auto-draft was paused by the circuit breaker"
-                  : "Auto-draft is paused"}
+      {autoDraftPause.pausedAt && (() => {
+        // Item 59 + 61 — three pause flavours:
+        //   - "(circuit-breaker)"        → red, auto-resume will fire when window clears
+        //   - "(circuit-breaker-locked)" → red, anti-thrash lock; auto-resume disabled
+        //   - anything else              → amber, operator-initiated
+        const byName = autoDraftPause.pausedByName;
+        const isBreaker = byName === "(circuit-breaker)";
+        const isLocked = byName === "(circuit-breaker-locked)";
+        const isSystem = isBreaker || isLocked;
+        return (
+          <div
+            className={`card ${
+              isSystem
+                ? "border-red-400 bg-red-50"
+                : "border-amber-400 bg-amber-50"
+            }`}
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <div
+                  className={`text-sm font-medium ${
+                    isSystem ? "text-red-900" : "text-amber-900"
+                  }`}
+                >
+                  {isLocked
+                    ? "Auto-draft is LOCKED after a circuit-breaker re-trip"
+                    : isBreaker
+                      ? "Auto-draft was paused by the circuit breaker"
+                      : "Auto-draft is paused"}
+                </div>
+                <p
+                  className={`mt-1 text-xs ${
+                    isSystem ? "text-red-900/80" : "text-amber-900/80"
+                  }`}
+                >
+                  {isLocked ? (
+                    <>
+                      The circuit breaker tripped within four hours of a
+                      previous auto-resume — the underlying LLM issue is
+                      recurring, not transient. Auto-resume is disabled for
+                      this pause; manual review is required before resuming.
+                      Investigate the failed calls on{" "}
+                      <a
+                        className="underline"
+                        href={`/${tenantSlug}/admin/usage`}
+                      >
+                        /admin/usage
+                      </a>{" "}
+                      and resolve the root cause (provider outage,
+                      rate-limited key, scoped model misconfiguration) before
+                      pressing Resume.
+                    </>
+                  ) : isBreaker ? (
+                    <>
+                      Repeated LLM failures tripped the auto-pause safeguard.
+                      The breaker will auto-resume on the next cron tick
+                      after the failure window clears. If the issue is
+                      non-transient, investigate the failed calls on{" "}
+                      <a
+                        className="underline"
+                        href={`/${tenantSlug}/admin/usage`}
+                      >
+                        /admin/usage
+                      </a>{" "}
+                      and resume manually. Background drafting is halted;
+                      ad-hoc User drafting via /drafts/new still works.
+                    </>
+                  ) : (
+                    <>
+                      Background drafting from ingested inbound is halted for
+                      this tenant. The 5-minute cron still runs (skip rows
+                      appear in history below) and User-pasted drafting via
+                      /drafts/new continues to work. Resume when you're ready
+                      to let the engine produce drafts again.
+                    </>
+                  )}
+                </p>
+                <p
+                  className={`mt-1 text-xs ${
+                    isSystem ? "text-red-900/70" : "text-amber-900/70"
+                  }`}
+                >
+                  Paused {autoDraftPause.pausedAt.slice(0, 16).replace("T", " ")}
+                  {byName && <> by {byName}</>}
+                  {autoDraftPause.reason && <>: {autoDraftPause.reason}</>}
+                </p>
               </div>
-              <p
-                className={`mt-1 text-xs ${
-                  autoDraftPause.pausedByName === "(circuit-breaker)"
-                    ? "text-red-900/80"
-                    : "text-amber-900/80"
-                }`}
-              >
-                {autoDraftPause.pausedByName === "(circuit-breaker)" ? (
-                  <>
-                    Repeated LLM failures tripped the auto-pause safeguard.
-                    Investigate the failed calls on{" "}
-                    <a
-                      className="underline"
-                      href={`/${tenantSlug}/admin/usage`}
-                    >
-                      /admin/usage
-                    </a>{" "}
-                    before resuming — the failure source is usually a provider
-                    outage, a rate-limited API key, or a scoped model
-                    misconfiguration. Background drafting is halted; ad-hoc
-                    User drafting via /drafts/new still works.
-                  </>
-                ) : (
-                  <>
-                    Background drafting from ingested inbound is halted for
-                    this tenant. The 5-minute cron still runs (skip rows
-                    appear in history below) and User-pasted drafting via
-                    /drafts/new continues to work. Resume when you're ready
-                    to let the engine produce drafts again.
-                  </>
-                )}
-              </p>
-              <p
-                className={`mt-1 text-xs ${
-                  autoDraftPause.pausedByName === "(circuit-breaker)"
-                    ? "text-red-900/70"
-                    : "text-amber-900/70"
-                }`}
-              >
-                Paused {autoDraftPause.pausedAt.slice(0, 16).replace("T", " ")}
-                {autoDraftPause.pausedByName && (
-                  <> by {autoDraftPause.pausedByName}</>
-                )}
-                {autoDraftPause.reason && <>: {autoDraftPause.reason}</>}
-              </p>
+              {canPauseAutoDraft && (
+                <button
+                  className="btn btn-primary"
+                  disabled={pausePending}
+                  onClick={() => togglePause("resume")}
+                >
+                  {pausePending ? "Resuming…" : "Resume auto-draft"}
+                </button>
+              )}
             </div>
-            {canPauseAutoDraft && (
-              <button
-                className="btn btn-primary"
-                disabled={pausePending}
-                onClick={() => togglePause("resume")}
-              >
-                {pausePending ? "Resuming…" : "Resume auto-draft"}
-              </button>
+            {pauseError && (
+              <p className="mt-2 text-sm text-red-600">{pauseError}</p>
             )}
           </div>
-          {pauseError && (
-            <p className="mt-2 text-sm text-red-600">{pauseError}</p>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {!autoDraftPause.pausedAt && canPauseAutoDraft && (
         <div className="card space-y-3">

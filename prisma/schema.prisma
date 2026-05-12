@@ -857,6 +857,13 @@ model Tenant {
   autoDraftPausedAt                    DateTime?
   autoDraftPausedByName                String?
   autoDraftPauseReason                 String?         @db.Text
+  /// Item 61 — anti-thrash clock for the circuit-breaker auto-resume.
+  /// Stamped on every auto-resume; on a subsequent trip, the breaker
+  /// checks whether this timestamp is within the thrash window and,
+  /// if so, pauses with the "(circuit-breaker-locked)" sentinel
+  /// (which auto-resume refuses to clear). Cleared on operator manual
+  /// resume so an investigated-and-fixed pause gives a clean slate.
+  autoDraftAutoResumeAt                DateTime?
   createdAt                            DateTime        @default(now())
   updatedAt                            DateTime        @updatedAt
 

@@ -66,7 +66,14 @@ export type NotificationKind =
   /// human can investigate before resuming. Not opt-outable: muting
   /// this would mean the engine could silently stop drafting for
   /// hours without anyone noticing.
-  | "auto_draft_auto_paused";
+  | "auto_draft_auto_paused"
+  /// Post-PRD item 61 — mandatory operational alert. The auto-draft
+  /// circuit breaker auto-resumed after the failure window cleared.
+  /// Surface to every FIRM_ADMIN so they know the engine is back
+  /// online and don't go investigating a "stuck" pause. Not
+  /// opt-outable: pairs with `auto_draft_auto_paused` — muting one
+  /// side leaves operators with an incomplete picture.
+  | "auto_draft_auto_resumed";
 
 export type DispatchResult = {
   alreadySent: boolean;

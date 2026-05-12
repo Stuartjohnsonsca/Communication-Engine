@@ -98,12 +98,17 @@ export async function POST(req: Request) {
     const pausedDurationMinutes = Math.round(
       (Date.now() - pausedAt.getTime()) / 60_000,
     );
+    // Item 61 — operator manual resume clears the auto-resume thrash
+    // clock too. The operator has investigated and is asserting "the
+    // issue is fixed"; the next failure burst should be evaluated as
+    // a fresh incident, not as a re-trip that locks immediately.
     await superDb.tenant.update({
       where: { id: ctx.tenant.id },
       data: {
         autoDraftPausedAt: null,
         autoDraftPausedByName: null,
         autoDraftPauseReason: null,
+        autoDraftAutoResumeAt: null,
       },
     });
     await writeAuditEvent({
