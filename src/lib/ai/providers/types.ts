@@ -60,6 +60,19 @@ export type ToolResult<T> = {
   modelRunId?: string;
 };
 
+/**
+ * Item 55 — opt-in LLM usage recording. When `record` is set on a
+ * `chat()` or `callTool()` call, `lib/ai/client.ts` writes one
+ * `LlmCall` row capturing tokens + duration + outcome under the
+ * given tenant. Agents that don't have a tenant in scope (or where
+ * recording isn't useful) omit this; the call still succeeds.
+ */
+export type RecordOpt = {
+  tenantId: string;
+  context: string;
+  membershipId?: string | null;
+};
+
 export type ChatOpts = {
   role: AgentRole;
   system: SystemBlock[];
@@ -69,6 +82,7 @@ export type ChatOpts = {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  record?: RecordOpt;
 };
 
 export type CallToolOpts = {
@@ -79,6 +93,7 @@ export type CallToolOpts = {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  record?: RecordOpt;
 };
 
 export interface LLMProvider {

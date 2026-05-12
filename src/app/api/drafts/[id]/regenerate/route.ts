@@ -115,6 +115,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       body: inboundBody,
     },
     noGoSubjects: noGo.map((n) => n.label),
+    // Item 55 — regenerate is User-initiated, distinct slug from
+    // manual-draft so the operator can see how much regeneration costs.
+    record: {
+      tenantId: ctx.tenant.id,
+      context: "draft-regenerate",
+      membershipId: ctx.membership.id,
+    },
   });
 
   type ActionCreate = {

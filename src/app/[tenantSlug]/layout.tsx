@@ -170,6 +170,11 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "billing:read")) {
     nav.push({ href: `/${tenantSlug}/admin/billing`, label: t("nav.billing") });
   }
+  // Post-PRD hardening item 55 — LLM usage observability. Same posture
+  // as billing: FIRM_ADMIN only, operational/commercial data.
+  if (hasPermission(ctx.membership.role, "usage:read")) {
+    nav.push({ href: `/${tenantSlug}/admin/usage`, label: t("nav.usage") });
+  }
   // Post-PRD hardening item 12 — tenant-wide 2FA policy. Only FIRM_ADMINs
   // can flip the policy; the page itself is gated, but we also hide the
   // nav entry from everyone else to keep the sidebar tidy.

@@ -70,6 +70,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "billing:read":        ["FIRM_ADMIN"],
   "billing:manage":      ["FIRM_ADMIN"],
 
+  // Item 55 — LLM usage observability. Token counts + estimated cost
+  // are operational/commercial data; same posture as billing (FIRM_ADMIN
+  // only). The FCT does not see model spend.
+  "usage:read":          ["FIRM_ADMIN"],
+
   // Roadmap (PRD §16). The product roadmap is published to every Client per
   // §15.3 switching/lock-in posture, so any signed-in role can read. Mutating
   // status / exit criteria is operator-only and additionally gated to the

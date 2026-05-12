@@ -2,12 +2,15 @@ import { callTool } from "@/lib/ai/client";
 import { sentimentSystem } from "@/lib/ai/caching";
 import { sentimentTool } from "@/lib/ai/tools";
 import { sentiment, type Sentiment } from "@/lib/ai/schemas";
+import type { RecordOpt } from "@/lib/ai/providers/types";
 
 export type SentimentInput = {
   channel: string;
   sender?: string | null;
   subject?: string | null;
   body: string;
+  /// Item 55 — LLM usage recording context. Forwarded to `callTool`.
+  record?: RecordOpt;
 };
 
 /**
@@ -42,6 +45,7 @@ export async function classifySentiment(input: SentimentInput): Promise<{
     system,
     messages: [{ role: "user", content: userMsg }],
     tool: sentimentTool,
+    record: input.record,
   });
 
   return { result: sentiment.parse(output), modelRunId };

@@ -213,6 +213,14 @@ export async function produceDraftFromInbound(input: {
       receivedAt: (ingested.sentAt ?? ingested.createdAt).toISOString(),
     },
     noGoSubjects: noGo.map((n) => n.label),
+    // Item 55 — auto-draft path: system-driven, no actor membership.
+    // The `auto-draft` context distinguishes cron spend from
+    // User-pasted spend on /admin/usage.
+    record: {
+      tenantId: input.tenantId,
+      context: "auto-draft",
+      membershipId: null,
+    },
   });
 
   type ActionCreate = {

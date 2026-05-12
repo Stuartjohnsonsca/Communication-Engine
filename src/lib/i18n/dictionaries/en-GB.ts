@@ -58,6 +58,7 @@ export const enGB: Dictionary = {
     webhooks: "Webhooks",
     apiKeys: "API keys",
     systemHealth: "System health",
+    usage: "LLM usage",
     help: "Help & guide",
   },
   shell: {
@@ -257,6 +258,7 @@ export type Dictionary = {
     webhooks: string;
     apiKeys: string;
     systemHealth: string;
+    usage: string;
     help: string;
   };
   shell: {

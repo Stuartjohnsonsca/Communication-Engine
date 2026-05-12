@@ -1,5 +1,6 @@
 import { bindingFor } from "@/lib/ai/models";
 import { effectiveProvider, PROVIDER_DEFAULT_MODEL } from "@/lib/ai/providers";
+import { recordLlmCall } from "@/lib/ai/usage";
 import type {
   AgentRole,
   CallToolOpts,
@@ -16,6 +17,11 @@ import type {
  * structured outputs (Judge, drafting final, sentiment, etc.).
  *
  * Each call dispatches to the provider bound to the agent role.
+ *
+ * Item 55 — when `opts.record` is set, the call writes one `LlmCall`
+ * row capturing tokens + wall-clock duration + outcome to the tenant's
+ * scoped table. Errors in persistence are swallowed (logged via
+ * `reportError`); the LLM call result still returns to the caller.
  */
 
 /** Resolve binding → effective provider, swapping the model when the
@@ -36,12 +42,80 @@ function resolve(role: AgentRole, override?: { model?: string; maxTokens?: numbe
 
 export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const r = resolve(opts.role, opts);
-  return r.provider.chat({ ...opts, model: r.model, maxTokens: r.maxTokens, temperature: r.temperature });
+  const startedAt = Date.now();
+  try {
+    const result = await r.provider.chat({
+      ...opts,
+      model: r.model,
+      maxTokens: r.maxTokens,
+      temperature: r.temperature,
+    });
+    if (opts.record) {
+      await recordLlmCall({
+        record: opts.record,
+        role: opts.role,
+        provider: r.provider.name,
+        model: r.model,
+        modelRunId: result.modelRunId,
+        usage: result.usage,
+        durationMs: Date.now() - startedAt,
+        succeeded: true,
+      });
+    }
+    return result;
+  } catch (err) {
+    if (opts.record) {
+      await recordLlmCall({
+        record: opts.record,
+        role: opts.role,
+        provider: r.provider.name,
+        model: r.model,
+        durationMs: Date.now() - startedAt,
+        succeeded: false,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+    }
+    throw err;
+  }
 }
 
 export async function callTool<T>(opts: CallToolOpts): Promise<ToolResult<T>> {
   const r = resolve(opts.role, opts);
-  return r.provider.callTool<T>({ ...opts, model: r.model, maxTokens: r.maxTokens, temperature: r.temperature });
+  const startedAt = Date.now();
+  try {
+    const result = await r.provider.callTool<T>({
+      ...opts,
+      model: r.model,
+      maxTokens: r.maxTokens,
+      temperature: r.temperature,
+    });
+    if (opts.record) {
+      await recordLlmCall({
+        record: opts.record,
+        role: opts.role,
+        provider: r.provider.name,
+        model: r.model,
+        modelRunId: result.modelRunId,
+        usage: result.usage,
+        durationMs: Date.now() - startedAt,
+        succeeded: true,
+      });
+    }
+    return result;
+  } catch (err) {
+    if (opts.record) {
+      await recordLlmCall({
+        record: opts.record,
+        role: opts.role,
+        provider: r.provider.name,
+        model: r.model,
+        durationMs: Date.now() - startedAt,
+        succeeded: false,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+    }
+    throw err;
+  }
 }
 
 /** Helper for agents to declare a tool with a JSON-Schema input. */

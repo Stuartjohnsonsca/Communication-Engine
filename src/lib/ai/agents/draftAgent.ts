@@ -2,6 +2,7 @@ import { callTool } from "@/lib/ai/client";
 import { draftSystem } from "@/lib/ai/caching";
 import { draftTool } from "@/lib/ai/tools";
 import { draftOutput, type DraftOutput } from "@/lib/ai/schemas";
+import type { RecordOpt } from "@/lib/ai/providers/types";
 
 export type DraftInput = {
   tenantId: string;
@@ -16,6 +17,11 @@ export type DraftInput = {
   };
   noGoSubjects?: string[];
   kbExtracts?: unknown[];
+  /// Item 55 — pass through to `callTool` so the underlying LLM call
+  /// is recorded against the tenant for cost observability. Callers
+  /// (auto-draft cron, /api/ai/draft route, backfill) decide the
+  /// `context` slug so spend can be sliced by trigger.
+  record?: RecordOpt;
 };
 
 export async function produceDraft(input: DraftInput): Promise<DraftOutput> {
@@ -49,6 +55,7 @@ export async function produceDraft(input: DraftInput): Promise<DraftOutput> {
     system,
     messages: [{ role: "user", content: userBlocks.join("\n\n") }],
     tool: draftTool,
+    record: input.record,
   });
 
   const parsed = draftOutput.parse(output);

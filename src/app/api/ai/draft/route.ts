@@ -127,6 +127,14 @@ export async function POST(req: Request) {
       ucg: ucgJson,
       inbound: parsed.data.inbound,
       noGoSubjects: noGo.map((n) => n.label),
+      // Item 55 — manual-draft path. The Membership posted the
+      // inbound themselves so their spend is attributable; auto-draft
+      // (cron) uses context="auto-draft" with membershipId=null.
+      record: {
+        tenantId: ctx.tenant.id,
+        context: "manual-draft",
+        membershipId: ctx.membership.id,
+      },
     }),
     classifyAndRecordInbound({
       tenantId: ctx.tenant.id,

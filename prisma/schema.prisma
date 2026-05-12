@@ -875,6 +875,7 @@ model Tenant {
   auditChainVerifications   AuditChainVerification[]
   subProcessorObjections    SubProcessorObjection[]
   autoDraftSweepRuns        AutoDraftSweepRun[]
+  llmCalls                  LlmCall[]
 
   @@index([status])
 }
@@ -987,6 +988,7 @@ model Membership {
   apiKeysCreated         ApiKey[]                           @relation("ApiKeyCreatedBy")
   apiKeysRevoked         ApiKey[]                           @relation("ApiKeyRevokedBy")
   autoDraftSweepRuns     AutoDraftSweepRun[]                @relation("AutoDraftSweepTriggeredBy")
+  llmCalls               LlmCall[]
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -2883,6 +2885,53 @@ model AutoDraftSweepRun {
 
   @@index([tenantId, startedAt(sort: Desc)])
   @@index([source])
+}
+
+// ─── LLM usage observability (post-PRD hardening item 55) ─────────────────
+
+/// One row per LLM call (`chat()` or `callTool()`) initiated on behalf
+/// of a tenant. Lets an operator answer "how many tokens did we burn
+/// this month and on what?" without scraping provider invoices.
+///
+/// Tenant-scoped + RLS-protected. Recording is best-effort — a failed
+/// insert is logged via `reportError` and the LLM call itself still
+/// returns to the agent (drafting cannot be gated on observability).
+///
+/// `role` is the AgentRole enum from `src/lib/ai/providers/types.ts`
+/// stored as a string (free-form to avoid migration churn whenever a
+/// new agent ships). `context` is a load-bearing free-form discriminator
+/// — e.g. `"auto-draft"`, `"manual-draft"`, `"sentiment-classify"`,
+/// `"adherence-score"` — so an operator can split "what did the cron
+/// burn vs what did Users burn."
+///
+/// Cost is computed on read, not stored: model rates change, and
+/// recomputing historic rows under new rates is fine for capacity
+/// planning. Accounting-grade billing would need a frozen rate
+/// snapshot per row, which is a future item.
+model LlmCall {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  membershipId        String?
+  role                String
+  context             String
+  provider            String
+  model               String
+  modelRunId          String?
+  inputTokens         Int      @default(0)
+  outputTokens        Int      @default(0)
+  cacheReadTokens     Int      @default(0)
+  cacheCreationTokens Int      @default(0)
+  durationMs          Int?
+  succeeded           Boolean  @default(true)
+  errorMessage        String?
+  createdAt           DateTime @default(now())
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membership Membership? @relation(fields: [membershipId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, role, createdAt])
+  @@index([tenantId, context, createdAt])
 }
 
 // ─── Outbound webhook delivery (post-PRD hardening item 14) ───────────────

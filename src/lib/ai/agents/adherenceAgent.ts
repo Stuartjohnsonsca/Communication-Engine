@@ -2,6 +2,7 @@ import { callTool } from "@/lib/ai/client";
 import { adherenceSystem } from "@/lib/ai/caching";
 import { adherenceTool } from "@/lib/ai/tools";
 import { adherence, type Adherence } from "@/lib/ai/schemas";
+import type { RecordOpt } from "@/lib/ai/providers/types";
 
 export type AdherenceInput = {
   tenantId: string;
@@ -13,6 +14,8 @@ export type AdherenceInput = {
   /** Minutes between inbound receipt and the sent communication. Optional —
    *  the judge returns `not_applicable` for `responseTime` when omitted. */
   responseLatencyMin?: number | null;
+  /// Item 55 — LLM usage recording context. Forwarded to `callTool`.
+  record?: RecordOpt;
 };
 
 /**
@@ -46,6 +49,7 @@ export async function scoreAdherence(input: AdherenceInput): Promise<{
     system,
     messages: [{ role: "user", content: userMsg }],
     tool: adherenceTool,
+    record: input.record,
   });
 
   return { result: adherence.parse(output), modelRunId };

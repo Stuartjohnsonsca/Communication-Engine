@@ -41,7 +41,17 @@ const CLASSIFICATION_DB: Record<
  * human.
  */
 export async function classifyAndRecordInbound(input: ClassifyAndRecordInput) {
-  const { result, modelRunId } = await classifySentiment(input.inbound);
+  // Item 55 — record the classifier's LLM spend under the assigned
+  // Membership so /admin/usage can show per-user activity. Context
+  // discriminator distinguishes classification from drafting.
+  const { result, modelRunId } = await classifySentiment({
+    ...input.inbound,
+    record: {
+      tenantId: input.tenantId,
+      context: "sentiment-classify",
+      membershipId: input.assignedToMembershipId,
+    },
+  });
 
   // Hard-floor escalation gate: only EXTREME_NEG specifically about firm
   // handling, and only when the model's own confidence clears the bar.

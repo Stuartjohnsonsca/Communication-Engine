@@ -152,6 +152,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       },
       sent: { subject: sentSubject, body: sentText },
       responseLatencyMin,
+      record: {
+        tenantId: ctx.tenant.id,
+        context: "adherence-score",
+        membershipId: ctx.membership.id,
+      },
     });
   } catch (e) {
     reportError(e, {

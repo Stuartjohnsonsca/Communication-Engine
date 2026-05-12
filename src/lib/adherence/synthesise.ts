@@ -242,6 +242,15 @@ export async function synthesiseFromOutbound(
         : undefined,
       sent: { subject: ingested.subject, body: ingested.body },
       responseLatencyMin,
+      // Item 55 — bypassed-send synthesis path. No User actor; the
+      // adherence call was triggered by an OUT IngestedMessage with
+      // no matching draft. Context distinguishes from explicit
+      // /api/drafts/[id]/sent spend.
+      record: {
+        tenantId: channel.tenantId,
+        context: "adherence-synthesised",
+        membershipId: null,
+      },
     });
   } catch (e) {
     reportError(e, {
