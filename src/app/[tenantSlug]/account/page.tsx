@@ -1,7 +1,12 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
+import {
+  computeMemberFcgAdherence,
+  type MemberFcgAdherence,
+} from "@/lib/drafts";
 import { revokeAccess, reauthoriseAccess, getMemberLifecycleState } from "@/lib/lifecycle";
 import {
   SUPPORTED_LOCALES,
@@ -48,7 +53,7 @@ export default async function AccountPage({
   if (!ctx) redirect("/login");
 
   const currentSessionId = await resolveCurrentSessionId();
-  const [member, channelAuths, totpStatus, sessions, notificationPrefs] = await Promise.all([
+  const [member, channelAuths, totpStatus, sessions, notificationPrefs, adherence] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
     }),
@@ -60,6 +65,11 @@ export default async function AccountPage({
     getEnrollmentStatus(ctx.user.id),
     listSessionsForUser({ userId: ctx.user.id, currentSessionId, includeRevoked: false }),
     listPreferences(ctx.membership.id),
+    computeMemberFcgAdherence({
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
+      windowDays: 30,
+    }),
   ]);
   if (!member) redirect("/login");
 
@@ -366,6 +376,8 @@ export default async function AccountPage({
         </dl>
       </div>
 
+      <MyAdherenceCard tenantSlug={tenantSlug} adherence={adherence} />
+
       <form action={setMyLocaleAction} className="card space-y-3">
         <h2 className="text-base font-medium">{t("account.localeHeading")}</h2>
         <p className="text-sm text-ink/70">{t("account.localeDescription")}</p>
@@ -619,6 +631,83 @@ export default async function AccountPage({
             will be anonymised. Reversal is a Firm Administrator action.
           </p>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Post-PRD hardening item 69 — first-person FCG-window adherence card.
+ *
+ * Mirrors the firm-admin top-drafters row (item 67) for the Member's
+ * own data. Same exclusions: bypassed-synth and no-deadline drafts
+ * don't count. Renders "no deadlined sends yet" when there's nothing
+ * to score, NOT "0%" — the rate is null in that case and a 0% display
+ * would falsely accuse a Member who hasn't had a deadlined message
+ * arrive yet.
+ */
+function MyAdherenceCard({
+  tenantSlug,
+  adherence,
+}: {
+  tenantSlug: string;
+  adherence: MemberFcgAdherence;
+}) {
+  const hasData = adherence.sentWithDeadline > 0 || adherence.openOverdue > 0;
+  const ratePct =
+    adherence.withinWindowRate === null
+      ? null
+      : Math.round(adherence.withinWindowRate * 100);
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-base font-medium">My FCG-window adherence</h2>
+        <span className="text-xs text-ink/50">last {adherence.windowDays} days</span>
+      </div>
+      <p className="text-sm text-ink/70">
+        Of the drafts the engine produced for you with an FCG response deadline,
+        how many you sent on or before the deadline. Bypassed-synth drafts and
+        drafts without a deadline aren&apos;t counted — see your full inbox on{" "}
+        <Link className="underline decoration-dotted" href={`/${tenantSlug}/drafts`}>
+          /drafts
+        </Link>
+        .
+      </p>
+      {!hasData ? (
+        <p className="text-sm text-ink/60">
+          No deadlined drafts yet. Connect a channel to start receiving engine-
+          produced drafts with FCG response windows.
+        </p>
+      ) : (
+        <dl className="grid gap-3 text-sm sm:grid-cols-4">
+          <div>
+            <dt className="text-xs uppercase tracking-wider text-ink/50">Within window</dt>
+            <dd className="font-medium">
+              {ratePct === null ? "—" : `${ratePct}%`}
+              {adherence.sentWithDeadline > 0 && (
+                <span className="ml-1 text-[11px] font-normal text-ink/50">
+                  ({adherence.sentWithinWindow}/{adherence.sentWithDeadline})
+                </span>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wider text-ink/50">Sent after window</dt>
+            <dd className={adherence.sentAfterWindow > 0 ? "font-medium text-amber-800" : "font-medium"}>
+              {adherence.sentAfterWindow}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wider text-ink/50">Open + overdue</dt>
+            <dd className={adherence.openOverdue > 0 ? "font-medium text-red-900" : "font-medium"}>
+              {adherence.openOverdue}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wider text-ink/50">Deadlined sends</dt>
+            <dd className="font-medium">{adherence.sentWithDeadline}</dd>
+          </div>
+        </dl>
       )}
     </div>
   );

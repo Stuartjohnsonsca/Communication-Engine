@@ -29,6 +29,11 @@ export type { DraftStaleSweepResult } from "./stale-sweep";
 export { computeDraftRollup } from "./rollup";
 export type { DraftRollup, DraftRollupWindow, DraftSource } from "./rollup";
 export { formatDraftsRollupAsCsv, DRAFTS_ROLLUP_CSV_HEADER } from "./rollup-csv";
+export { computeMemberFcgAdherence } from "./member-adherence";
+export type {
+  MemberFcgAdherence,
+  MemberFcgAdherenceWindow,
+} from "./member-adherence";
 export {
   classifyDraft,
   bucketDrafts,
