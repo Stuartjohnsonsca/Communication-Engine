@@ -383,8 +383,20 @@ enum AuditEventType {
   AUTO_DRAFT_PAUSED
   /// Post-PRD hardening item 58 — operator resumed tenant-wide
   /// auto-draft production. Payload carries `{ pausedAt: string,
-  /// pausedDurationMinutes: number }`.
+  /// pausedDurationMinutes: number }`. Item 61 reuses this enum value
+  /// with `autoResumed: true` payload for breaker-driven resumes.
   AUTO_DRAFT_RESUMED
+  /// Post-PRD hardening item 62 — a single IngestedMessage failed
+  /// `QUARANTINE_THRESHOLD` consecutive draft attempts and was
+  /// quarantined from further sweep ticks. Payload carries
+  /// `{ ingestedMessageId, attemptCount, lastError }` so an
+  /// operator can investigate without leaving the audit log.
+  INBOUND_DRAFT_QUARANTINED
+  /// Post-PRD hardening item 62 — operator manually unquarantined
+  /// one or more IngestedMessages (resets attempt count + clears
+  /// quarantine fields). Payload carries `{ ingestedMessageIds,
+  /// count }`.
+  INBOUND_DRAFT_UNQUARANTINED
 }
 
 enum BillingPeriodStatus {
@@ -1419,6 +1431,19 @@ model IngestedMessage {
   sentAt      DateTime?
   hash        String?
   redactFlags Json?
+  /// Item 62 — per-inbound draft-attempt quarantine. Incremented by
+  /// the producer on every failed `produceDraft` call, with the last
+  /// attempt's wall-clock stamped on `lastDraftAttemptAt`. When the
+  /// count reaches `QUARANTINE_THRESHOLD`, `quarantinedFromDraftAt`
+  /// is set and the sweep skips this row going forward. Operator
+  /// unquarantine clears the quarantine fields AND resets the count
+  /// so the retry gets a fresh budget. A successful draft on the
+  /// first try never touches these columns (zero-cost for the happy
+  /// path).
+  draftAttemptCount      Int       @default(0)
+  lastDraftAttemptAt     DateTime?
+  quarantinedFromDraftAt DateTime?
+  quarantineReason       String?   @db.Text
   createdAt   DateTime  @default(now())
 
   tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)

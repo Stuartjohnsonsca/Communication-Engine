@@ -44,6 +44,19 @@ type SweepRunRow = {
   triggeredByName: string | null;
 };
 
+// Item 62 — quarantined inbound projection. The full body isn't
+// shipped (could be 100kB+); only the bits the operator needs to
+// decide "retry, leave alone, or investigate."
+type QuarantinedInboundRow = {
+  id: string;
+  sender: string | null;
+  subject: string | null;
+  receivedAt: string | null;
+  quarantinedAt: string;
+  attemptCount: number;
+  reason: string | null;
+};
+
 // Stable, operator-friendly labels for the skip-reason codes the sweep
 // emits. Unknown codes (future additions, sweep-level vs producer-level)
 // fall through to the raw code with underscores stripped.
@@ -59,6 +72,7 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   no_channel_id: "No channel attribution",
   no_active_channel_auth: "No active channel auth",
   auto_draft_paused: "Auto-draft paused",
+  quarantined: "Quarantined (per-message)",
 };
 
 function labelSkipReason(code: string): string {
@@ -79,6 +93,8 @@ export default function ChannelsClient({
   silenceWarnDays,
   canPauseAutoDraft,
   autoDraftPause,
+  canUnquarantine,
+  quarantined,
 }: {
   tenantSlug: string;
   channels: ChannelRow[];
@@ -87,6 +103,11 @@ export default function ChannelsClient({
   silenceWarnDays: number;
   canPauseAutoDraft: boolean;
   autoDraftPause: AutoDraftPauseState;
+  // Item 62 — quarantined inbound (per-message attempt limit hit).
+  // Surfaced under the sweep history because it's the same operational
+  // surface (sweep produced these rows; sweep is now skipping them).
+  canUnquarantine: boolean;
+  quarantined: QuarantinedInboundRow[];
 }) {
   const [selectedKind, setSelectedKind] = useState(kinds[0]?.kind ?? "");
   const [pending, startTransition] = useTransition();
@@ -101,6 +122,35 @@ export default function ChannelsClient({
   const [pausePending, startPauseTransition] = useTransition();
   const [pauseReason, setPauseReason] = useState("");
   const [pauseError, setPauseError] = useState<string | null>(null);
+  // Item 62 — quarantine retry state.
+  const [quarantinePending, startQuarantineTransition] = useTransition();
+  const [quarantineError, setQuarantineError] = useState<string | null>(null);
+  const [quarantineInfo, setQuarantineInfo] = useState<string | null>(null);
+
+  function unquarantine(target: { ids: string[] } | { all: true }) {
+    setQuarantineError(null);
+    setQuarantineInfo(null);
+    startQuarantineTransition(async () => {
+      const res = await fetch("/api/admin/auto-draft-unquarantine", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantSlug,
+          ingestedMessageIds: "all" in target ? "all" : target.ids,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setQuarantineError(`Retry failed: ${data.error ?? res.statusText}`);
+        return;
+      }
+      const count = Number(data.count ?? 0);
+      setQuarantineInfo(
+        `${count} inbound message${count === 1 ? "" : "s"} unquarantined — the next cron tick (within 5 min) will retry.`,
+      );
+      window.location.reload();
+    });
+  }
 
   function togglePause(action: "pause" | "resume") {
     setPauseError(null);
@@ -606,6 +656,90 @@ export default function ChannelsClient({
           </table>
         )}
       </div>
+
+      {quarantined.length > 0 && (
+        <div className="card space-y-3 border-red-300 bg-red-50/40">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <h2 className="text-base font-medium text-red-900">
+                Quarantined inbound ({quarantined.length})
+              </h2>
+              <p className="mt-1 text-xs text-red-900/80">
+                These messages failed three consecutive draft attempts and have
+                been removed from the sweep so they don't keep burning LLM cost.
+                Common causes: malformed encoding, oversized attachments, prompt
+                rejection by the model. Investigate the failure reason; once the
+                underlying issue is understood, press <em>Retry</em> to put the
+                rows back in the candidate pool (next cron tick picks them up).
+              </p>
+            </div>
+            {canUnquarantine && (
+              <button
+                className="btn btn-secondary"
+                disabled={quarantinePending}
+                onClick={() => unquarantine({ all: true })}
+                title="Resets attempt count to 0 and clears quarantine on every row."
+              >
+                {quarantinePending ? "Retrying…" : "Retry all"}
+              </button>
+            )}
+          </div>
+          {quarantineError && (
+            <p className="text-sm text-red-600">{quarantineError}</p>
+          )}
+          {quarantineInfo && (
+            <p className="text-sm text-emerald-700">{quarantineInfo}</p>
+          )}
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wider text-ink/50">
+              <tr>
+                <th className="py-1 pr-3">Sender</th>
+                <th className="py-1 pr-3">Subject</th>
+                <th className="py-1 pr-3">Received</th>
+                <th className="py-1 pr-3">Quarantined</th>
+                <th className="py-1 pr-3">Attempts</th>
+                <th className="py-1 pr-3">Reason</th>
+                {canUnquarantine && <th className="py-1 pr-3" />}
+              </tr>
+            </thead>
+            <tbody>
+              {quarantined.map((q) => (
+                <tr key={q.id} className="border-t border-ink/5 align-top">
+                  <td className="py-2 pr-3 text-xs text-ink/70">
+                    {q.sender ?? "—"}
+                  </td>
+                  <td className="py-2 pr-3 text-xs text-ink/70">
+                    {q.subject ?? "(no subject)"}
+                  </td>
+                  <td className="py-2 pr-3 text-xs text-ink/50">
+                    {q.receivedAt
+                      ? q.receivedAt.slice(0, 16).replace("T", " ")
+                      : "—"}
+                  </td>
+                  <td className="py-2 pr-3 text-xs text-ink/50">
+                    {q.quarantinedAt.slice(0, 16).replace("T", " ")}
+                  </td>
+                  <td className="py-2 pr-3">{q.attemptCount}</td>
+                  <td className="py-2 pr-3 text-xs text-red-900/80">
+                    <span className="line-clamp-2">{q.reason ?? "—"}</span>
+                  </td>
+                  {canUnquarantine && (
+                    <td className="py-2 pr-3">
+                      <button
+                        className="btn btn-secondary btn-xs"
+                        disabled={quarantinePending}
+                        onClick={() => unquarantine({ ids: [q.id] })}
+                      >
+                        Retry
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="card">
         <h2 className="text-base font-medium">Configured channels</h2>

@@ -76,7 +76,28 @@ export type ProduceFromInboundSkipCode =
   /// /admin/channels. Distinct from `drafting_halted` (per-Member
   /// lifecycle gate) — the tenant-wide pause stops cron + backfill
   /// for every Member regardless of lifecycle state.
-  | "auto_draft_paused";
+  | "auto_draft_paused"
+  /// Item 62 — this IngestedMessage has been quarantined after
+  /// `QUARANTINE_THRESHOLD` consecutive failed draft attempts.
+  /// The sweep filter normally excludes quarantined rows; this
+  /// code only fires for direct callers that bypass the sweep
+  /// candidate query.
+  | "quarantined";
+
+/**
+ * Item 62 — number of consecutive failed draft attempts before an
+ * IngestedMessage is quarantined from further sweep ticks. Three is
+ * deliberately below item 59's `FAILURE_THRESHOLD` (5) so a single
+ * broken inbound is contained before it can trip the tenant-wide
+ * circuit breaker. With the 5-min cron cadence, an inbound that
+ * fails every tick reaches quarantine in ~15 minutes; the breaker
+ * needs ~25 minutes of single-inbound failure to trip.
+ *
+ * The `quarantineReason` column is capped to this many chars so a
+ * stack-trace-flavoured error message doesn't blow up the row.
+ */
+export const QUARANTINE_THRESHOLD = 3;
+const QUARANTINE_REASON_MAX = 500;
 
 export type ProduceFromInboundResult =
   | { result: "produced"; draftId: string; kind: string; holdingRequired: boolean }
@@ -222,27 +243,83 @@ export async function produceDraftFromInbound(input: {
   const channelLabel = ingested.channelId ? "email" : "email";
   void channelLabel;
 
-  const draft = await produceDraft({
-    tenantId: input.tenantId,
-    fcg: fcgJson,
-    ucg: ucgJson,
-    inbound: {
-      channel: "email",
-      sender: ingested.sender ?? undefined,
-      subject: ingested.subject ?? undefined,
-      body: ingested.body,
-      receivedAt: (ingested.sentAt ?? ingested.createdAt).toISOString(),
-    },
-    noGoSubjects: noGo.map((n) => n.label),
-    // Item 55 — auto-draft path: system-driven, no actor membership.
-    // The `auto-draft` context distinguishes cron spend from
-    // User-pasted spend on /admin/usage.
-    record: {
+  // Item 62 — refuse to attempt a quarantined inbound. Belt-and-braces
+  // for the sweep filter: a direct caller (e.g. a test) that hands us a
+  // quarantined IM id should get a clean skip, not an LLM call.
+  if (ingested.quarantinedFromDraftAt) {
+    return {
+      result: "skipped",
+      reason: `inbound quarantined after ${ingested.draftAttemptCount} failed attempts`,
+      reasonCode: "quarantined",
+    };
+  }
+
+  // Item 62 — wrap the LLM call so a failure bumps `draftAttemptCount`,
+  // stamps `lastDraftAttemptAt`, and trips quarantine at the threshold.
+  // The error is re-thrown so the sweep's outer catch still counts it
+  // (the breaker is opted-in via item 55's LlmCall recording, which
+  // happens inside `produceDraft`; this layer is purely about per-IM
+  // bookkeeping).
+  let draft;
+  try {
+    draft = await produceDraft({
       tenantId: input.tenantId,
-      context: "auto-draft",
-      membershipId: null,
-    },
-  });
+      fcg: fcgJson,
+      ucg: ucgJson,
+      inbound: {
+        channel: "email",
+        sender: ingested.sender ?? undefined,
+        subject: ingested.subject ?? undefined,
+        body: ingested.body,
+        receivedAt: (ingested.sentAt ?? ingested.createdAt).toISOString(),
+      },
+      noGoSubjects: noGo.map((n) => n.label),
+      // Item 55 — auto-draft path: system-driven, no actor membership.
+      // The `auto-draft` context distinguishes cron spend from
+      // User-pasted spend on /admin/usage.
+      record: {
+        tenantId: input.tenantId,
+        context: "auto-draft",
+        membershipId: null,
+      },
+    });
+  } catch (err) {
+    const now = new Date();
+    const attemptCount = ingested.draftAttemptCount + 1;
+    const errorMessage =
+      err instanceof Error
+        ? err.message.slice(0, QUARANTINE_REASON_MAX)
+        : String(err).slice(0, QUARANTINE_REASON_MAX);
+    const shouldQuarantine = attemptCount >= QUARANTINE_THRESHOLD;
+    await superDb.ingestedMessage.update({
+      where: { id: ingested.id },
+      data: {
+        draftAttemptCount: attemptCount,
+        lastDraftAttemptAt: now,
+        ...(shouldQuarantine
+          ? {
+              quarantinedFromDraftAt: now,
+              quarantineReason: errorMessage,
+            }
+          : {}),
+      },
+    });
+    if (shouldQuarantine) {
+      await writeAuditEvent({
+        tenantId: input.tenantId,
+        eventType: "INBOUND_DRAFT_QUARANTINED",
+        actorMembershipId: null,
+        subjectType: "IngestedMessage",
+        subjectId: ingested.id,
+        payload: {
+          ingestedMessageId: ingested.id,
+          attemptCount,
+          lastError: errorMessage,
+        },
+      });
+    }
+    throw err;
+  }
 
   type ActionCreate = {
     tenantId: string;

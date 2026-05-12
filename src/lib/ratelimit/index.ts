@@ -56,6 +56,7 @@ export type RateLimitScope =
   | "totp-regen-recovery"
   | "auto-draft-backfill"
   | "auto-draft-pause"
+  | "auto-draft-unquarantine"
   | "api-key-auth"
   | "security-txt"
   | "default";

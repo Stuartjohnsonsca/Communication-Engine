@@ -14,7 +14,7 @@
  * "acknowledge within 30 minutes, respond within 24 hours") come from
  * the firm's FCG and are read by the agent.
  */
-export { produceDraftFromInbound } from "./produce-from-inbound";
+export { produceDraftFromInbound, QUARANTINE_THRESHOLD } from "./produce-from-inbound";
 export type { ProduceFromInboundResult } from "./produce-from-inbound";
 export {
   runAutoDraftSweep,

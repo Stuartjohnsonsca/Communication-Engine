@@ -59,6 +59,30 @@ export default async function ChannelsPage({
     },
   });
 
+  // Item 62 — quarantined inbound (failed `QUARANTINE_THRESHOLD`
+  // consecutive draft attempts). Capped at 50 rows; if a tenant
+  // has more than 50, the operator should hit "Retry all" or
+  // investigate a systemic issue. Surfaced to FIRM_ADMIN with a
+  // retry button; FCT sees the list read-only.
+  const quarantined = await superDb.ingestedMessage.findMany({
+    where: {
+      tenantId: ctx.tenant.id,
+      quarantinedFromDraftAt: { not: null },
+    },
+    orderBy: { quarantinedFromDraftAt: "desc" },
+    take: 50,
+    select: {
+      id: true,
+      sender: true,
+      subject: true,
+      sentAt: true,
+      createdAt: true,
+      quarantinedFromDraftAt: true,
+      quarantineReason: true,
+      draftAttemptCount: true,
+    },
+  });
+
   return (
     <ChannelsClient
       tenantSlug={tenantSlug}
@@ -104,6 +128,16 @@ export default async function ChannelsPage({
             : {},
         triggeredByName:
           r.triggeredBy?.user?.name ?? r.triggeredBy?.user?.email ?? null,
+      }))}
+      canUnquarantine={hasPermission(ctx.membership.role, "auto-draft:unquarantine")}
+      quarantined={quarantined.map((q) => ({
+        id: q.id,
+        sender: q.sender,
+        subject: q.subject,
+        receivedAt: (q.sentAt ?? q.createdAt).toISOString(),
+        quarantinedAt: q.quarantinedFromDraftAt!.toISOString(),
+        attemptCount: q.draftAttemptCount,
+        reason: q.quarantineReason,
       }))}
     />
   );

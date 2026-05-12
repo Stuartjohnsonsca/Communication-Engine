@@ -242,6 +242,10 @@ export async function runAutoDraftSweep(opts?: {
         // Prisma's `none` over the relation expresses this directly and
         // translates to a `NOT EXISTS (…)` subquery.
         drafts: { none: {} },
+        // Item 62 — skip quarantined inbound. Operator unquarantine
+        // clears this field and resets the count, putting the row back
+        // in the candidate pool on the next sweep tick.
+        quarantinedFromDraftAt: null,
       },
       orderBy: { createdAt: "asc" },
       take: scanPageSize,

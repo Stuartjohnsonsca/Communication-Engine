@@ -44,6 +44,11 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // tenant), so FIRM_ADMIN only. FCT can see the state on
   // /admin/channels via existing surface but cannot flip it.
   "auto-draft:pause":    ["FIRM_ADMIN"],
+  // Item 62 — operator unquarantine of inbound that failed
+  // `QUARANTINE_THRESHOLD` consecutive draft attempts. Retry budget
+  // is reset by the action, so re-flipping it could thrash; gate to
+  // FIRM_ADMIN (same posture as pause).
+  "auto-draft:unquarantine": ["FIRM_ADMIN"],
   "audit:read":          ["FIRM_ADMIN", "FCT_MEMBER"],
   "audit:export":        ["FIRM_ADMIN"],
 
