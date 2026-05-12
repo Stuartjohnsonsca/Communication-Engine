@@ -150,13 +150,22 @@ export default async function AuditPage({
         <div className="flex items-start gap-3">
           <VerifyChainButton tenantSlug={tenantSlug} />
           {hasPermission(ctx.membership.role, "audit:export") && (
-            <Link
-              className="btn btn-primary"
-              href={`/api/audit/export?tenant=${tenantSlug}`}
-              prefetch={false}
-            >
-              {t("audit.exportButton")}
-            </Link>
+            <>
+              <Link
+                className="btn btn-primary"
+                href={`/api/audit/export?tenant=${tenantSlug}`}
+                prefetch={false}
+              >
+                {t("audit.exportButton")}
+              </Link>
+              <Link
+                className="btn"
+                href={`/api/audit/export?tenant=${tenantSlug}&format=csv`}
+                prefetch={false}
+              >
+                {t("audit.exportCsvButton")}
+              </Link>
+            </>
           )}
         </div>
       </div>

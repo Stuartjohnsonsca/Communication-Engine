@@ -188,6 +188,7 @@ export const fr: Dictionary = {
     description:
       "Append-only, chaîné par hachage par tenant. Chaque action privilégiée est consignée ici. Filtrez par événement, acteur, sujet ou plage de dates ; développez une ligne pour voir la charge utile complète. Utilisez Vérifier la chaîne pour confirmer l'intégrité cryptographique depuis l'origine.",
     exportButton: "Exporter NDJSON",
+    exportCsvButton: "Exporter CSV",
     filterEvent: "Type d'événement",
     filterEventAny: "Tous les événements",
     filterActor: "Acteur",

@@ -182,6 +182,7 @@ export const enGB: Dictionary = {
     description:
       "Append-only, hash-chained per tenant. Every privileged action lands here. Filter by event, actor, subject, or date range; expand a row to see the full payload. Use Verify chain to confirm cryptographic integrity from genesis.",
     exportButton: "Export NDJSON",
+    exportCsvButton: "Export CSV",
     filterEvent: "Event type",
     filterEventAny: "Any event",
     filterActor: "Actor",
@@ -361,6 +362,7 @@ export type Dictionary = {
     heading: string;
     description: string;
     exportButton: string;
+    exportCsvButton: string;
     filterEvent: string;
     filterEventAny: string;
     filterActor: string;
