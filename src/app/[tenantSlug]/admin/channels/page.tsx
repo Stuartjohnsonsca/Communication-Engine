@@ -6,6 +6,7 @@ import {
   getChannelHealthSnapshot,
   SILENCE_WARN_DAYS,
 } from "@/lib/channels/health";
+import { hasPermission } from "@/lib/rbac";
 import ChannelsClient from "./ChannelsClient";
 
 export default async function ChannelsPage({
@@ -62,6 +63,12 @@ export default async function ChannelsPage({
     <ChannelsClient
       tenantSlug={tenantSlug}
       silenceWarnDays={SILENCE_WARN_DAYS}
+      canPauseAutoDraft={hasPermission(ctx.membership.role, "auto-draft:pause")}
+      autoDraftPause={{
+        pausedAt: ctx.tenant.autoDraftPausedAt?.toISOString() ?? null,
+        pausedByName: ctx.tenant.autoDraftPausedByName ?? null,
+        reason: ctx.tenant.autoDraftPauseReason ?? null,
+      }}
       channels={channels.map((c) => {
         const h = health.get(c.id);
         return {

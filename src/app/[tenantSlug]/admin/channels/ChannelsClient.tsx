@@ -58,11 +58,18 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   no_committed_fcg: "No committed FCG",
   no_channel_id: "No channel attribution",
   no_active_channel_auth: "No active channel auth",
+  auto_draft_paused: "Auto-draft paused",
 };
 
 function labelSkipReason(code: string): string {
   return SKIP_REASON_LABELS[code] ?? code.replace(/_/g, " ");
 }
+
+type AutoDraftPauseState = {
+  pausedAt: string | null;
+  pausedByName: string | null;
+  reason: string | null;
+};
 
 export default function ChannelsClient({
   tenantSlug,
@@ -70,12 +77,16 @@ export default function ChannelsClient({
   kinds,
   sweepRuns,
   silenceWarnDays,
+  canPauseAutoDraft,
+  autoDraftPause,
 }: {
   tenantSlug: string;
   channels: ChannelRow[];
   kinds: KindOption[];
   sweepRuns: SweepRunRow[];
   silenceWarnDays: number;
+  canPauseAutoDraft: boolean;
+  autoDraftPause: AutoDraftPauseState;
 }) {
   const [selectedKind, setSelectedKind] = useState(kinds[0]?.kind ?? "");
   const [pending, startTransition] = useTransition();
@@ -86,6 +97,31 @@ export default function ChannelsClient({
   const [backfillDays, setBackfillDays] = useState(30);
   const [backfillPending, startBackfillTransition] = useTransition();
   const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  // Item 58 — auto-draft pause toggle state.
+  const [pausePending, startPauseTransition] = useTransition();
+  const [pauseReason, setPauseReason] = useState("");
+  const [pauseError, setPauseError] = useState<string | null>(null);
+
+  function togglePause(action: "pause" | "resume") {
+    setPauseError(null);
+    startPauseTransition(async () => {
+      const res = await fetch("/api/admin/auto-draft-pause", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantSlug,
+          action,
+          reason: action === "pause" ? pauseReason.trim() || undefined : undefined,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setPauseError(`Failed to ${action}: ${data.error ?? res.statusText}`);
+        return;
+      }
+      window.location.reload();
+    });
+  }
 
   function runBackfill() {
     setError(null);
@@ -233,6 +269,84 @@ export default function ChannelsClient({
           365, Google Workspace, Slack. Personal channels are excluded by design (PRD §5.1.1).
         </p>
       </div>
+
+      {autoDraftPause.pausedAt && (
+        <div className="card border-amber-400 bg-amber-50">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-amber-900">
+                Auto-draft is paused
+              </div>
+              <p className="mt-1 text-xs text-amber-900/80">
+                Background drafting from ingested inbound is halted for this
+                tenant. The 5-minute cron still runs (skip rows appear in
+                history below) and User-pasted drafting via /drafts/new
+                continues to work. Resume when you're ready to let the engine
+                produce drafts again.
+              </p>
+              <p className="mt-1 text-xs text-amber-900/70">
+                Paused {autoDraftPause.pausedAt.slice(0, 16).replace("T", " ")}
+                {autoDraftPause.pausedByName && (
+                  <> by {autoDraftPause.pausedByName}</>
+                )}
+                {autoDraftPause.reason && <>: {autoDraftPause.reason}</>}
+              </p>
+            </div>
+            {canPauseAutoDraft && (
+              <button
+                className="btn btn-primary"
+                disabled={pausePending}
+                onClick={() => togglePause("resume")}
+              >
+                {pausePending ? "Resuming…" : "Resume auto-draft"}
+              </button>
+            )}
+          </div>
+          {pauseError && (
+            <p className="mt-2 text-sm text-red-600">{pauseError}</p>
+          )}
+        </div>
+      )}
+
+      {!autoDraftPause.pausedAt && canPauseAutoDraft && (
+        <div className="card space-y-3">
+          <div>
+            <h2 className="text-base font-medium">Pause auto-draft</h2>
+            <p className="mt-1 text-xs text-ink/60">
+              Stop background drafting from ingested inbound — for FCG
+              revisions, model misbehaviour, or any time you want to halt
+              the engine without revoking channel auth. /drafts/new keeps
+              working for ad-hoc User drafts.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="grow min-w-[260px]">
+              <label className="label" htmlFor="pause-reason">
+                Reason (optional)
+              </label>
+              <input
+                id="pause-reason"
+                type="text"
+                className="input"
+                maxLength={500}
+                value={pauseReason}
+                onChange={(e) => setPauseReason(e.target.value)}
+                placeholder="e.g. FCG revision in progress"
+              />
+            </div>
+            <button
+              className="btn"
+              disabled={pausePending}
+              onClick={() => togglePause("pause")}
+            >
+              {pausePending ? "Pausing…" : "Pause auto-draft"}
+            </button>
+          </div>
+          {pauseError && (
+            <p className="text-sm text-red-600">{pauseError}</p>
+          )}
+        </div>
+      )}
 
       {silentChannels.length > 0 && (
         <div className="card border-amber-300 bg-amber-50/60">

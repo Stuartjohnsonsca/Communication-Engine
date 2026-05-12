@@ -71,7 +71,12 @@ export type ProduceFromInboundSkipCode =
   | "membership_not_found"
   | "sender_is_owning_user"
   | "drafting_halted"
-  | "no_committed_fcg";
+  | "no_committed_fcg"
+  /// Item 58 — tenant operator paused background drafting via
+  /// /admin/channels. Distinct from `drafting_halted` (per-Member
+  /// lifecycle gate) — the tenant-wide pause stops cron + backfill
+  /// for every Member regardless of lifecycle state.
+  | "auto_draft_paused";
 
 export type ProduceFromInboundResult =
   | { result: "produced"; draftId: string; kind: string; holdingRequired: boolean }
@@ -82,6 +87,22 @@ export async function produceDraftFromInbound(input: {
   ingestedMessageId: string;
   membershipId: string;
 }): Promise<ProduceFromInboundResult> {
+  // Item 58 — tenant-level pause check. Cheapest possible gate: we
+  // only need one column from one row, scoped by tenantId. This runs
+  // BEFORE the idempotency check so a paused tenant doesn't churn
+  // through every inbound looking for existing drafts.
+  const tenant = await superDb.tenant.findUnique({
+    where: { id: input.tenantId },
+    select: { autoDraftPausedAt: true },
+  });
+  if (tenant?.autoDraftPausedAt) {
+    return {
+      result: "skipped",
+      reason: "auto-draft is paused for this tenant",
+      reasonCode: "auto_draft_paused",
+    };
+  }
+
   // Idempotency: any existing Draft (root or regenerated) means we've
   // already produced for this inbound. Regenerated drafts have
   // parentId set — for the skip check we only care whether SOMETHING

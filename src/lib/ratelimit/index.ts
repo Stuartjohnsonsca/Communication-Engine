@@ -55,6 +55,7 @@ export type RateLimitScope =
   | "totp-challenge"
   | "totp-regen-recovery"
   | "auto-draft-backfill"
+  | "auto-draft-pause"
   | "api-key-auth"
   | "security-txt"
   | "default";

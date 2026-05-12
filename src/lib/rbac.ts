@@ -38,6 +38,12 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "members:read":        ["FIRM_ADMIN", "FCT_MEMBER"],
   "members:write":       ["FIRM_ADMIN"],
   "channels:write":      ["FIRM_ADMIN"],
+
+  // Item 58 — tenant-level auto-draft pause toggle. Operationally
+  // invasive (pauses background production for every Member in the
+  // tenant), so FIRM_ADMIN only. FCT can see the state on
+  // /admin/channels via existing surface but cannot flip it.
+  "auto-draft:pause":    ["FIRM_ADMIN"],
   "audit:read":          ["FIRM_ADMIN", "FCT_MEMBER"],
   "audit:export":        ["FIRM_ADMIN"],
 

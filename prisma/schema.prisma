@@ -375,6 +375,16 @@ enum AuditEventType {
   SUBPROCESSOR_OBJECTION_RAISED
   SUBPROCESSOR_OBJECTION_WITHDRAWN
   ENCRYPTION_KEYS_ROTATED
+  /// Post-PRD hardening item 58 — operator paused tenant-wide auto-draft
+  /// production. Payload carries `{ reason?: string, priorPausedAt:
+  /// string | null }`. User-pasted drafting via /drafts/new continues to
+  /// work; only the cron + backfill paths skip with reason code
+  /// `auto_draft_paused`.
+  AUTO_DRAFT_PAUSED
+  /// Post-PRD hardening item 58 — operator resumed tenant-wide
+  /// auto-draft production. Payload carries `{ pausedAt: string,
+  /// pausedDurationMinutes: number }`.
+  AUTO_DRAFT_RESUMED
 }
 
 enum BillingPeriodStatus {
@@ -835,6 +845,18 @@ model Tenant {
   /// than this window is redirected to `/auth/2fa?stepUp=1` to
   /// re-challenge before the operation proceeds.
   stepUpMaxAgeMinutes                  Int?
+  /// Post-PRD hardening item 58 — operator-controlled circuit breaker
+  /// for the auto-draft cron. Null = enabled (default; current
+  /// behaviour preserved). Non-null = paused at this timestamp. The
+  /// auto-draft producer short-circuits with skip code
+  /// `auto_draft_paused`; the 5-minute cron still runs (we want the
+  /// sweep-run history to record the pause), and User-pasted drafts
+  /// via /drafts/new continue to work. Per-Member lifecycle halt
+  /// (`drafting_halted`) is a distinct gate that still applies
+  /// independently.
+  autoDraftPausedAt                    DateTime?
+  autoDraftPausedByName                String?
+  autoDraftPauseReason                 String?         @db.Text
   createdAt                            DateTime        @default(now())
   updatedAt                            DateTime        @updatedAt
 
