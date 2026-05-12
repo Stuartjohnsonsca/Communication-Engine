@@ -313,6 +313,15 @@ enum AuditEventType {
   /// human-initiated batch, so a reviewer can ask "who pressed the
   /// button, when, and what window did they choose."
   AUTO_DRAFT_BACKFILL_TRIGGERED
+  /// Post-PRD hardening item 53 — a daily cron found a `ChannelAuth`
+  /// whose `expiresAt` falls inside a warning threshold (7-day or
+  /// 1-day) and dispatched a notification to the owning Membership.
+  /// Payload carries `{ channelAuthId, channelId, channelKind,
+  /// threshold: "7d" | "1d", expiresAt, daysUntilExpiry }`. Dedupes
+  /// via the dispatch table's (membership, kind, dedupeKey) uniqueness
+  /// — one row per (channelAuth, threshold), so a 7-day warning fires
+  /// once even though the cron runs daily.
+  CHANNEL_AUTH_EXPIRY_WARNED
   TENANT_TOTP_REQUIREMENT_CHANGED
   SESSION_REVOKED
   SESSION_REVOKED_BY_ADMIN

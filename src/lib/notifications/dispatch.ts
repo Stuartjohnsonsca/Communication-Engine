@@ -47,7 +47,13 @@ export type NotificationKind =
   | "audit_chain_tampered"
   | "subprocessor_change_announced"
   | "subprocessor_change_cancelled"
-  | "subprocessor_change_effective";
+  | "subprocessor_change_effective"
+  /// Post-PRD item 53 — mandatory operational alert. An OAuth token on
+  /// an ACTIVE ChannelAuth is within 7 days (or 1 day) of expiry; the
+  /// owning Membership needs to reconnect before ingest silently
+  /// stops. Not opt-outable: a muted warning here defeats the engine's
+  /// "no missed emails" premise.
+  | "channel_auth_expiring";
 
 export type DispatchResult = {
   alreadySent: boolean;

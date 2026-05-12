@@ -71,6 +71,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "Item 50 — continuous-background draft producer. Scans IngestedMessage IN rows without a linked Draft and runs the drafting agent against each. FCG cadence (acknowledgment vs substantive) is honoured by the agent itself; this worker just feeds it the un-drafted inbound.",
   },
+  {
+    cronName: "channel-auth-expiry",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "Item 53 — daily pre-emptive ChannelAuth expiry warning. Scans ACTIVE auths with expiresAt inside 7d and fires a channel_auth_expiring notification at 7d + 1d thresholds, deduped per (auth, threshold) via the dispatch table. Without this, an expiring OAuth token would silently stop ingest with no operator-visible breadcrumb.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {
