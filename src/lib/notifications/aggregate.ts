@@ -2,6 +2,7 @@ import type { Membership, Tenant, User } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { getDpiaStatus } from "@/lib/dpia/status";
 import { hasPermission } from "@/lib/rbac";
+import { bucketDrafts } from "@/lib/drafts/triage";
 
 /**
  * Per-membership aggregation used by both the digest mailer and the
@@ -12,6 +13,9 @@ import { hasPermission } from "@/lib/rbac";
  * What rolls up:
  *   - Open FCG proposals to vote on (FCT/FIRM_ADMIN voters only)
  *   - Open actions (own; overdue split out)
+ *   - Drafts owned by the Member, bucketed by FCG deadline (item 65 —
+ *     reuses the triage classifier from item 64 so the digest and the
+ *     /drafts page agree on what "overdue" / "due soon" mean)
  *   - Sentiment escalations the User owns + acknowledged-pending firm-wide
  *     for FCT (mirroring the existing /sentiment page split)
  *   - Adherence escalations the User owns
@@ -28,6 +32,14 @@ export type MembershipDigest = {
   totalOpen: number;
   fcgProposals: { open: number; closingSoon: number };
   actions: { open: number; overdue: number };
+  /**
+   * Item 65 — the Member's own drafts, bucketed by the same FCG-deadline
+   * rule as /drafts (item 64). `overdue` + `dueSoon` are the actionable
+   * counts; `open` is the no-urgency tail (no deadline, or >24h out) and
+   * is deliberately NOT in `totalOpen` so a quiet inbox doesn't trigger
+   * a noisy email.
+   */
+  drafts: { overdue: number; dueSoon: number; open: number };
   sentimentEscalations: { mine: number; firmWideOpen: number };
   adherenceEscalations: { mine: number; firmWideOpen: number };
   breachAcks: { pending: number };
@@ -65,6 +77,7 @@ export async function aggregateForMembership(input: {
     proposalsClosingSoon,
     openActions,
     overdueActions,
+    openDrafts,
     mySentimentOpen,
     firmSentimentOpen,
     myAdherenceOpen,
@@ -102,6 +115,26 @@ export async function aggregateForMembership(input: {
         status: "OPEN",
         dueAt: { lt: todayStart },
       },
+    }),
+    // Item 65 — Member's own open drafts, capped (matches /drafts page
+    // cap). The bucketer is in lib, not SQL, so we don't push a deadline
+    // predicate into the query — that would couple this query to the
+    // bucket constants. The cap protects against a runaway Member who
+    // has thousands of stale drafts; in practice fewer than a hundred.
+    superDb.draft.findMany({
+      where: {
+        tenantId,
+        membershipId: membership.id,
+        status: { notIn: ["SENT", "DISCARDED"] },
+      },
+      select: {
+        id: true,
+        status: true,
+        fcgWindowDeadline: true,
+        sentMarkedAt: true,
+        createdAt: true,
+      },
+      take: 200,
     }),
     superDb.sentimentSignal.count({
       where: {
@@ -175,9 +208,16 @@ export async function aggregateForMembership(input: {
       dpia.state === "NEVER");
   const dpiaDaysUntil = dpia?.daysUntilExpiry ?? null;
 
+  // Item 65 — bucket on the wall-clock the rest of the aggregator
+  // already settled on. The lib is the single source of truth for
+  // "what counts as overdue" — see triage.ts for the rule.
+  const draftBuckets = bucketDrafts(openDrafts, now);
+
   const totalOpen =
     openProposals +
     overdueActions +
+    draftBuckets.overdue.length +
+    draftBuckets.due_soon.length +
     mySentimentOpen +
     myAdherenceOpen +
     pendingBreach +
@@ -191,6 +231,11 @@ export async function aggregateForMembership(input: {
     totalOpen,
     fcgProposals: { open: openProposals, closingSoon: proposalsClosingSoon },
     actions: { open: openActions, overdue: overdueActions },
+    drafts: {
+      overdue: draftBuckets.overdue.length,
+      dueSoon: draftBuckets.due_soon.length,
+      open: draftBuckets.open.length,
+    },
     sentimentEscalations: {
       mine: mySentimentOpen,
       firmWideOpen: firmSentimentOpen,
@@ -209,11 +254,22 @@ export async function aggregateForMembership(input: {
   };
 }
 
-/** Whether there's anything substantive to send. Empty digests are skipped. */
+/**
+ * Whether there's anything substantive to send. Empty digests are
+ * skipped — saves an inbox row + an email for Members with nothing
+ * outstanding.
+ *
+ * Item 65 — drafts contribute via `overdue` + `dueSoon` only. A pile of
+ * no-deadline drafts (`open`) is not an FCG-promise breach and shouldn't
+ * single-handedly trigger the weekly email; the in-app /drafts page is
+ * the surface for that.
+ */
 export function digestHasContent(d: MembershipDigest): boolean {
   return (
     d.fcgProposals.open > 0 ||
     d.actions.overdue > 0 ||
+    d.drafts.overdue > 0 ||
+    d.drafts.dueSoon > 0 ||
     d.sentimentEscalations.mine > 0 ||
     d.adherenceEscalations.mine > 0 ||
     d.breachAcks.pending > 0 ||

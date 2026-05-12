@@ -1,6 +1,7 @@
 import type { Membership } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
+import { bucketDrafts } from "@/lib/drafts/triage";
 
 /**
  * Per-nav-item unread counts for the sidebar. Keyed by the nav `href` so the
@@ -35,6 +36,7 @@ export async function getNavBadges(input: {
   const [
     fcgProposalsOpen,
     actionsOverdue,
+    openDrafts,
     sentimentMine,
     adherenceMine,
     breachPending,
@@ -52,6 +54,24 @@ export async function getNavBadges(input: {
         status: "OPEN",
         dueAt: { lt: todayStart },
       },
+    }),
+    // Item 65 — surface FCG-deadline urgency on the sidebar /drafts
+    // link. Same lib bucketer as the digest + page so the three
+    // surfaces never disagree about what counts as overdue.
+    superDb.draft.findMany({
+      where: {
+        tenantId,
+        membershipId: membership.id,
+        status: { notIn: ["SENT", "DISCARDED"] },
+      },
+      select: {
+        id: true,
+        status: true,
+        fcgWindowDeadline: true,
+        sentMarkedAt: true,
+        createdAt: true,
+      },
+      take: 200,
     }),
     canSeeFirmWide
       ? superDb.sentimentSignal.count({
@@ -99,9 +119,15 @@ export async function getNavBadges(input: {
     }),
   ]);
 
+  // Item 65 — overdue drafts only. due_soon is visible inside /drafts
+  // (item 64) but the badge is reserved for "the firm has missed its
+  // FCG-window promise"; anything weaker dilutes the signal.
+  const draftsOverdue = bucketDrafts(openDrafts).overdue.length;
+
   const byHref: Record<string, number> = {};
   if (fcgProposalsOpen) byHref[`/${tenantSlug}/fcg`] = fcgProposalsOpen;
   if (actionsOverdue) byHref[`/${tenantSlug}/actions`] = actionsOverdue;
+  if (draftsOverdue) byHref[`/${tenantSlug}/drafts`] = draftsOverdue;
   if (sentimentMine) byHref[`/${tenantSlug}/sentiment`] = sentimentMine;
   if (adherenceMine) byHref[`/${tenantSlug}/adherence/escalations`] = adherenceMine;
   if (breachPending) byHref[`/${tenantSlug}/compliance/breaches`] = breachPending;

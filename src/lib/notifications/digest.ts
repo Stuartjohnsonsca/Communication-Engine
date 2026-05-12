@@ -90,6 +90,7 @@ export async function runWeeklyDigest(opts?: {
         totalOpen: digest.totalOpen,
         fcgProposals: digest.fcgProposals,
         actions: digest.actions,
+        drafts: digest.drafts,
         sentimentEscalations: digest.sentimentEscalations,
         adherenceEscalations: digest.adherenceEscalations,
         breachAcks: digest.breachAcks,
@@ -177,6 +178,15 @@ function renderSummary(d: MembershipDigest): string {
   if (d.actions.overdue) {
     parts.push(`${d.actions.overdue} overdue action${d.actions.overdue === 1 ? "" : "s"}`);
   }
+  // Item 65 — drafts surface ahead of escalations: the FCG response window
+  // is the engine's central promise and "overdue" here means the firm's
+  // own commitment to its clients has lapsed.
+  if (d.drafts.overdue) {
+    parts.push(`${d.drafts.overdue} overdue draft${d.drafts.overdue === 1 ? "" : "s"}`);
+  }
+  if (d.drafts.dueSoon) {
+    parts.push(`${d.drafts.dueSoon} draft${d.drafts.dueSoon === 1 ? "" : "s"} due soon`);
+  }
   if (d.sentimentEscalations.mine) {
     parts.push(`${d.sentimentEscalations.mine} sentiment escalation${d.sentimentEscalations.mine === 1 ? "" : "s"}`);
   }
@@ -215,6 +225,21 @@ function renderText(d: MembershipDigest): string {
       lines.push(`  ${d.actions.overdue} OVERDUE.`);
     }
     lines.push(`  /${slug}/actions`);
+    lines.push("");
+  }
+
+  // Item 65 — drafts only render when they have FCG-deadline urgency.
+  // A long tail of `open` no-deadline drafts is visible in /drafts but
+  // not in the email; the email is for "you need to act this week."
+  if (d.drafts.overdue || d.drafts.dueSoon) {
+    lines.push(`▸ Drafts on your FCG response window`);
+    if (d.drafts.overdue) {
+      lines.push(`  ${d.drafts.overdue} OVERDUE — the FCG window has passed.`);
+    }
+    if (d.drafts.dueSoon) {
+      lines.push(`  ${d.drafts.dueSoon} due in the next 24 hours.`);
+    }
+    lines.push(`  /${slug}/drafts`);
     lines.push("");
   }
 

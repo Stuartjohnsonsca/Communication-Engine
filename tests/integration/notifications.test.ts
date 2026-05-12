@@ -402,3 +402,221 @@ describe("Notifications — aggregate (helper)", () => {
     expect(d.totalOpen).toBe(0);
   });
 });
+
+/**
+ * Post-PRD item 65 — surface FCG-overdue and due-soon drafts in the weekly
+ * digest and on the /drafts sidebar badge.
+ */
+describe("Notifications — drafts in digest + badges (item 65)", () => {
+  it("aggregateForMembership buckets the Member's drafts by FCG deadline", async () => {
+    const t = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+
+    const now = Date.now();
+    // 1 overdue (deadline 2h ago), 1 due-soon (deadline 6h out), 1 open
+    // (deadline 3d out), 1 no-deadline open, 1 SENT (excluded).
+    await superDb.draft.createMany({
+      data: [
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "overdue",
+          body: "x",
+          fcgWindowDeadline: new Date(now - 2 * 60 * 60 * 1000),
+        },
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "due-soon",
+          body: "x",
+          fcgWindowDeadline: new Date(now + 6 * 60 * 60 * 1000),
+        },
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "open-future",
+          body: "x",
+          fcgWindowDeadline: new Date(now + 3 * 24 * 60 * 60 * 1000),
+        },
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "no-deadline",
+          body: "x",
+        },
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "SENT",
+          subject: "sent",
+          body: "x",
+          sentMarkedAt: new Date(),
+        },
+      ],
+    });
+
+    const d = await aggregateForMembership({ tenant: t, membership });
+    expect(d.drafts.overdue).toBe(1);
+    expect(d.drafts.dueSoon).toBe(1);
+    expect(d.drafts.open).toBe(2);
+    // overdue (1) + dueSoon (1) contribute; the no-deadline + future open
+    // pair (2) deliberately do NOT.
+    expect(d.totalOpen).toBe(2);
+    expect(digestHasContent(d)).toBe(true);
+  });
+
+  it("digestHasContent stays false when only no-deadline drafts exist", async () => {
+    const t = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    await superDb.draft.create({
+      data: {
+        tenantId: t.id,
+        membershipId: membership.id,
+        kind: "EMAIL",
+        channel: "EMAIL",
+        status: "PROPOSED",
+        subject: "no-deadline",
+        body: "x",
+      },
+    });
+    const d = await aggregateForMembership({ tenant: t, membership });
+    expect(d.drafts.overdue).toBe(0);
+    expect(d.drafts.dueSoon).toBe(0);
+    expect(d.drafts.open).toBe(1);
+    // A pile of no-deadline drafts should NOT pull the membership into
+    // the weekly email — they live on /drafts.
+    expect(digestHasContent(d)).toBe(false);
+  });
+
+  it("aggregate is tenant-scoped: another tenant's drafts don't leak", async () => {
+    const t1 = await createTestTenant();
+    const t2 = await createTestTenant();
+    const { membership: m1, user: u1 } = await createTestUserAndMembership(t1.id, {
+      role: "USER",
+      email: uniqueEmail("m1"),
+    });
+    // Same User, separate Membership in t2.
+    const m2 = await superDb.membership.create({
+      data: { tenantId: t2.id, userId: u1.id, role: "USER", status: "ACTIVE" },
+    });
+
+    await superDb.draft.create({
+      data: {
+        tenantId: t2.id,
+        membershipId: m2.id,
+        kind: "EMAIL",
+        channel: "EMAIL",
+        status: "PROPOSED",
+        subject: "t2-overdue",
+        body: "x",
+        fcgWindowDeadline: new Date(Date.now() - 60 * 60 * 1000),
+      },
+    });
+
+    const d = await aggregateForMembership({ tenant: t1, membership: m1 });
+    expect(d.drafts.overdue).toBe(0);
+    expect(d.drafts.dueSoon).toBe(0);
+  });
+
+  it("nav badge: /drafts gets the overdue count (not due_soon)", async () => {
+    const t = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    const now = Date.now();
+    await superDb.draft.createMany({
+      data: [
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "od1",
+          body: "x",
+          fcgWindowDeadline: new Date(now - 60 * 60 * 1000),
+        },
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "od2",
+          body: "x",
+          fcgWindowDeadline: new Date(now - 5 * 60 * 60 * 1000),
+        },
+        // due_soon: must NOT show on the badge.
+        {
+          tenantId: t.id,
+          membershipId: membership.id,
+          kind: "EMAIL",
+          channel: "EMAIL",
+          status: "PROPOSED",
+          subject: "ds1",
+          body: "x",
+          fcgWindowDeadline: new Date(now + 2 * 60 * 60 * 1000),
+        },
+      ],
+    });
+
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership,
+    });
+    expect(badges.byHref[`/${t.slug}/drafts`]).toBe(2);
+  });
+
+  it("weekly digest dispatches a row for a Member with overdue drafts only", async () => {
+    const t = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+      email: uniqueEmail("drafter"),
+    });
+    await superDb.draft.create({
+      data: {
+        tenantId: t.id,
+        membershipId: membership.id,
+        kind: "EMAIL",
+        channel: "EMAIL",
+        status: "PROPOSED",
+        subject: "overdue-for-digest",
+        body: "x",
+        fcgWindowDeadline: new Date(Date.now() - 60 * 60 * 1000),
+      },
+    });
+
+    const week = isoWeekKey(new Date());
+    const r = await runWeeklyDigest({ tenantId: t.id, weekKey: week });
+    expect(r.dispatched + r.alreadySent).toBeGreaterThanOrEqual(1);
+
+    const dispatch = await superDb.notificationDispatch.findFirst({
+      where: { tenantId: t.id, membershipId: membership.id, kind: "weekly_digest", dedupeKey: week },
+    });
+    expect(dispatch).toBeTruthy();
+    // Payload carries the drafts shape so receivers (e.g. a future
+    // mobile push integration) can render the same buckets without
+    // re-aggregating.
+    const payload = dispatch?.payload as { drafts?: { overdue: number; dueSoon: number; open: number } } | null;
+    expect(payload?.drafts?.overdue).toBe(1);
+  });
+});
