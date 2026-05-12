@@ -35,6 +35,7 @@ type SeedOpts = {
   parentId?: string | null;
   createdAt?: Date;
   sentMarkedAt?: Date | null;
+  fcgWindowDeadline?: Date | null;
 };
 
 async function seedDraft(opts: SeedOpts) {
@@ -50,6 +51,7 @@ async function seedDraft(opts: SeedOpts) {
       parentId: opts.parentId ?? null,
       createdAt: opts.createdAt ?? new Date(),
       sentMarkedAt: opts.sentMarkedAt ?? null,
+      fcgWindowDeadline: opts.fcgWindowDeadline ?? null,
     },
   });
 }
@@ -329,6 +331,151 @@ describe("computeDraftRollup — empty tenant", () => {
     expect(r.sendRate).toBeNull();
     expect(r.regeneration.rate).toBeNull();
     expect(r.latency.avgProducedToSentMin).toBeNull();
+    expect(r.fcgWindow.sentWithDeadline).toBe(0);
+    expect(r.fcgWindow.withinWindowRate).toBeNull();
     expect(r.byMembership).toEqual([]);
+  });
+});
+
+/**
+ * Post-PRD item 66 — FCG-window adherence at the firm level.
+ *
+ * Each test pins concrete deadlines + sentMarkedAt timestamps so the
+ * assertion is exact, not floating-point-ish.
+ */
+describe("computeDraftRollup — FCG-window adherence (item 66)", () => {
+  it("counts SENT drafts as within or after the FCG window deadline", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("fcg"),
+    });
+
+    const base = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    // Within window: sent 30 min before deadline.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 30 * 60_000),
+    });
+    // After window: sent 90 min after deadline.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 150 * 60_000),
+    });
+    // Sent but no deadline — excluded entirely (no promise).
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      sentMarkedAt: new Date(base.getTime() + 30 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.sentWithDeadline).toBe(2);
+    expect(r.fcgWindow.sentWithinWindow).toBe(1);
+    expect(r.fcgWindow.sentAfterWindow).toBe(1);
+    expect(r.fcgWindow.withinWindowRate).toBe(0.5);
+  });
+
+  it("openOverdue counts non-terminal drafts whose deadline has passed", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("fcg-open"),
+    });
+
+    const now = Date.now();
+    // Two open drafts past their deadline.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "PROPOSED",
+      fcgWindowDeadline: new Date(now - 60 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "EDITED",
+      fcgWindowDeadline: new Date(now - 5 * 60 * 60_000),
+    });
+    // Open but deadline still in the future → not overdue.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "PROPOSED",
+      fcgWindowDeadline: new Date(now + 5 * 60 * 60_000),
+    });
+    // DISCARDED past deadline → not counted (operator decided it was out
+    // of scope; not a broken promise).
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "DISCARDED",
+      fcgWindowDeadline: new Date(now - 60 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.openOverdue).toBe(2);
+  });
+
+  it("excludes bypassed-synth drafts from FCG-window accounting", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("fcg-bypass"),
+    });
+
+    const base = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    // Bypassed-synth with a deadline + late send. Must NOT contribute.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      synthesisedFromOutboundIngest: true,
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 30 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 120 * 60_000),
+    });
+    // Real engine send within window — the only counted row.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 30 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.sentWithDeadline).toBe(1);
+    expect(r.fcgWindow.sentWithinWindow).toBe(1);
+    expect(r.fcgWindow.withinWindowRate).toBe(1);
+  });
+
+  it("withinWindowRate is null when no deadlined sends exist", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("fcg-none"),
+    });
+    // SENT but no deadline.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      sentMarkedAt: new Date(),
+    });
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.sentWithDeadline).toBe(0);
+    expect(r.fcgWindow.withinWindowRate).toBeNull();
   });
 });

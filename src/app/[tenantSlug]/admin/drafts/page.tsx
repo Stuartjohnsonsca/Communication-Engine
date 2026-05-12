@@ -152,6 +152,46 @@ export default async function DraftsRollupPage({
       </section>
 
       <section className="card space-y-3">
+        <h2 className="text-base font-medium">FCG-window adherence</h2>
+        <p className="text-xs text-ink/60">
+          The engine&apos;s central promise is &ldquo;respond within the FCG
+          window.&rdquo; This is the firm-wide view of whether sent drafts
+          beat their deadlines. Bypassed-synth drafts and drafts with no
+          deadline are excluded (no promise was made). Pairs with the
+          per-Member triage view on{" "}
+          <Link
+            href={`/${tenantSlug}/drafts`}
+            className="underline decoration-dotted"
+          >
+            /drafts
+          </Link>
+          .
+        </p>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+          <Field
+            label="Within window"
+            value={pct(rollup.fcgWindow.withinWindowRate)}
+            hint={`${num(rollup.fcgWindow.sentWithinWindow)}/${num(rollup.fcgWindow.sentWithDeadline)} sent on or before deadline.`}
+          />
+          <Field
+            label="Sent after window"
+            value={num(rollup.fcgWindow.sentAfterWindow)}
+            hint="Late sends. The promise was made AND broken."
+          />
+          <Field
+            label="Open + overdue"
+            value={num(rollup.fcgWindow.openOverdue)}
+            hint="Non-terminal drafts whose deadline has already passed — currently in breach."
+          />
+          <Field
+            label="Deadlined sends"
+            value={num(rollup.fcgWindow.sentWithDeadline)}
+            hint="SENT drafts in window that had a deadline."
+          />
+        </div>
+      </section>
+
+      <section className="card space-y-3">
         <h2 className="text-base font-medium">By draft source</h2>
         <p className="text-xs text-ink/60">
           The bypass column is the central governance signal — every send that

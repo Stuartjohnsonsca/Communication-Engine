@@ -69,6 +69,34 @@ export type DraftRollup = {
   /// freshly-busy tenant doesn't appear to have a 0% send rate.
   /// Null when there are no terminal drafts yet.
   sendRate: number | null;
+  /**
+   * Post-PRD item 66 — FCG-window adherence at the firm level.
+   *
+   * The Member sees their own urgency on /drafts (item 64); this is the
+   * matching firm-wide rollup: did the engine actually beat the FCG
+   * response window on the drafts that got sent?
+   *
+   * Only drafts that HAD a `fcgWindowDeadline` count toward the rate
+   * — a draft without a deadline had no promise to keep, so including
+   * it would dilute the signal. `bypassed_synth` drafts are excluded
+   * from this block entirely (they're post-hoc reconstructions of
+   * sends that already happened outside the engine, with no engine
+   * promise attached).
+   *
+   * `openOverdue` counts non-terminal drafts in window whose deadline
+   * is already past — they haven't broken the SENT promise yet
+   * (no terminal status) but the firm is currently in breach. Useful
+   * to read alongside `sentAfterWindow`: are we letting drafts go cold
+   * (high openOverdue) or sending them late (high sentAfterWindow)?
+   */
+  fcgWindow: {
+    sentWithDeadline: number;
+    sentWithinWindow: number;
+    sentAfterWindow: number;
+    openOverdue: number;
+    /// sentWithinWindow / sentWithDeadline. Null when no deadlined sends.
+    withinWindowRate: number | null;
+  };
   regeneration: {
     /// Drafts with `parentId` set — i.e. drafts that ARE a regeneration
     /// of an earlier draft. Counts toward the "User dissatisfied with
@@ -143,6 +171,7 @@ export async function computeDraftRollup(input: {
       parentId: true,
       createdAt: true,
       sentMarkedAt: true,
+      fcgWindowDeadline: true,
     },
     take: MAX_ROWS,
     orderBy: { createdAt: "desc" },
@@ -182,6 +211,15 @@ export async function computeDraftRollup(input: {
   let totalSent = 0;
   let totalBypassedSent = 0;
 
+  // Item 66 — FCG-window adherence accumulators. We snapshot `now`
+  // once per call so "open + overdue" is evaluated against a single
+  // wall-clock and the test can pin it via the global Date.
+  const now = new Date();
+  let fcgSentWithDeadline = 0;
+  let fcgSentWithinWindow = 0;
+  let fcgSentAfterWindow = 0;
+  let fcgOpenOverdue = 0;
+
   for (const r of rows) {
     const source = classifySource(r);
     const bucket = bySource[source];
@@ -205,6 +243,25 @@ export async function computeDraftRollup(input: {
           sentLatencyMsSum += ms;
           sentLatencyCount += 1;
         }
+      }
+    }
+
+    // Item 66 — FCG-window adherence. Bypassed-synth drafts are
+    // excluded: they're post-hoc reconstructions of sends that already
+    // happened outside the engine, so the "did we beat the deadline"
+    // promise never applied. Drafts with no deadline are excluded for
+    // the same reason: no promise, nothing to measure.
+    if (source !== "bypassed_synth" && r.fcgWindowDeadline) {
+      const deadline = r.fcgWindowDeadline.getTime();
+      if (r.status === "SENT" && r.sentMarkedAt) {
+        fcgSentWithDeadline += 1;
+        if (r.sentMarkedAt.getTime() <= deadline) fcgSentWithinWindow += 1;
+        else fcgSentAfterWindow += 1;
+      } else if (r.status !== "SENT" && r.status !== "DISCARDED") {
+        // Non-terminal in-flight breach: deadline is already past but the
+        // draft hasn't been sent yet. Discards excluded (operator decided
+        // it was out of scope; not a broken promise).
+        if (deadline < now.getTime()) fcgOpenOverdue += 1;
       }
     }
 
@@ -249,12 +306,22 @@ export async function computeDraftRollup(input: {
     .slice(0, topN)
     .map(([membershipId, v]) => ({ membershipId, ...v }));
 
+  const withinWindowRate =
+    fcgSentWithDeadline > 0 ? fcgSentWithinWindow / fcgSentWithDeadline : null;
+
   return {
     windowDays,
     totals,
     bySource,
     bypassRate,
     sendRate: sentRate,
+    fcgWindow: {
+      sentWithDeadline: fcgSentWithDeadline,
+      sentWithinWindow: fcgSentWithinWindow,
+      sentAfterWindow: fcgSentAfterWindow,
+      openOverdue: fcgOpenOverdue,
+      withinWindowRate,
+    },
     regeneration: {
       childDrafts,
       draftsRegeneratedAtLeastOnce: parentIdsReferenced.size,
