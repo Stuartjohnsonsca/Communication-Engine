@@ -23,7 +23,13 @@
 import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach } from "vitest";
 import { superDb } from "@/lib/db";
-import { runAutoDraftSweep, produceDraftFromInbound } from "@/lib/drafts";
+import {
+  runAutoDraftSweep,
+  produceDraftFromInbound,
+  runAutoDraftBackfill,
+  BACKFILL_DAYS_BOUNDS,
+} from "@/lib/drafts";
+import { ValidationError } from "@/lib/api-errors";
 import {
   createTestTenant,
   createTestUserAndMembership,
@@ -279,6 +285,129 @@ describe("auto-draft sweep — tenant isolation", () => {
 
     const draftsInA = await superDb.draft.count({ where: { tenantId: tenantA.id } });
     expect(draftsInA).toBe(0); // because we only swept B
+  });
+});
+
+describe("auto-draft backfill (item 51)", () => {
+  it("picks up inbound older than the 24h default when daysBack is widened", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("backfill"),
+    });
+    await commitMinimalFcg(tenant.id);
+    const channel = await setupChannel(tenant.id, membership.id);
+    // Two inbound: one 7 days old (outside default 24h window),
+    // one 12h old (inside default).
+    await makeInbound({
+      tenantId: tenant.id,
+      channelId: channel.id,
+      sender: "old@example.com",
+      createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    });
+    await makeInbound({
+      tenantId: tenant.id,
+      channelId: channel.id,
+      sender: "recent@example.com",
+      createdAt: new Date(Date.now() - 12 * 60 * 60 * 1000),
+    });
+
+    // Default sweep picks up only the recent one.
+    const defaultRun = await runAutoDraftSweep({ tenantId: tenant.id });
+    expect(defaultRun.produced).toBe(1);
+
+    // 30-day backfill picks up the older one (recent already drafted).
+    const backfill = await runAutoDraftBackfill({
+      tenantId: tenant.id,
+      actorMembershipId: membership.id,
+      daysBack: 30,
+    });
+    expect(backfill.daysBack).toBe(30);
+    expect(backfill.produced).toBe(1);
+
+    const drafts = await superDb.draft.count({ where: { tenantId: tenant.id } });
+    expect(drafts).toBe(2);
+
+    const audit = await superDb.auditEvent.findFirst({
+      where: { tenantId: tenant.id, eventType: "AUTO_DRAFT_BACKFILL_TRIGGERED" },
+      orderBy: { seq: "desc" },
+    });
+    expect(audit).toBeTruthy();
+    const payload = audit!.payload as {
+      daysBack: number;
+      produced: number;
+      candidates: number;
+    };
+    expect(payload.daysBack).toBe(30);
+    expect(payload.produced).toBe(1);
+    expect(audit!.actorMembershipId).toBe(membership.id);
+  });
+
+  it("clamps daysBack to [1, 365]", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("clamp"),
+    });
+    await commitMinimalFcg(tenant.id);
+
+    const high = await runAutoDraftBackfill({
+      tenantId: tenant.id,
+      actorMembershipId: membership.id,
+      daysBack: 10_000,
+    });
+    expect(high.daysBack).toBe(BACKFILL_DAYS_BOUNDS.max);
+
+    const low = await runAutoDraftBackfill({
+      tenantId: tenant.id,
+      actorMembershipId: membership.id,
+      daysBack: 0,
+    });
+    expect(low.daysBack).toBe(BACKFILL_DAYS_BOUNDS.min);
+  });
+
+  it("refuses to backfill a tenant with no COMMITTED FCG", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("nofcg"),
+    });
+    await expect(
+      runAutoDraftBackfill({
+        tenantId: tenant.id,
+        actorMembershipId: membership.id,
+        daysBack: 30,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("is idempotent: running a second backfill after the first does not re-draft", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("idem-bf"),
+    });
+    await commitMinimalFcg(tenant.id);
+    const channel = await setupChannel(tenant.id, membership.id);
+    await makeInbound({
+      tenantId: tenant.id,
+      channelId: channel.id,
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+    });
+
+    const first = await runAutoDraftBackfill({
+      tenantId: tenant.id,
+      actorMembershipId: membership.id,
+      daysBack: 30,
+    });
+    expect(first.produced).toBe(1);
+    const second = await runAutoDraftBackfill({
+      tenantId: tenant.id,
+      actorMembershipId: membership.id,
+      daysBack: 30,
+    });
+    expect(second.produced).toBe(0);
+    expect(second.candidates).toBe(0);
   });
 });
 

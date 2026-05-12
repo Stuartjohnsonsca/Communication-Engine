@@ -35,6 +35,37 @@ export default function ChannelsClient({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  // Item 51 — operator backfill state.
+  const [backfillDays, setBackfillDays] = useState(30);
+  const [backfillPending, startBackfillTransition] = useTransition();
+  const [backfillResult, setBackfillResult] = useState<string | null>(null);
+
+  function runBackfill() {
+    setError(null);
+    setBackfillResult(null);
+    startBackfillTransition(async () => {
+      const res = await fetch("/api/admin/auto-draft-backfill", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tenantSlug, daysBack: backfillDays }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setError(`Backfill failed: ${data.error ?? res.statusText}`);
+        return;
+      }
+      const produced = Number(data.produced ?? 0);
+      const skipped = Number(data.skipped ?? 0);
+      const candidates = Number(data.candidates ?? 0);
+      setBackfillResult(
+        `Backfill for the last ${backfillDays} day${backfillDays === 1 ? "" : "s"}: ${produced} draft${
+          produced === 1 ? "" : "s"
+        } produced, ${skipped} skipped, ${candidates} candidate${
+          candidates === 1 ? "" : "s"
+        } scanned. Re-press if you hit the 500-per-press cap.`,
+      );
+    });
+  }
 
   function reload() {
     window.location.reload();
@@ -187,6 +218,49 @@ export default function ChannelsClient({
           {info && <p className="text-sm text-ink/70">{info}</p>}
         </div>
       )}
+
+      <div className="card space-y-3">
+        <div>
+          <h2 className="text-base font-medium">Backfill drafts from historic inbound</h2>
+          <p className="mt-1 text-xs text-ink/60">
+            The engine produces drafts continuously as new inbound arrives (every ~5 minutes via the
+            <code className="mx-1 rounded bg-ink/5 px-1">auto-draft</code> cron). Use this control
+            to replay drafting against historic ingested inbound — for example after first connecting
+            a mailbox, or to catch a backlog older than the 24-hour cron window. Bounded: each press
+            produces at most 500 drafts; re-press to continue.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="label" htmlFor="backfill-days">
+              Days back
+            </label>
+            <input
+              id="backfill-days"
+              type="number"
+              min={1}
+              max={365}
+              className="input"
+              value={backfillDays}
+              onChange={(e) =>
+                setBackfillDays(
+                  Math.max(1, Math.min(365, Number.parseInt(e.target.value, 10) || 1)),
+                )
+              }
+            />
+          </div>
+          <button
+            className="btn"
+            disabled={backfillPending}
+            onClick={runBackfill}
+          >
+            {backfillPending ? "Backfilling…" : "Backfill now"}
+          </button>
+        </div>
+        {backfillResult && (
+          <p className="text-sm text-ink/70">{backfillResult}</p>
+        )}
+      </div>
 
       <div className="card">
         <h2 className="text-base font-medium">Configured channels</h2>

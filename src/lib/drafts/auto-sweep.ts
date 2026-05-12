@@ -3,14 +3,27 @@ import { reportError } from "@/lib/observability";
 import { produceDraftFromInbound } from "./produce-from-inbound";
 
 /**
- * Item 50 — continuous-background draft producer.
+ * Items 50 + 51 — continuous-background draft producer + operator
+ * backfill.
  *
  * Scans `IngestedMessage` rows for un-drafted inbound and produces a
- * draft for each via `produceDraftFromInbound`. The scan runs as a
- * fast cron (`auto-draft`) every 5 minutes — fast enough that "no
- * inbuilt latency" is honoured in practice (worst-case ~5 min between
- * mail arrival and draft availability), slow enough that batched LLM
- * spend stays predictable.
+ * draft for each via `produceDraftFromInbound`. Two callers:
+ *
+ *   - **Cron (`auto-draft`)**: runs every 5 minutes with default
+ *     bounds (24h backlog window, 25 produced per tenant per pass).
+ *     Fast enough that "no inbuilt latency" is honoured in practice
+ *     (worst-case ~5 min between mail arrival and draft
+ *     availability), slow enough that batched LLM spend stays
+ *     predictable.
+ *
+ *   - **Operator backfill (item 51)**: `runAutoDraftSweep` accepts
+ *     a `backlogWindowHours` override so an operator can press a
+ *     button on /admin/channels and replay drafting against historic
+ *     inbound (e.g. "the last 30 days"). The per-tenant cap is also
+ *     overridable so a deliberate backfill isn't trickled out at the
+ *     cron's 25-per-tick rate. Both bounds are still clamped to
+ *     conservative platform-level ceilings to defuse typo-as-disaster
+ *     (a 9999-day window or 100000 cap).
  *
  * Ownership: the draft is attributed to the Membership behind the
  * most recent ACTIVE `ChannelAuth` on the channel that ingested the
@@ -19,28 +32,23 @@ import { produceDraftFromInbound } from "./produce-from-inbound";
  * UCG version, can't notify on escalation, so we skip rather than
  * synthesise an "anonymous" draft.
  *
- * Bounds:
- *  - `BACKLOG_WINDOW_HOURS` (24h): we only look at recently-arrived
- *    inbound. On first deploy we don't backfill the entire ingest
- *    history — that's a separate operator-driven batch and would
- *    burst LLM cost.
- *  - `MAX_PER_TENANT_PER_PASS` (25): per tenant, per cron tick.
- *    Bounds LLM spend at the platform level; a burst of 100 new
- *    inbound across one mailbox takes ~4 passes (20 minutes) to
- *    work through. Tenants who need faster turn-around tune the
- *    cron cadence on Railway.
- *  - `SCAN_PAGE_SIZE` (200): per-tenant query take. Larger than the
- *    per-pass cap on purpose so we don't miss already-drafted rows
- *    that fall outside the page on a busy tenant.
- *
  * Concurrency: the `auto-draft` cron is locked by item 47's
  * advisory-lock wrapper, so two simultaneous runs don't double up.
- * Within a run the loop is sequential.
+ * The backfill route bypasses that lock (it's operator-initiated and
+ * can legitimately run alongside the cron); the per-row
+ * `produceDraftFromInbound` idempotency check is the safety net.
  */
 
-const BACKLOG_WINDOW_HOURS = 24;
-const MAX_PER_TENANT_PER_PASS = 25;
-const SCAN_PAGE_SIZE = 200;
+const DEFAULT_BACKLOG_WINDOW_HOURS = 24;
+const DEFAULT_MAX_PER_TENANT_PER_PASS = 25;
+
+/// Hard ceilings — clamp regardless of caller input. One year of
+/// look-back is the most an operator can plausibly want for a manual
+/// review; 500 produced drafts in one batch is the most a single
+/// button-press should ever issue (re-press to continue).
+export const MAX_BACKLOG_WINDOW_HOURS = 365 * 24;
+export const MAX_PER_TENANT_PER_PASS_CEILING = 500;
+const SCAN_PAGE_SIZE_DEFAULT = 200;
 
 export type AutoDraftSweepResult = {
   tenantsScanned: number;
@@ -48,6 +56,10 @@ export type AutoDraftSweepResult = {
   produced: number;
   skipped: number;
   errored: number;
+  /// Effective `backlogWindowHours` after clamping (operator-visible).
+  windowHours: number;
+  /// Effective per-tenant cap after clamping.
+  maxPerTenant: number;
 };
 
 export async function runAutoDraftSweep(opts?: {
@@ -55,9 +67,39 @@ export async function runAutoDraftSweep(opts?: {
   now?: Date;
   /** Restrict to a single tenant — on-demand triggers + tests. */
   tenantId?: string;
+  /**
+   * Look-back window in hours. Defaults to 24 (the cron path). The
+   * operator-backfill route passes `daysBack * 24`. Clamped to
+   * `[1, MAX_BACKLOG_WINDOW_HOURS]`.
+   */
+  backlogWindowHours?: number;
+  /**
+   * Maximum drafts produced per tenant in this call. Defaults to 25
+   * (the cron path). The operator-backfill route passes a larger
+   * value when the operator explicitly accepts the LLM cost.
+   * Clamped to `[1, MAX_PER_TENANT_PER_PASS_CEILING]`.
+   */
+  maxPerTenant?: number;
 }): Promise<AutoDraftSweepResult> {
   const now = opts?.now ?? new Date();
-  const windowStart = new Date(now.getTime() - BACKLOG_WINDOW_HOURS * 60 * 60 * 1000);
+  const windowHours = Math.max(
+    1,
+    Math.min(
+      MAX_BACKLOG_WINDOW_HOURS,
+      Math.trunc(opts?.backlogWindowHours ?? DEFAULT_BACKLOG_WINDOW_HOURS),
+    ),
+  );
+  const maxPerTenant = Math.max(
+    1,
+    Math.min(
+      MAX_PER_TENANT_PER_PASS_CEILING,
+      Math.trunc(opts?.maxPerTenant ?? DEFAULT_MAX_PER_TENANT_PER_PASS),
+    ),
+  );
+  const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
+  // Scan page size grows with the per-tenant cap so a 500-draft
+  // backfill doesn't get truncated by a 200-row scan window.
+  const scanPageSize = Math.max(SCAN_PAGE_SIZE_DEFAULT, maxPerTenant * 2);
 
   // Tenants in scope: ACTIVE or PROVISIONING, with at least one
   // COMMITTED FCG (drafting cannot proceed without one anyway — same
@@ -77,6 +119,8 @@ export async function runAutoDraftSweep(opts?: {
     produced: 0,
     skipped: 0,
     errored: 0,
+    windowHours,
+    maxPerTenant,
   };
 
   for (const t of tenants) {
@@ -91,13 +135,13 @@ export async function runAutoDraftSweep(opts?: {
         drafts: { none: {} },
       },
       orderBy: { createdAt: "asc" },
-      take: SCAN_PAGE_SIZE,
+      take: scanPageSize,
       select: { id: true, channelId: true },
     });
 
     let producedForTenant = 0;
     for (const im of candidates) {
-      if (producedForTenant >= MAX_PER_TENANT_PER_PASS) break;
+      if (producedForTenant >= maxPerTenant) break;
       result.candidates += 1;
 
       // Resolve ownership via the most recent active ChannelAuth on the

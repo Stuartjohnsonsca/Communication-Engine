@@ -16,5 +16,11 @@
  */
 export { produceDraftFromInbound } from "./produce-from-inbound";
 export type { ProduceFromInboundResult } from "./produce-from-inbound";
-export { runAutoDraftSweep } from "./auto-sweep";
+export {
+  runAutoDraftSweep,
+  MAX_BACKLOG_WINDOW_HOURS,
+  MAX_PER_TENANT_PER_PASS_CEILING,
+} from "./auto-sweep";
 export type { AutoDraftSweepResult } from "./auto-sweep";
+export { runAutoDraftBackfill, BACKFILL_DAYS_BOUNDS } from "./backfill";
+export type { BackfillInput, BackfillResult } from "./backfill";
