@@ -28,3 +28,12 @@ export { runDraftStaleSweep } from "./stale-sweep";
 export type { DraftStaleSweepResult } from "./stale-sweep";
 export { computeDraftRollup } from "./rollup";
 export type { DraftRollup, DraftRollupWindow, DraftSource } from "./rollup";
+export {
+  classifyDraft,
+  bucketDrafts,
+  formatDeadlineRelative,
+  isTerminalStatus,
+  DUE_SOON_HORIZON_HOURS,
+  RECENTLY_CLOSED_HORIZON_DAYS,
+} from "./triage";
+export type { TriageBucket, TriageDraft } from "./triage";
