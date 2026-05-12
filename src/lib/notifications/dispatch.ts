@@ -86,7 +86,19 @@ export type NotificationKind =
   /// most once (re-quarantine after operator unquarantine
   /// deliberately does NOT re-fire — the operator already knew
   /// about the row).
-  | "inbound_draft_quarantined";
+  | "inbound_draft_quarantined"
+  /// Post-PRD item 71 — mandatory governance escalation. The daily
+  /// adherence-monitor cron found this tenant's 7-day FCG-window
+  /// adherence below `ADHERENCE_THRESHOLD` with at least
+  /// `MIN_DEADLINED_SENDS` deadlined sends in the window (the
+  /// volume floor exists so a fresh tenant with 2 lucky/unlucky
+  /// sends doesn't trip the alert). Fans out to every active
+  /// FIRM_ADMIN. Not opt-outable: the FCG response window is the
+  /// engine's central client-facing promise; muting a "we're
+  /// breaking it" alert defeats governance. dedupeKey is the ISO
+  /// week so a chronically-poor tenant gets one alert per week,
+  /// not one per cron tick.
+  | "firm_adherence_below_threshold";
 
 export type DispatchResult = {
   alreadySent: boolean;

@@ -83,6 +83,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "Item 54 — daily stale-draft sweeper. Scans Drafts whose fcgWindowDeadline has passed without send/discard and fires a draft_stale notification to the owning Membership. One warning per draft (dispatch-table dedupe). Surfaces FCG response-window breach so the firm doesn't silently miss its own commitment.",
   },
+  {
+    cronName: "adherence-monitor",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "Item 71 — daily firm-adherence escalation. Computes each tenant's 7d FCG-window adherence rate via the /admin/drafts rollup and fires a mandatory firm_adherence_below_threshold notification to every FIRM_ADMIN when the rate is below ADHERENCE_THRESHOLD with at least MIN_DEADLINED_SENDS deadlined sends. Deduped per ISO week so a chronically-poor tenant gets one alert per week, not one per cron tick.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {

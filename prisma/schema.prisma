@@ -408,6 +408,14 @@ enum AuditEventType {
   /// currency, totals: { calls, costMinor } }`. RBAC gate is
   /// `usage:read` (FIRM_ADMIN only — commercial data).
   USAGE_ROLLUP_EXPORTED
+  /// Post-PRD hardening item 71 — a daily cron found the tenant's 7-day
+  /// FCG-window adherence rate below `ADHERENCE_THRESHOLD` while the
+  /// volume floor (`MIN_DEADLINED_SENDS`) was met. Payload carries
+  /// `{ windowDays, sentWithDeadline, sentWithinWindow, sentAfterWindow,
+  /// openOverdue, withinWindowRate, threshold, isoWeek }`. One event per
+  /// (tenant, ISO week) — same dedupe slot as the notification — so a
+  /// chronically-poor tenant doesn't fill the chain with daily duplicates.
+  FIRM_ADHERENCE_BELOW_THRESHOLD
 }
 
 enum BillingPeriodStatus {
