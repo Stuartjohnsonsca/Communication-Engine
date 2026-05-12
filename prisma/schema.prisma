@@ -397,6 +397,12 @@ enum AuditEventType {
   /// quarantine fields). Payload carries `{ ingestedMessageIds,
   /// count }`.
   INBOUND_DRAFT_UNQUARANTINED
+  /// Post-PRD hardening item 68 — FIRM_ADMIN (or FCT_MEMBER, anyone
+  /// with `drafts:read-rollup`) exported the /admin/drafts rollup as
+  /// CSV. Payload carries `{ windowDays, format, totals: { produced,
+  /// sent } }` so the chain captures shape + scope without dragging
+  /// the full numerical detail into the audit row.
+  DRAFTS_ROLLUP_EXPORTED
 }
 
 enum BillingPeriodStatus {

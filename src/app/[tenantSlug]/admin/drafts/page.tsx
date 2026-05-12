@@ -107,7 +107,7 @@ export default async function DraftsRollupPage({
         </p>
       </header>
 
-      <nav className="flex items-center gap-2 text-sm">
+      <nav className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-ink/60">Window:</span>
         {WINDOWS.map((w) => (
           <Link
@@ -122,6 +122,12 @@ export default async function DraftsRollupPage({
             {w} days
           </Link>
         ))}
+        <a
+          href={`/api/admin/drafts/export?tenant=${tenantSlug}&window=${windowDays}`}
+          className="ml-auto rounded border border-ink/20 px-2 py-1 hover:bg-ink/5"
+        >
+          Download CSV
+        </a>
       </nav>
 
       <section className="card grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
