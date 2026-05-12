@@ -65,6 +65,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "Item 23 — daily background verification of every tenant's audit chain. Emits AUDIT_CHAIN_TAMPERED audit + critical notification on hash mismatch.",
   },
+  {
+    cronName: "auto-draft",
+    expectedIntervalMinutes: 5,
+    description:
+      "Item 50 — continuous-background draft producer. Scans IngestedMessage IN rows without a linked Draft and runs the drafting agent against each. FCG cadence (acknowledgment vs substantive) is honoured by the agent itself; this worker just feeds it the un-drafted inbound.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {
