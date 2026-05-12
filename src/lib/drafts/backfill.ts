@@ -66,6 +66,8 @@ export async function runAutoDraftBackfill(input: BackfillInput): Promise<Backfi
     tenantId: input.tenantId,
     backlogWindowHours: days * 24,
     maxPerTenant: MAX_PER_TENANT_PER_PASS_CEILING,
+    source: "BACKFILL",
+    triggeredByMembershipId: input.actorMembershipId,
   });
 
   await writeAuditEvent({

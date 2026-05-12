@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { superDb } from "@/lib/db";
 import { reportError } from "@/lib/observability";
 import { produceDraftFromInbound } from "./produce-from-inbound";
@@ -37,6 +38,12 @@ import { produceDraftFromInbound } from "./produce-from-inbound";
  * The backfill route bypasses that lock (it's operator-initiated and
  * can legitimately run alongside the cron); the per-row
  * `produceDraftFromInbound` idempotency check is the safety net.
+ *
+ * Observability (item 52): the sweep persists one `AutoDraftSweepRun`
+ * row per tenant per pass with the effective window, counts, and a
+ * skip-reason histogram. Persistence is best-effort — a failed insert
+ * is logged but does not poison the sweep (the cron's job is to
+ * produce drafts, not write observability rows).
  */
 
 const DEFAULT_BACKLOG_WINDOW_HOURS = 24;
@@ -49,6 +56,12 @@ const DEFAULT_MAX_PER_TENANT_PER_PASS = 25;
 export const MAX_BACKLOG_WINDOW_HOURS = 365 * 24;
 export const MAX_PER_TENANT_PER_PASS_CEILING = 500;
 const SCAN_PAGE_SIZE_DEFAULT = 200;
+
+/// Sweep-level skip reason codes, distinct from the
+/// `produceDraftFromInbound` codes — these fire before we even call
+/// the producer (no channel to attribute to, or no active ChannelAuth
+/// behind the channel).
+export type SweepLevelSkipCode = "no_channel_id" | "no_active_channel_auth";
 
 export type AutoDraftSweepResult = {
   tenantsScanned: number;
@@ -80,6 +93,19 @@ export async function runAutoDraftSweep(opts?: {
    * Clamped to `[1, MAX_PER_TENANT_PER_PASS_CEILING]`.
    */
   maxPerTenant?: number;
+  /**
+   * Item 52 — `AutoDraftSweepRun.source` discriminator. Defaults to
+   * "CRON". The operator-backfill path passes "BACKFILL" so a
+   * reviewer can later distinguish auto-cron runs from
+   * button-pressed catch-ups.
+   */
+  source?: "CRON" | "BACKFILL";
+  /**
+   * Item 52 — operator who triggered a BACKFILL pass. Recorded on
+   * the persisted sweep-run row. Null/undefined for cron-triggered
+   * passes (system-driven; no user actor).
+   */
+  triggeredByMembershipId?: string | null;
 }): Promise<AutoDraftSweepResult> {
   const now = opts?.now ?? new Date();
   const windowHours = Math.max(
@@ -96,6 +122,8 @@ export async function runAutoDraftSweep(opts?: {
       Math.trunc(opts?.maxPerTenant ?? DEFAULT_MAX_PER_TENANT_PER_PASS),
     ),
   );
+  const source = opts?.source ?? "CRON";
+  const triggeredByMembershipId = opts?.triggeredByMembershipId ?? null;
   const windowStart = new Date(now.getTime() - windowHours * 60 * 60 * 1000);
   // Scan page size grows with the per-tenant cap so a 500-draft
   // backfill doesn't get truncated by a 200-row scan window.
@@ -140,9 +168,23 @@ export async function runAutoDraftSweep(opts?: {
     });
 
     let producedForTenant = 0;
+    const perTenant = {
+      candidates: 0,
+      produced: 0,
+      skipped: 0,
+      errored: 0,
+      // Histogram of reason codes (both sweep-level and producer-level).
+      // Persisted verbatim on the AutoDraftSweepRun row.
+      skipReasons: {} as Record<string, number>,
+    };
+    const bumpReason = (code: string) => {
+      perTenant.skipReasons[code] = (perTenant.skipReasons[code] ?? 0) + 1;
+    };
+
     for (const im of candidates) {
       if (producedForTenant >= maxPerTenant) break;
       result.candidates += 1;
+      perTenant.candidates += 1;
 
       // Resolve ownership via the most recent active ChannelAuth on the
       // channel. Without a channelId we can't attribute; skip and let
@@ -151,6 +193,8 @@ export async function runAutoDraftSweep(opts?: {
       // which always attributes via the calling Membership).
       if (!im.channelId) {
         result.skipped += 1;
+        perTenant.skipped += 1;
+        bumpReason("no_channel_id");
         continue;
       }
       const auth = await superDb.channelAuth.findFirst({
@@ -160,6 +204,8 @@ export async function runAutoDraftSweep(opts?: {
       });
       if (!auth?.membershipId) {
         result.skipped += 1;
+        perTenant.skipped += 1;
+        bumpReason("no_active_channel_auth");
         continue;
       }
 
@@ -171,9 +217,12 @@ export async function runAutoDraftSweep(opts?: {
         });
         if (outcome.result === "produced") {
           result.produced += 1;
+          perTenant.produced += 1;
           producedForTenant += 1;
         } else {
           result.skipped += 1;
+          perTenant.skipped += 1;
+          bumpReason(outcome.reasonCode);
         }
       } catch (err) {
         // A single LLM error / DB hiccup must not poison the whole
@@ -184,7 +233,38 @@ export async function runAutoDraftSweep(opts?: {
           extra: { ingestedMessageId: im.id, channelId: im.channelId },
         }, "auto-draft sweep produce failed");
         result.errored += 1;
+        perTenant.errored += 1;
       }
+    }
+
+    // Best-effort observability persistence. The sweep's primary job
+    // is to produce drafts; an insert failure here must not abort it.
+    try {
+      await superDb.autoDraftSweepRun.create({
+        data: {
+          tenantId: t.id,
+          source,
+          triggeredByMembershipId,
+          startedAt: now,
+          windowHours,
+          maxPerTenant,
+          candidates: perTenant.candidates,
+          produced: perTenant.produced,
+          skipped: perTenant.skipped,
+          errored: perTenant.errored,
+          skipReasons: perTenant.skipReasons as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      reportError(
+        err,
+        {
+          route: "lib/drafts/auto-sweep",
+          tenantId: t.id,
+          extra: { stage: "persist_sweep_run", source },
+        },
+        "auto-draft sweep run persist failed",
+      );
     }
   }
 

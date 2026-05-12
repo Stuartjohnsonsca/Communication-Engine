@@ -46,7 +46,8 @@ DECLARE
     'ApiKey',
     'ApiIdempotencyKey',
     'AuditChainVerification',
-    'SubProcessorObjection'
+    'SubProcessorObjection',
+    'AutoDraftSweepRun'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

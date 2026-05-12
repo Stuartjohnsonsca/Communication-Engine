@@ -855,6 +855,7 @@ model Tenant {
   apiIdempotencyKeys        ApiIdempotencyKey[]
   auditChainVerifications   AuditChainVerification[]
   subProcessorObjections    SubProcessorObjection[]
+  autoDraftSweepRuns        AutoDraftSweepRun[]
 
   @@index([status])
 }
@@ -966,6 +967,7 @@ model Membership {
   webhookSubscriptions   WebhookSubscription[]              @relation("WebhookSubCreatedBy")
   apiKeysCreated         ApiKey[]                           @relation("ApiKeyCreatedBy")
   apiKeysRevoked         ApiKey[]                           @relation("ApiKeyRevokedBy")
+  autoDraftSweepRuns     AutoDraftSweepRun[]                @relation("AutoDraftSweepTriggeredBy")
 
   @@unique([tenantId, userId])
   @@index([tenantId, role])
@@ -2807,6 +2809,61 @@ model AuditChainVerification {
 
   @@index([tenantId, startedAt(sort: Desc)])
   @@index([status])
+}
+
+// ─── Auto-draft sweep observability (post-PRD hardening item 52) ──────────
+
+enum AutoDraftSweepSource {
+  CRON
+  BACKFILL
+}
+
+/// One pass of the auto-draft sweep against one tenant. Persisted so the
+/// operator can answer "is the engine producing drafts I expect, and if
+/// not, why?" without trawling cron heartbeats.
+///
+/// Items 50 (the cron) and 51 (the operator backfill) both call
+/// `runAutoDraftSweep`; the sweep writes one row per tenant per pass with
+/// the effective window, the per-tenant cap, the counts, and a
+/// histogram of skip reason codes from `produceDraftFromInbound`. The
+/// row is the operator-facing complement to the per-draft `DRAFT_PRODUCED`
+/// audit events and the per-press `AUTO_DRAFT_BACKFILL_TRIGGERED` event.
+///
+/// Tenant-scoped + RLS-protected — same posture as
+/// `AuditChainVerification`. Cron-triggered rows have `triggeredByMembershipId`
+/// null; backfill-triggered rows record the operator who pressed the button.
+///
+/// Persistence failures must NOT poison the sweep: the cron's job is to
+/// produce drafts, and an observability row is a nice-to-have on top.
+/// The sweep catches and logs persistence errors rather than letting them
+/// kill the pass.
+model AutoDraftSweepRun {
+  id                      String               @id @default(cuid())
+  tenantId                String
+  source                  AutoDraftSweepSource
+  /// Operator who triggered a BACKFILL pass. Null for CRON.
+  triggeredByMembershipId String?
+  startedAt               DateTime             @default(now())
+  windowHours             Int
+  maxPerTenant            Int
+  /// Inbound rows examined this pass (those scanned before any skip
+  /// decision). Bounded by the page-size cap inside the sweep.
+  candidates              Int                  @default(0)
+  produced                Int                  @default(0)
+  skipped                 Int                  @default(0)
+  errored                 Int                  @default(0)
+  /// `{ reasonCode: count }` histogram. Reason codes are stable slugs
+  /// (e.g. `draft_already_exists`, `no_active_channel_auth`,
+  /// `sender_is_owning_user`) emitted by `produceDraftFromInbound` and
+  /// the sweep's own pre-skip path. New codes can be added without a
+  /// migration — the UI renders unknown codes verbatim.
+  skipReasons             Json                 @default("{}")
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  triggeredBy Membership? @relation("AutoDraftSweepTriggeredBy", fields: [triggeredByMembershipId], references: [id])
+
+  @@index([tenantId, startedAt(sort: Desc)])
+  @@index([source])
 }
 
 // ─── Outbound webhook delivery (post-PRD hardening item 14) ───────────────

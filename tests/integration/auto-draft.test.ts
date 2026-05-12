@@ -437,6 +437,141 @@ describe("produceDraftFromInbound — direct call", () => {
     expect(second.result).toBe("skipped");
     if (second.result === "skipped") {
       expect(second.reason).toMatch(/already exists/);
+      expect(second.reasonCode).toBe("draft_already_exists");
     }
+  });
+});
+
+describe("auto-draft sweep run history (item 52)", () => {
+  it("persists one row per tenant per sweep pass with the effective window + counts", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("history"),
+    });
+    await commitMinimalFcg(tenant.id);
+    const channel = await setupChannel(tenant.id, membership.id);
+    await makeInbound({ tenantId: tenant.id, channelId: channel.id });
+
+    const sweep = await runAutoDraftSweep({ tenantId: tenant.id });
+    expect(sweep.produced).toBe(1);
+
+    const runs = await superDb.autoDraftSweepRun.findMany({
+      where: { tenantId: tenant.id },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(runs.length).toBe(1);
+    const run = runs[0]!;
+    expect(run.source).toBe("CRON");
+    expect(run.triggeredByMembershipId).toBeNull();
+    expect(run.windowHours).toBe(24);
+    expect(run.maxPerTenant).toBe(25);
+    expect(run.candidates).toBe(1);
+    expect(run.produced).toBe(1);
+    expect(run.skipped).toBe(0);
+    expect(run.errored).toBe(0);
+    // Happy path produces no skips, so the histogram is empty.
+    expect(run.skipReasons).toEqual({});
+  });
+
+  it("captures a skip-reason histogram (producer-level + sweep-level codes)", async () => {
+    const tenant = await createTestTenant();
+    const ownerEmail = uniqueEmail("histo");
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: ownerEmail,
+    });
+    await commitMinimalFcg(tenant.id);
+
+    // (1) Inbound on a channel with NO active ChannelAuth → sweep-level
+    // skip `no_active_channel_auth`.
+    const orphanChannel = await superDb.channel.create({
+      data: { tenantId: tenant.id, kind: "GOOGLE", status: "ACTIVE" },
+    });
+    await makeInbound({ tenantId: tenant.id, channelId: orphanChannel.id });
+
+    // (2) Inbound where sender === owning User's email → producer-level
+    // skip `sender_is_owning_user`.
+    const ownedChannel = await setupChannel(tenant.id, membership.id);
+    await makeInbound({
+      tenantId: tenant.id,
+      channelId: ownedChannel.id,
+      sender: ownerEmail,
+    });
+
+    // (3) Inbound that already has a Draft → producer-level skip
+    // `draft_already_exists`. Easiest path: produce once, then re-sweep.
+    const im3 = await makeInbound({
+      tenantId: tenant.id,
+      channelId: ownedChannel.id,
+      sender: "other@example.com",
+    });
+    await produceDraftFromInbound({
+      tenantId: tenant.id,
+      ingestedMessageId: im3.id,
+      membershipId: membership.id,
+    });
+
+    const sweep = await runAutoDraftSweep({ tenantId: tenant.id });
+    expect(sweep.produced).toBe(0);
+    expect(sweep.skipped).toBeGreaterThanOrEqual(3);
+
+    const run = await superDb.autoDraftSweepRun.findFirst({
+      where: { tenantId: tenant.id },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(run).toBeTruthy();
+    const reasons = run!.skipReasons as Record<string, number>;
+    expect(reasons.no_active_channel_auth).toBe(1);
+    expect(reasons.sender_is_owning_user).toBe(1);
+    expect(reasons.draft_already_exists).toBe(1);
+  });
+
+  it("BACKFILL-source rows record the triggering Membership", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("backfill-source"),
+    });
+    await commitMinimalFcg(tenant.id);
+    const channel = await setupChannel(tenant.id, membership.id);
+    await makeInbound({
+      tenantId: tenant.id,
+      channelId: channel.id,
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+    });
+
+    await runAutoDraftBackfill({
+      tenantId: tenant.id,
+      actorMembershipId: membership.id,
+      daysBack: 30,
+    });
+
+    const run = await superDb.autoDraftSweepRun.findFirst({
+      where: { tenantId: tenant.id, source: "BACKFILL" },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(run).toBeTruthy();
+    expect(run!.triggeredByMembershipId).toBe(membership.id);
+    expect(run!.windowHours).toBe(30 * 24);
+    expect(run!.maxPerTenant).toBe(500);
+    expect(run!.produced).toBe(1);
+  });
+
+  it("a tenant with no COMMITTED FCG is filtered out — no sweep-run row is persisted", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("nofcg-history"),
+    });
+    const channel = await setupChannel(tenant.id, membership.id);
+    await makeInbound({ tenantId: tenant.id, channelId: channel.id });
+
+    await runAutoDraftSweep({ tenantId: tenant.id });
+
+    const runs = await superDb.autoDraftSweepRun.count({
+      where: { tenantId: tenant.id },
+    });
+    expect(runs).toBe(0);
   });
 });

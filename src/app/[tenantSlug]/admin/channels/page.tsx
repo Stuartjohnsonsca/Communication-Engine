@@ -34,6 +34,18 @@ export default async function ChannelsPage({
     realOAuth: m.realOAuthAvailable(),
   }));
 
+  // Item 52 — recent auto-draft sweep runs for this tenant. Surfaces
+  // the same counts the operator sees in the backfill confirmation
+  // toast, plus the cron-driven runs they never explicitly trigger.
+  const sweepRuns = await superDb.autoDraftSweepRun.findMany({
+    where: { tenantId: ctx.tenant.id },
+    orderBy: { startedAt: "desc" },
+    take: 10,
+    include: {
+      triggeredBy: { include: { user: { select: { name: true, email: true } } } },
+    },
+  });
+
   return (
     <ChannelsClient
       tenantSlug={tenantSlug}
@@ -48,6 +60,23 @@ export default async function ChannelsPage({
         messageCount: c._count.messages,
       }))}
       kinds={kinds}
+      sweepRuns={sweepRuns.map((r) => ({
+        id: r.id,
+        source: r.source,
+        startedAt: r.startedAt.toISOString(),
+        windowHours: r.windowHours,
+        maxPerTenant: r.maxPerTenant,
+        candidates: r.candidates,
+        produced: r.produced,
+        skipped: r.skipped,
+        errored: r.errored,
+        skipReasons:
+          r.skipReasons && typeof r.skipReasons === "object" && !Array.isArray(r.skipReasons)
+            ? (r.skipReasons as Record<string, number>)
+            : {},
+        triggeredByName:
+          r.triggeredBy?.user?.name ?? r.triggeredBy?.user?.email ?? null,
+      }))}
     />
   );
 }

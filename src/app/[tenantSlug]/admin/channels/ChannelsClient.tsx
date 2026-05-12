@@ -21,14 +21,51 @@ type KindOption = {
   realOAuth: boolean;
 };
 
+// Item 52 — server-projected sweep-run row.
+type SweepRunRow = {
+  id: string;
+  source: "CRON" | "BACKFILL";
+  startedAt: string;
+  windowHours: number;
+  maxPerTenant: number;
+  candidates: number;
+  produced: number;
+  skipped: number;
+  errored: number;
+  skipReasons: Record<string, number>;
+  triggeredByName: string | null;
+};
+
+// Stable, operator-friendly labels for the skip-reason codes the sweep
+// emits. Unknown codes (future additions, sweep-level vs producer-level)
+// fall through to the raw code with underscores stripped.
+const SKIP_REASON_LABELS: Record<string, string> = {
+  draft_already_exists: "Already drafted",
+  ingested_not_found: "Inbound vanished",
+  tenant_mismatch: "Tenant mismatch",
+  not_inbound: "Not inbound",
+  membership_not_found: "Owner not found",
+  sender_is_owning_user: "Sender = owner",
+  drafting_halted: "Lifecycle halted",
+  no_committed_fcg: "No committed FCG",
+  no_channel_id: "No channel attribution",
+  no_active_channel_auth: "No active channel auth",
+};
+
+function labelSkipReason(code: string): string {
+  return SKIP_REASON_LABELS[code] ?? code.replace(/_/g, " ");
+}
+
 export default function ChannelsClient({
   tenantSlug,
   channels,
   kinds,
+  sweepRuns,
 }: {
   tenantSlug: string;
   channels: ChannelRow[];
   kinds: KindOption[];
+  sweepRuns: SweepRunRow[];
 }) {
   const [selectedKind, setSelectedKind] = useState(kinds[0]?.kind ?? "");
   const [pending, startTransition] = useTransition();
@@ -259,6 +296,91 @@ export default function ChannelsClient({
         </div>
         {backfillResult && (
           <p className="text-sm text-ink/70">{backfillResult}</p>
+        )}
+      </div>
+
+      <div className="card space-y-3">
+        <div>
+          <h2 className="text-base font-medium">Recent auto-draft activity</h2>
+          <p className="mt-1 text-xs text-ink/60">
+            Every pass of the auto-draft sweep — both the 5-minute cron and any operator
+            backfill — leaves a row here so you can see what the engine is doing. "Skipped"
+            covers everything from "already drafted" (the most common; idempotent) to "no
+            committed FCG yet." If you see <em>zero candidates</em> repeatedly with new mail
+            arriving, the channel may not be ingesting — check the channels table below.
+          </p>
+        </div>
+        {sweepRuns.length === 0 ? (
+          <p className="text-sm text-ink/60">
+            No sweep activity yet. The cron runs every ~5 minutes; the first row will appear
+            once it executes against this tenant.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wider text-ink/50">
+              <tr>
+                <th className="py-1 pr-3">When</th>
+                <th className="py-1 pr-3">Source</th>
+                <th className="py-1 pr-3">Window</th>
+                <th className="py-1 pr-3">Scanned</th>
+                <th className="py-1 pr-3">Produced</th>
+                <th className="py-1 pr-3">Skipped</th>
+                <th className="py-1 pr-3">Errored</th>
+                <th className="py-1 pr-3">Top skip reasons</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sweepRuns.map((r) => {
+                const reasons = Object.entries(r.skipReasons)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 3);
+                return (
+                  <tr key={r.id} className="border-t border-ink/5 align-top">
+                    <td className="py-2 pr-3 text-xs text-ink/70">
+                      {r.startedAt.slice(0, 16).replace("T", " ")}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <span className="tag">
+                        {r.source === "BACKFILL" ? "backfill" : "cron"}
+                      </span>
+                      {r.source === "BACKFILL" && r.triggeredByName && (
+                        <div className="text-xs text-ink/50">{r.triggeredByName}</div>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-ink/60">
+                      {r.windowHours >= 24
+                        ? `${Math.round(r.windowHours / 24)}d`
+                        : `${r.windowHours}h`}
+                      <span className="ml-1 text-ink/40">· cap {r.maxPerTenant}</span>
+                    </td>
+                    <td className="py-2 pr-3">{r.candidates}</td>
+                    <td className="py-2 pr-3 font-medium">{r.produced}</td>
+                    <td className="py-2 pr-3">{r.skipped}</td>
+                    <td className="py-2 pr-3">
+                      {r.errored > 0 ? (
+                        <span className="text-red-600">{r.errored}</span>
+                      ) : (
+                        <span className="text-ink/50">0</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-xs">
+                      {reasons.length === 0 ? (
+                        <span className="text-ink/40">—</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {reasons.map(([code, n]) => (
+                            <span key={code} className="tag bg-ink/[0.04]">
+                              {labelSkipReason(code)} · {n}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 

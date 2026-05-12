@@ -59,9 +59,23 @@ const draftKindMap: Record<string, "EMAIL" | "HOLDING" | "TECHNICAL" | "ACTION_O
   holding_research: "HOLDING",
 };
 
+/// Stable, machine-readable skip codes. The auto-sweep aggregates these
+/// into a per-pass histogram (item 52). Adding a new code does NOT
+/// require a migration — the UI renders unknown codes verbatim. The
+/// human-readable `reason` stays alongside for one-shot debugging.
+export type ProduceFromInboundSkipCode =
+  | "draft_already_exists"
+  | "ingested_not_found"
+  | "tenant_mismatch"
+  | "not_inbound"
+  | "membership_not_found"
+  | "sender_is_owning_user"
+  | "drafting_halted"
+  | "no_committed_fcg";
+
 export type ProduceFromInboundResult =
   | { result: "produced"; draftId: string; kind: string; holdingRequired: boolean }
-  | { result: "skipped"; reason: string };
+  | { result: "skipped"; reason: string; reasonCode: ProduceFromInboundSkipCode };
 
 export async function produceDraftFromInbound(input: {
   tenantId: string;
@@ -76,24 +90,39 @@ export async function produceDraftFromInbound(input: {
     where: { tenantId: input.tenantId, ingestedMessageId: input.ingestedMessageId },
     select: { id: true },
   });
-  if (existing) return { result: "skipped", reason: "draft already exists" };
+  if (existing)
+    return {
+      result: "skipped",
+      reason: "draft already exists",
+      reasonCode: "draft_already_exists",
+    };
 
   const ingested = await superDb.ingestedMessage.findUnique({
     where: { id: input.ingestedMessageId },
   });
-  if (!ingested) return { result: "skipped", reason: "ingested message not found" };
+  if (!ingested)
+    return {
+      result: "skipped",
+      reason: "ingested message not found",
+      reasonCode: "ingested_not_found",
+    };
   if (ingested.tenantId !== input.tenantId) {
-    return { result: "skipped", reason: "tenant mismatch" };
+    return { result: "skipped", reason: "tenant mismatch", reasonCode: "tenant_mismatch" };
   }
   if (ingested.direction !== "IN") {
-    return { result: "skipped", reason: "not an inbound message" };
+    return { result: "skipped", reason: "not an inbound message", reasonCode: "not_inbound" };
   }
 
   const membership = await superDb.membership.findFirst({
     where: { id: input.membershipId, tenantId: input.tenantId },
     include: { user: { select: { email: true } } },
   });
-  if (!membership) return { result: "skipped", reason: "membership not found" };
+  if (!membership)
+    return {
+      result: "skipped",
+      reason: "membership not found",
+      reasonCode: "membership_not_found",
+    };
 
   // Don't draft a "response" to the User's own outbound bouncing in. The
   // ingest adapter occasionally surfaces sent items as IN (Gmail thread
@@ -104,12 +133,20 @@ export async function produceDraftFromInbound(input: {
     ingested.sender &&
     ingested.sender.trim().toLowerCase() === membership.user.email.toLowerCase()
   ) {
-    return { result: "skipped", reason: "sender is the owning user" };
+    return {
+      result: "skipped",
+      reason: "sender is the owning user",
+      reasonCode: "sender_is_owning_user",
+    };
   }
 
   const lifecycle = getMemberLifecycleState(membership);
   if (!isDraftingPermitted(lifecycle)) {
-    return { result: "skipped", reason: `drafting halted (${lifecycle.kind})` };
+    return {
+      result: "skipped",
+      reason: `drafting halted (${lifecycle.kind})`,
+      reasonCode: "drafting_halted",
+    };
   }
 
   const fcg = await superDb.firmCultureGuide.findFirst({
@@ -117,7 +154,8 @@ export async function produceDraftFromInbound(input: {
     include: { rules: true },
     orderBy: { version: "desc" },
   });
-  if (!fcg) return { result: "skipped", reason: "no committed FCG" };
+  if (!fcg)
+    return { result: "skipped", reason: "no committed FCG", reasonCode: "no_committed_fcg" };
 
   const ucg = await superDb.userCultureGuide.findFirst({
     where: {
