@@ -5,6 +5,7 @@ import { hasPermission } from "@/lib/rbac";
 import { superDb } from "@/lib/db";
 import {
   computeDraftRollup,
+  computePriorPeriodFcgRate,
   type DraftRollup,
   type DraftRollupWindow,
   type SourceBucket,
@@ -74,10 +75,20 @@ export default async function DraftsRollupPage({
       ? (parsedWindow as DraftRollupWindow)
       : 30;
 
-  const rollup = await computeDraftRollup({
-    tenantId: ctx.tenant.id,
-    windowDays,
-  });
+  const [rollup, priorPeriod] = await Promise.all([
+    computeDraftRollup({
+      tenantId: ctx.tenant.id,
+      windowDays,
+    }),
+    // Item 72 — trend pill. Same-length window immediately prior so a
+    // FIRM_ADMIN can answer "are we trending up or down?" alongside
+    // the snapshot rate. Independent query (no shared rollup) so the
+    // CSV export + adherence-monitor cron stay unchanged.
+    computePriorPeriodFcgRate({
+      tenantId: ctx.tenant.id,
+      windowDays,
+    }),
+  ]);
 
   const topMemberIds = rollup.byMembership.map((m) => m.membershipId);
   const memberships = topMemberIds.length
@@ -158,7 +169,15 @@ export default async function DraftsRollupPage({
       </section>
 
       <section className="card space-y-3">
-        <h2 className="text-base font-medium">FCG-window adherence</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-base font-medium">FCG-window adherence</h2>
+          <AdherenceTrendPill
+            current={rollup.fcgWindow.withinWindowRate}
+            prior={priorPeriod.withinWindowRate}
+            priorSentWithDeadline={priorPeriod.sentWithDeadline}
+            windowDays={windowDays}
+          />
+        </div>
         <p className="text-xs text-ink/60">
           The engine&apos;s central promise is &ldquo;respond within the FCG
           window.&rdquo; This is the firm-wide view of whether sent drafts
@@ -355,5 +374,63 @@ function Field({
       <dd className="font-medium">{value}</dd>
       {hint && <dd className="text-[11px] text-ink/50">{hint}</dd>}
     </div>
+  );
+}
+
+/**
+ * Post-PRD item 72 — week-over-week (or selected-window-over-prior-
+ * same-length-window) adherence trend pill. Rendered next to the
+ * FCG-window adherence section heading so the snapshot rate is
+ * always read in context of direction.
+ *
+ * Renders nothing when either side is null — the prior window had no
+ * deadlined sends, or the current window does. The /admin/drafts
+ * snapshot already shows "—" in that case; an empty pill is correct
+ * (we're not faking a 0pp delta against missing data).
+ *
+ * `FLAT_THRESHOLD = 0.01` (1pp) collapses noise — bobbing 1pp
+ * week-over-week shouldn't read as "improving" or "degrading."
+ */
+function AdherenceTrendPill({
+  current,
+  prior,
+  priorSentWithDeadline,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  priorSentWithDeadline: number;
+  windowDays: number;
+}) {
+  if (current === null || prior === null || priorSentWithDeadline === 0) {
+    return null;
+  }
+  const FLAT_THRESHOLD = 0.01;
+  const delta = current - prior;
+  const deltaPp = Math.round(delta * 100);
+  const priorPct = Math.round(prior * 100);
+  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta > FLAT_THRESHOLD) {
+    arrow = "↑";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta < -FLAT_THRESHOLD) {
+    arrow = "↓";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {deltaPp >= 0 ? "+" : ""}
+        {deltaPp}pp vs prior {windowDays}d
+      </span>
+    </span>
   );
 }

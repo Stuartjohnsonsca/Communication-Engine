@@ -143,6 +143,97 @@ export type DraftRollup = {
 /// aggregation (Prisma groupBy); current product scale is <1k/month.
 const MAX_ROWS = 50_000;
 
+/**
+ * Post-PRD item 72 — FCG-window adherence rate over an arbitrary
+ * `[since, until)` range. Used by the /admin/drafts trend pill to
+ * compare current-period adherence against the immediately-prior
+ * same-length window.
+ *
+ * Same exclusions as `computeDraftRollup`'s firm-wide FCG block (item
+ * 66): bypassed-synth drafts and drafts without `fcgWindowDeadline`
+ * never count toward the rate. SQL-side predicates so we don't fetch
+ * rows we'd only drop in-app — mirrors item 69's narrow-query pattern.
+ *
+ * `withinWindowRate` is null when `sentWithDeadline === 0` — there's
+ * no rate to report, and the caller should render "—" rather than 0%.
+ * Same null-when-no-data invariant the rest of the codebase uses.
+ *
+ * Open-overdue is NOT computed here because the prior-period query
+ * doesn't snapshot a single "now" relative to the historic range —
+ * "what was open and overdue 14 days ago" requires a different query
+ * shape (status as of that timestamp) and isn't load-bearing for the
+ * trend pill, which is rate-vs-rate only.
+ */
+export type FcgAdherenceForRange = {
+  sentWithDeadline: number;
+  sentWithinWindow: number;
+  sentAfterWindow: number;
+  withinWindowRate: number | null;
+};
+
+export async function computeFcgAdherenceForRange(input: {
+  tenantId: string;
+  since: Date;
+  until: Date;
+}): Promise<FcgAdherenceForRange> {
+  const rows = await superDb.draft.findMany({
+    where: {
+      tenantId: input.tenantId,
+      createdAt: { gte: input.since, lt: input.until },
+      synthesisedFromOutboundIngest: false,
+      fcgWindowDeadline: { not: null },
+      status: "SENT",
+    },
+    select: {
+      sentMarkedAt: true,
+      fcgWindowDeadline: true,
+    },
+    take: MAX_ROWS,
+  });
+
+  let sentWithinWindow = 0;
+  let sentAfterWindow = 0;
+  for (const r of rows) {
+    if (!r.fcgWindowDeadline || !r.sentMarkedAt) continue;
+    if (r.sentMarkedAt.getTime() <= r.fcgWindowDeadline.getTime()) {
+      sentWithinWindow += 1;
+    } else {
+      sentAfterWindow += 1;
+    }
+  }
+  const sentWithDeadline = sentWithinWindow + sentAfterWindow;
+  return {
+    sentWithDeadline,
+    sentWithinWindow,
+    sentAfterWindow,
+    withinWindowRate:
+      sentWithDeadline > 0 ? sentWithinWindow / sentWithDeadline : null,
+  };
+}
+
+/**
+ * Convenience: the immediately-prior same-length window. For a 7d
+ * call, returns adherence over the [-14d, -7d) range. Used by the
+ * /admin/drafts trend pill to render the week-over-week delta. Same
+ * null-when-no-data shape — when the prior window has no deadlined
+ * sends the caller renders "no comparison available".
+ */
+export async function computePriorPeriodFcgRate(input: {
+  tenantId: string;
+  windowDays: number;
+  now?: Date;
+}): Promise<FcgAdherenceForRange> {
+  const now = input.now ?? new Date();
+  const windowMs = input.windowDays * 24 * 60 * 60 * 1000;
+  const until = new Date(now.getTime() - windowMs);
+  const since = new Date(until.getTime() - windowMs);
+  return computeFcgAdherenceForRange({
+    tenantId: input.tenantId,
+    since,
+    until,
+  });
+}
+
 function emptyStatusCounts(): StatusCounts {
   return { PROPOSED: 0, EDITED: 0, ACCEPTED: 0, SENT: 0, DISCARDED: 0 };
 }
