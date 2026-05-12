@@ -183,13 +183,21 @@ export default async function UsagePage({
 
   return (
     <main className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold">LLM usage</h1>
-        <p className="text-sm text-ink/60">
-          Last {windowDays} days. Tokens recorded per call by{" "}
-          <code className="text-xs">src/lib/ai/client.ts</code>; cost is computed on read from
-          a per-model rate table and is an estimate, not a billing-grade figure.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold">LLM usage</h1>
+          <p className="text-sm text-ink/60">
+            Last {windowDays} days. Tokens recorded per call by{" "}
+            <code className="text-xs">src/lib/ai/client.ts</code>; cost is computed on read from
+            a per-model rate table and is an estimate, not a billing-grade figure.
+          </p>
+        </div>
+        <a
+          href={`/api/admin/usage/export?tenant=${tenantSlug}&window=${windowDays}`}
+          className="rounded border border-ink/20 px-2 py-1 text-sm hover:bg-ink/5"
+        >
+          Download CSV
+        </a>
       </header>
 
       <div className="card grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">

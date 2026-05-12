@@ -403,6 +403,11 @@ enum AuditEventType {
   /// sent } }` so the chain captures shape + scope without dragging
   /// the full numerical detail into the audit row.
   DRAFTS_ROLLUP_EXPORTED
+  /// Post-PRD hardening item 70 — FIRM_ADMIN exported the /admin/usage
+  /// LLM-cost rollup as CSV. Payload carries `{ windowDays, format,
+  /// currency, totals: { calls, costMinor } }`. RBAC gate is
+  /// `usage:read` (FIRM_ADMIN only — commercial data).
+  USAGE_ROLLUP_EXPORTED
 }
 
 enum BillingPeriodStatus {
