@@ -26,3 +26,5 @@ export { runAutoDraftBackfill, BACKFILL_DAYS_BOUNDS } from "./backfill";
 export type { BackfillInput, BackfillResult } from "./backfill";
 export { runDraftStaleSweep } from "./stale-sweep";
 export type { DraftStaleSweepResult } from "./stale-sweep";
+export { computeDraftRollup } from "./rollup";
+export type { DraftRollup, DraftRollupWindow, DraftSource } from "./rollup";

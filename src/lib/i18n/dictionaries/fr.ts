@@ -56,6 +56,7 @@ export const fr: Dictionary = {
     apiKeys: "Clés d'API",
     systemHealth: "Santé système",
     usage: "Usage LLM",
+    draftOutcomes: "Résultats des brouillons",
     help: "Aide & guide",
   },
   shell: {

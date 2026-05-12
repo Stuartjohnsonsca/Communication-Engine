@@ -75,6 +75,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // only). The FCT does not see model spend.
   "usage:read":          ["FIRM_ADMIN"],
 
+  // Item 56 — draft outcome rollup. The "is the engine actually
+  // producing useful drafts?" page (acceptance/send rate, source
+  // split, regeneration, latency). FCT can read for governance
+  // oversight — the rollup answers whether the FCG is producing
+  // on-promise drafts, which is squarely within their remit. The
+  // FCT does NOT see per-User cost (`usage:read` stays FIRM_ADMIN);
+  // outcome metrics are non-commercial.
+  "drafts:read-rollup":  ["FIRM_ADMIN", "FCT_MEMBER"],
+
   // Roadmap (PRD §16). The product roadmap is published to every Client per
   // §15.3 switching/lock-in posture, so any signed-in role can read. Mutating
   // status / exit criteria is operator-only and additionally gated to the

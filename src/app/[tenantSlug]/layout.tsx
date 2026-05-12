@@ -175,6 +175,15 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "usage:read")) {
     nav.push({ href: `/${tenantSlug}/admin/usage`, label: t("nav.usage") });
   }
+  // Post-PRD hardening item 56 — draft outcome rollup. FCT included
+  // (governance signal: is the FCG producing on-promise drafts?);
+  // no commercial data here so it's a wider gate than usage:read.
+  if (hasPermission(ctx.membership.role, "drafts:read-rollup")) {
+    nav.push({
+      href: `/${tenantSlug}/admin/drafts`,
+      label: t("nav.draftOutcomes"),
+    });
+  }
   // Post-PRD hardening item 12 — tenant-wide 2FA policy. Only FIRM_ADMINs
   // can flip the policy; the page itself is gated, but we also hide the
   // nav entry from everyone else to keep the sidebar tidy.

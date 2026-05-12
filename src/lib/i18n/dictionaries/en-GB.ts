@@ -59,6 +59,7 @@ export const enGB: Dictionary = {
     apiKeys: "API keys",
     systemHealth: "System health",
     usage: "LLM usage",
+    draftOutcomes: "Draft outcomes",
     help: "Help & guide",
   },
   shell: {
@@ -259,6 +260,7 @@ export type Dictionary = {
     apiKeys: string;
     systemHealth: string;
     usage: string;
+    draftOutcomes: string;
     help: string;
   };
   shell: {
