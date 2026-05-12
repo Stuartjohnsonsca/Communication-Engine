@@ -53,7 +53,13 @@ export type NotificationKind =
   /// owning Membership needs to reconnect before ingest silently
   /// stops. Not opt-outable: a muted warning here defeats the engine's
   /// "no missed emails" premise.
-  | "channel_auth_expiring";
+  | "channel_auth_expiring"
+  /// Post-PRD item 54 — mandatory operational alert. A Draft's
+  /// `fcgWindowDeadline` has passed without send/discard; the FCG
+  /// promised "respond within N hours" and the engine is now
+  /// silently in breach of that promise. Not opt-outable: the FCG
+  /// commitment is the engine's central value prop.
+  | "draft_stale";
 
 export type DispatchResult = {
   alreadySent: boolean;

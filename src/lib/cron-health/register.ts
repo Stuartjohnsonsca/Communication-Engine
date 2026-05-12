@@ -77,6 +77,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "Item 53 — daily pre-emptive ChannelAuth expiry warning. Scans ACTIVE auths with expiresAt inside 7d and fires a channel_auth_expiring notification at 7d + 1d thresholds, deduped per (auth, threshold) via the dispatch table. Without this, an expiring OAuth token would silently stop ingest with no operator-visible breadcrumb.",
   },
+  {
+    cronName: "draft-stale",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "Item 54 — daily stale-draft sweeper. Scans Drafts whose fcgWindowDeadline has passed without send/discard and fires a draft_stale notification to the owning Membership. One warning per draft (dispatch-table dedupe). Surfaces FCG response-window breach so the firm doesn't silently miss its own commitment.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {

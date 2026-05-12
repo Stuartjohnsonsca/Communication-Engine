@@ -322,6 +322,16 @@ enum AuditEventType {
   /// — one row per (channelAuth, threshold), so a 7-day warning fires
   /// once even though the cron runs daily.
   CHANNEL_AUTH_EXPIRY_WARNED
+  /// Post-PRD hardening item 54 — a daily cron found a Draft whose
+  /// `fcgWindowDeadline` has passed without the owning Membership
+  /// sending or discarding it. The FCG promised "respond within N
+  /// hours" (the agent encoded that as `fcgWindowDeadline` at
+  /// production time); failing to surface that lapse silently
+  /// breaks the engine's central promise. Payload carries
+  /// `{ draftId, fcgWindowDeadline, minutesOverdue, status,
+  /// dispatchId }`. Dedupes via the dispatch table on `draftId` —
+  /// one warning per draft for its lifetime.
+  DRAFT_STALE_WARNED
   TENANT_TOTP_REQUIREMENT_CHANGED
   SESSION_REVOKED
   SESSION_REVOKED_BY_ADMIN
