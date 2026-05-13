@@ -3,6 +3,7 @@ import { promises as dnsPromises } from "node:dns";
 import { superDb, superDbWith } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit";
 import { decryptJson } from "@/lib/channels/crypto";
+import { dispatchNotification } from "@/lib/notifications/dispatch";
 import { reportError, log } from "@/lib/observability";
 import { signBodyMulti, SIGNATURE_HEADER, EVENT_HEADER, DELIVERY_HEADER } from "./signing";
 import { assertEgressAllowed, readBodyWithCap } from "./ssrf";
@@ -389,10 +390,23 @@ async function finaliseDeadLetter(
 async function maybeAutoDisable(subscriptionId: string, tenantId: string) {
   const row = await superDb.webhookSubscription.findUnique({
     where: { id: subscriptionId },
-    select: { id: true, enabled: true, consecutiveFailures: true, autoDisableThreshold: true },
+    select: {
+      id: true,
+      name: true,
+      url: true,
+      enabled: true,
+      consecutiveFailures: true,
+      autoDisableThreshold: true,
+    },
   });
   if (!row || !row.enabled) return;
   if (row.consecutiveFailures < row.autoDisableThreshold) return;
+
+  // Audit FIRST so the chain reflects the trip even if every recipient
+  // dispatch fails — same invariant as items 71/84. The fan-out is a
+  // best-effort additional surface; the audit row is the governance
+  // record.
+  const disabledAt = new Date();
   await superDb.webhookSubscription.update({
     where: { id: subscriptionId },
     data: { enabled: false },
@@ -406,8 +420,114 @@ async function maybeAutoDisable(subscriptionId: string, tenantId: string) {
     payload: {
       consecutiveFailures: row.consecutiveFailures,
       autoDisableThreshold: row.autoDisableThreshold,
+      disabledAt: disabledAt.toISOString(),
     },
   });
+
+  // Post-PRD item 85 — mandatory operational alert. Without this
+  // notification, an auto-disabled SIEM/archive subscription is
+  // invisible to the operator until they visit /admin/webhooks; in
+  // the meantime no audit events are flowing to their receiver. Fan
+  // out to every active FIRM_ADMIN.
+  await notifyAdminsOfAutoDisable({
+    tenantId,
+    subscriptionId,
+    subscriptionName: row.name,
+    subscriptionUrl: row.url,
+    consecutiveFailures: row.consecutiveFailures,
+    autoDisableThreshold: row.autoDisableThreshold,
+    disabledAt,
+  });
+}
+
+/**
+ * Post-PRD item 85 — webhook auto-disable notification fan-out.
+ *
+ * dedupeKey includes the trip's `disabledAt` ISO timestamp so a
+ * re-enable + re-disable cycle on the same subscription gets a fresh
+ * notification: the operator deliberately turned it back on, so if it
+ * fails again that's a separate news event worth saying again.
+ * Without the timestamp, item 14's reset-failure-counter-on-re-enable
+ * invariant would silently swallow the second-cycle alert.
+ *
+ * Errors from individual dispatches are swallowed via `reportError` —
+ * the audit row is the canonical "we tried to tell people" record.
+ * The auto-disable side-effect (subscription disabled, audit written)
+ * must NOT be rolled back by a transient SMTP outage.
+ *
+ * FIRM_ADMIN-only recipients — same posture as `webhooks:configure`
+ * RBAC (item 14): only operators with subscription-edit authority can
+ * meaningfully act on the alert (re-enable, fix the receiver, delete
+ * the subscription). USER + FCT_MEMBER would just be CC'd noise.
+ */
+async function notifyAdminsOfAutoDisable(input: {
+  tenantId: string;
+  subscriptionId: string;
+  subscriptionName: string;
+  subscriptionUrl: string;
+  consecutiveFailures: number;
+  autoDisableThreshold: number;
+  disabledAt: Date;
+}) {
+  const admins = await superDb.membership.findMany({
+    where: { tenantId: input.tenantId, role: "FIRM_ADMIN", status: "ACTIVE" },
+    include: { user: { select: { email: true } } },
+  });
+  if (admins.length === 0) return;
+
+  const tenant = await superDb.tenant.findUnique({
+    where: { id: input.tenantId },
+    select: { name: true, slug: true },
+  });
+  if (!tenant) return;
+
+  const dedupeKey = `webhook-auto-disabled:${input.subscriptionId}:${input.disabledAt.toISOString()}`;
+  const subject =
+    `[${tenant.name}] Webhook subscription auto-disabled: ${input.subscriptionName}`;
+  const text =
+    `The webhook subscription "${input.subscriptionName}" → ${input.subscriptionUrl} has been ` +
+    `automatically disabled after ${input.consecutiveFailures} consecutive dead-lettered ` +
+    `deliveries (threshold: ${input.autoDisableThreshold}).\n\n` +
+    `No further events will be POSTed to this receiver until it is re-enabled. If this is a SIEM ` +
+    `or archive endpoint, audit events are no longer flowing to it.\n\n` +
+    `Open /admin/webhooks to investigate the failure pattern and re-enable when the receiver is ` +
+    `healthy. Re-enabling resets the consecutive-failure counter to zero.`;
+
+  for (const m of admins) {
+    if (!m.user.email) continue;
+    try {
+      await dispatchNotification({
+        tenantId: input.tenantId,
+        membershipId: m.id,
+        toEmail: m.user.email,
+        kind: "webhook_subscription_auto_disabled",
+        dedupeKey,
+        subject,
+        text,
+        summary: `Auto-disabled after ${input.consecutiveFailures} consecutive failures`,
+        href: `/${tenant.slug}/admin/webhooks/${input.subscriptionId}`,
+        payload: {
+          subscriptionId: input.subscriptionId,
+          subscriptionName: input.subscriptionName,
+          subscriptionUrl: input.subscriptionUrl,
+          consecutiveFailures: input.consecutiveFailures,
+          autoDisableThreshold: input.autoDisableThreshold,
+          disabledAt: input.disabledAt.toISOString(),
+        },
+      });
+    } catch (err) {
+      reportError(
+        err,
+        {
+          route: "lib/webhooks/deliver",
+          tenantId: input.tenantId,
+          membershipId: m.id,
+          extra: { subscriptionId: input.subscriptionId },
+        },
+        "webhook auto-disable notification dispatch failed",
+      );
+    }
+  }
 }
 
 /**

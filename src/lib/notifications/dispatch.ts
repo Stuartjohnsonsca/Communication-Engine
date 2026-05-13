@@ -122,7 +122,23 @@ export type NotificationKind =
   /// complaints" defeats governance. dedupeKey is the ISO week so
   /// a chronically-slow tenant gets one alert per week, not one per
   /// cron tick. Sister to item 71's `firm_adherence_below_threshold`.
-  | "firm_sentiment_ack_rate_below_threshold";
+  | "firm_sentiment_ack_rate_below_threshold"
+  /// Post-PRD item 85 — mandatory operational alert. A webhook
+  /// subscription has been auto-disabled after `autoDisableThreshold`
+  /// consecutive dead-lettered deliveries (item 14). Without this
+  /// notification the operator's only signal is the "Disabled" tag
+  /// on /admin/webhooks — easy to miss, and meanwhile the receiver
+  /// (e.g. a SIEM, an archive endpoint, a Slack incoming-webhook)
+  /// has gone DARK and no audit events are flowing. Fans out to
+  /// every active FIRM_ADMIN. Not opt-outable: an auto-disabled
+  /// SIEM/archive subscription is exactly the kind of silent failure
+  /// this engine exists to surface; muting it defeats integration
+  /// observability. dedupeKey is `webhook-auto-disabled:<subscriptionId>:<isoTrip>`
+  /// where `isoTrip` is the disable timestamp, so a re-enable +
+  /// re-disable cycle on the same subscription gets a fresh
+  /// notification (the operator deliberately re-enabled it — if it
+  /// fails again, that's news worth saying again).
+  | "webhook_subscription_auto_disabled";
 
 export type DispatchResult = {
   alreadySent: boolean;
