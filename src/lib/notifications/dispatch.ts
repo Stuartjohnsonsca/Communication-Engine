@@ -98,7 +98,18 @@ export type NotificationKind =
   /// breaking it" alert defeats governance. dedupeKey is the ISO
   /// week so a chronically-poor tenant gets one alert per week,
   /// not one per cron tick.
-  | "firm_adherence_below_threshold";
+  | "firm_adherence_below_threshold"
+  /// Post-PRD item 77 — mandatory governance nudge. A PRD §9.3
+  /// sentiment escalation has been left unacknowledged for
+  /// `STALE_THRESHOLD_HOURS`. Fans out to the same audience the
+  /// original escalation reached (assigned User + FCT_MEMBER +
+  /// FIRM_ADMIN). Not opt-outable: the unacked complaint IS the
+  /// thing this notification exists to surface, and the original
+  /// `sentiment_escalation` is also mandatory — muting the nudge
+  /// would let extreme-negative counterparty signals sit
+  /// indefinitely. dedupeKey is the SentimentSignal id so each
+  /// unacked escalation fires the nudge exactly once.
+  | "sentiment_escalation_stale";
 
 export type DispatchResult = {
   alreadySent: boolean;

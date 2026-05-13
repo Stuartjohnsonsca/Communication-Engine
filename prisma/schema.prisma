@@ -416,6 +416,17 @@ enum AuditEventType {
   /// (tenant, ISO week) — same dedupe slot as the notification — so a
   /// chronically-poor tenant doesn't fill the chain with daily duplicates.
   FIRM_ADHERENCE_BELOW_THRESHOLD
+  /// Post-PRD hardening item 77 — hourly cron found a SentimentSignal
+  /// escalated `STALE_THRESHOLD_HOURS` ago that nobody has acknowledged
+  /// yet. Fires a second-chance `sentiment_escalation_stale`
+  /// notification to the original audience (assigned User + FCT_MEMBER
+  /// + FIRM_ADMIN). One audit + one dispatch slot per signal — the
+  /// initial escalation fired at signal creation, this is the nudge.
+  /// Payload: `{ signalId, hoursSinceEscalation, classification,
+  /// dispatchedRecipients }`. Acknowledgement clears the unacked state
+  /// so a re-escalated signal that's already been acked won't be
+  /// re-warned.
+  SENTIMENT_ESCALATION_STALE_WARNED
   /// Post-PRD hardening item 76 — operator exported the full list of
   /// FCG-window misses (sent-after-window + open-overdue) as CSV.
   /// Distinct from `DRAFTS_ROLLUP_EXPORTED` (the aggregate rollup):

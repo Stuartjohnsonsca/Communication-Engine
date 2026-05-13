@@ -139,6 +139,76 @@ export async function dispatchSentimentEscalation(input: {
   return { recipients: recipients.length };
 }
 
+// ─── Sentiment escalation stale (post-PRD backlog item 77) ────────────────
+
+export async function dispatchSentimentEscalationStale(input: {
+  tenantId: string;
+  tenantSlug: string;
+  signalId: string;
+  assignedToMembershipId: string | null;
+  hoursSinceEscalation: number;
+  trigger?: string | null;
+  inboundSender?: string | null;
+}): Promise<{ recipients: number }> {
+  // Same audience as the original escalation (assigned User + FCT +
+  // FIRM_ADMIN). The original `sentiment_escalation` fires at signal
+  // creation; this is the second-chance nudge once `STALE_THRESHOLD_HOURS`
+  // have passed without acknowledgement.
+  const recipients: Recipient[] = [];
+  const exclude: string[] = [];
+  if (input.assignedToMembershipId) {
+    const self = await selfRecipient(input.tenantId, input.assignedToMembershipId);
+    if (self) {
+      recipients.push(self);
+      exclude.push(self.membershipId);
+    }
+  }
+  recipients.push(...(await fctAndAdminRecipients(input.tenantId, exclude)));
+
+  const hours = Math.max(1, Math.round(input.hoursSinceEscalation));
+  const subject = `Unacknowledged sentiment escalation · ${hours}h`;
+  const summary = input.inboundSender
+    ? `From ${input.inboundSender}${input.trigger ? ` — ${input.trigger}` : ""}`
+    : (input.trigger ?? "Escalated sentiment signal awaiting acknowledgement.");
+  const body = [
+    `A sentiment escalation has been outstanding for ${hours} hours without acknowledgement.`,
+    "",
+    input.trigger ? `Trigger: ${input.trigger}` : null,
+    input.inboundSender ? `From: ${input.inboundSender}` : null,
+    "",
+    `Acknowledge it on /${input.tenantSlug}/sentiment so the firm has a documented response to the complaint.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const href = `/${input.tenantSlug}/sentiment`;
+
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: input.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "sentiment_escalation_stale",
+      // dedupeKey == signalId. Dispatch dedupe is keyed on
+      // (membershipId, kind, dedupeKey), so reusing the signal id is
+      // safe across kinds — the original `sentiment_escalation` row
+      // (kind=sentiment_escalation, dedupeKey=signalId) and this nudge
+      // (kind=sentiment_escalation_stale, dedupeKey=signalId) occupy
+      // distinct slots. One stale nudge per (membership, signal) ever.
+      dedupeKey: input.signalId,
+      subject,
+      summary,
+      text: body,
+      href,
+      payload: {
+        signalId: input.signalId,
+        hoursSinceEscalation: hours,
+        recipientReason: r.reason,
+      },
+    });
+  }
+  return { recipients: recipients.length };
+}
+
 // ─── Adherence escalation (post-PRD backlog item 1) ───────────────────────
 
 export async function dispatchAdherenceEscalation(input: {
