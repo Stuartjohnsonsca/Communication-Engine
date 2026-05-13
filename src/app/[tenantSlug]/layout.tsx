@@ -262,6 +262,13 @@ export default async function TenantLayout({
       <nav className="mt-6 space-y-1 text-sm">
         {nav.map((n) => {
           const badge = badges.byHref[n.href] ?? 0;
+          // Item 82 — stale tone paints the badge red, signalling
+          // "the count above includes work that has crossed the
+          // 4h stale line." Today only emitted for /sentiment.
+          const stale = badges.tones[n.href] === "stale";
+          const badgeCls = stale
+            ? "ml-2 inline-flex min-w-[1.25rem] justify-center rounded-full bg-red-700 px-1.5 py-0.5 text-[10px] font-medium leading-none text-white"
+            : "ml-2 inline-flex min-w-[1.25rem] justify-center rounded-full bg-ink px-1.5 py-0.5 text-[10px] font-medium leading-none text-white";
           return (
             <Link
               key={n.href}
@@ -270,7 +277,10 @@ export default async function TenantLayout({
             >
               <span>{n.label}</span>
               {badge > 0 && (
-                <span className="ml-2 inline-flex min-w-[1.25rem] justify-center rounded-full bg-ink px-1.5 py-0.5 text-[10px] font-medium leading-none text-white">
+                <span
+                  className={badgeCls}
+                  title={stale ? "Includes signal(s) outstanding > 4h" : undefined}
+                >
                   {badge > 99 ? "99+" : badge}
                 </span>
               )}

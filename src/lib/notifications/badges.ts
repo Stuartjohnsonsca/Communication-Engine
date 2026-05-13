@@ -16,9 +16,31 @@ import { bucketDrafts } from "@/lib/drafts/triage";
 export type NavBadges = {
   /** href → numeric badge (0 = no badge). */
   byHref: Record<string, number>;
+  /**
+   * Item 82 — per-href tone hint for the sidebar renderer. Today only
+   * `stale` is emitted, for the /sentiment row when the oldest unacked
+   * escalation has been outstanding longer than `STALE_THRESHOLD_HOURS`
+   * (item 77's 4h boundary — same number the stale-sweep cron uses to
+   * fire `sentiment_escalation_stale`). The renderer paints a red badge
+   * instead of black so the Member sees "you have unacked work AND some
+   * of it has crossed the stale line" at a glance from any page.
+   *
+   * `byHref` and `tones` are independent: a stale sentiment badge with
+   * count 1 is meaningfully different from a fresh sentiment badge with
+   * count 10. Future tones (e.g. `urgent` for >24h) can extend this
+   * without touching the badge count contract.
+   */
+  tones: Record<string, "stale">;
   /** Total unread NotificationInbox rows for this membership. */
   unreadInbox: number;
 };
+
+/**
+ * Item 82 — kept in sync with item 77's `STALE_THRESHOLD_HOURS` in
+ * `src/lib/sentiment/stale-sweep.ts`. Exported so a future per-tenant
+ * sensitivity override can reuse it for both the cron and the badge.
+ */
+const SENTIMENT_STALE_THRESHOLD_HOURS = 4;
 
 export async function getNavBadges(input: {
   tenantId: string;
@@ -33,11 +55,24 @@ export async function getNavBadges(input: {
   const canSeeFirmWide = hasPermission(membership.role, "members:read");
   const canAckBreach = hasPermission(membership.role, "breach:notify");
 
+  // Item 82 — `sentimentScope` is the per-Member-vs-firm-wide split,
+  // factored so the count query AND the stale-oldest query share the
+  // exact same predicate. Drift here would mean the badge count says 3
+  // (firm-wide view) but the stale flag is computed from a different
+  // 5-signal set (self-view), or vice versa.
+  const sentimentScope = {
+    tenantId,
+    escalatedAt: { not: null },
+    acknowledgedAt: null,
+    ...(canSeeFirmWide ? {} : { assignedToMembershipId: membership.id }),
+  };
+
   const [
     fcgProposalsOpen,
     actionsOverdue,
     openDrafts,
     sentimentMine,
+    sentimentOldest,
     adherenceMine,
     breachPending,
     inboxUnread,
@@ -73,22 +108,16 @@ export async function getNavBadges(input: {
       },
       take: 200,
     }),
-    canSeeFirmWide
-      ? superDb.sentimentSignal.count({
-          where: {
-            tenantId,
-            escalatedAt: { not: null },
-            acknowledgedAt: null,
-          },
-        })
-      : superDb.sentimentSignal.count({
-          where: {
-            tenantId,
-            escalatedAt: { not: null },
-            acknowledgedAt: null,
-            assignedToMembershipId: membership.id,
-          },
-        }),
+    superDb.sentimentSignal.count({ where: sentimentScope }),
+    // Item 82 — oldest unacked escalation in scope, used to compute the
+    // `stale` tone flag. `findFirst` with `escalatedAt: asc` is cheap
+    // and returns null when there's nothing unacked, which the tone
+    // logic below handles as "no badge, no tone."
+    superDb.sentimentSignal.findFirst({
+      where: sentimentScope,
+      select: { escalatedAt: true },
+      orderBy: { escalatedAt: "asc" },
+    }),
     canSeeFirmWide
       ? superDb.communicationAdherence.count({
           where: {
@@ -133,8 +162,23 @@ export async function getNavBadges(input: {
   if (breachPending) byHref[`/${tenantSlug}/compliance/breaches`] = breachPending;
   if (inboxUnread) byHref[`/${tenantSlug}/notifications`] = inboxUnread;
 
+  // Item 82 — stale-tone flag for the sentiment badge. Only emitted
+  // when the badge itself is present (sentimentMine > 0); a tone on
+  // a zero-count badge would never be rendered anyway. Threshold
+  // matches item 77's cron — same number, so the badge turns red at
+  // exactly the moment the stale-sweep cron would have warned (or
+  // already has).
+  const tones: Record<string, "stale"> = {};
+  if (sentimentMine > 0 && sentimentOldest?.escalatedAt) {
+    const ageMs = Date.now() - sentimentOldest.escalatedAt.getTime();
+    if (ageMs > SENTIMENT_STALE_THRESHOLD_HOURS * 60 * 60_000) {
+      tones[`/${tenantSlug}/sentiment`] = "stale";
+    }
+  }
+
   return {
     byHref,
+    tones,
     unreadInbox: inboxUnread,
   };
 }

@@ -12,6 +12,8 @@ import {
   type SentimentMetrics,
 } from "@/lib/sentiment/metrics";
 import AcknowledgeButton from "./AcknowledgeButton";
+import { AutoRefresh } from "./AutoRefresh";
+import { LiveOutstanding } from "./LiveOutstanding";
 
 type Filter = "ALL" | "ESCALATED" | "EXTREME_NEG" | "EXTREME_POS" | "NEUTRAL";
 const FILTERS: Filter[] = ["ESCALATED", "EXTREME_NEG", "EXTREME_POS", "NEUTRAL", "ALL"];
@@ -127,6 +129,12 @@ export default async function SentimentPage({
     }),
   ]);
 
+  // Item 82 — single "render now" timestamp threaded into every
+  // LiveOutstanding instance so the initial server-rendered age (used
+  // for hydration) is consistent across the page. The client takes
+  // over on first effect tick.
+  const renderedAt = new Date();
+
   const countMap: Record<string, number> = {};
   for (const c of counts) countMap[c.classification] = c._count._all;
 
@@ -160,6 +168,10 @@ export default async function SentimentPage({
 
   return (
     <div className="space-y-4">
+      {/* Item 82 — visibility-gated 60s router.refresh(). Mounted at
+          the top so it's installed before the user can interact with
+          the page. Cleans up automatically on route change. */}
+      <AutoRefresh />
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Sentiment monitoring</h1>
         <span className="text-xs text-ink/50">
@@ -230,6 +242,18 @@ export default async function SentimentPage({
                     )}
                     {s.trigger && (
                       <span className="text-xs text-ink/60">trigger: {s.trigger}</span>
+                    )}
+                    {/* Item 82 — live "Xm outstanding" tick for unacked-
+                        escalated signals. Updates every 10s on the
+                        client. Red past 4h (item 77 threshold). */}
+                    {isEsc && !isAck && s.escalatedAt && (
+                      <LiveOutstanding
+                        escalatedAt={s.escalatedAt.toISOString()}
+                        initialAgeMs={Math.max(
+                          0,
+                          renderedAt.getTime() - s.escalatedAt.getTime(),
+                        )}
+                      />
                     )}
                   </div>
                   <div className="text-xs text-ink/50">

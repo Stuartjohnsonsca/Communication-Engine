@@ -389,6 +389,105 @@ describe("Notifications — nav badges", () => {
     // Plain USER cannot vote on FCG proposals → no fcg badge.
     expect(badges.byHref[`/${t.slug}/fcg`]).toBeUndefined();
   });
+
+  // Item 82 — sentiment badge gets a `stale` tone when the oldest
+  // unacked escalation has been outstanding > 4h. Same threshold as
+  // item 77's cron — the badge turns red at exactly the moment the
+  // stale-sweep cron would have warned.
+  it("flags stale tone on sentiment when oldest unacked > 4h", async () => {
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    // One unacked escalation, 5h old.
+    await superDb.sentimentSignal.create({
+      data: {
+        tenantId: t.id,
+        classification: "EXTREME_NEG",
+        confidence: 0.9,
+        isAboutFirmHandling: true,
+        shouldEscalate: true,
+        escalatedAt: new Date(Date.now() - 5 * 60 * 60 * 1000),
+        assignedToMembershipId: user.id,
+      },
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/sentiment`]).toBe(1);
+    expect(badges.tones[`/${t.slug}/sentiment`]).toBe("stale");
+  });
+
+  it("no stale tone when oldest unacked is under 4h", async () => {
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    await superDb.sentimentSignal.create({
+      data: {
+        tenantId: t.id,
+        classification: "EXTREME_NEG",
+        confidence: 0.9,
+        isAboutFirmHandling: true,
+        shouldEscalate: true,
+        escalatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        assignedToMembershipId: user.id,
+      },
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/sentiment`]).toBe(1);
+    expect(badges.tones[`/${t.slug}/sentiment`]).toBeUndefined();
+  });
+
+  it("no stale tone when zero unacked escalations", async () => {
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/sentiment`]).toBeUndefined();
+    expect(badges.tones[`/${t.slug}/sentiment`]).toBeUndefined();
+  });
+
+  it("ignores an acked-old signal when computing stale tone", async () => {
+    // An acked signal that was escalated 10h ago must NOT trigger the
+    // stale tone — the badge predicate already filters to acknowledgedAt:
+    // null, but the oldest-unacked findFirst uses the SAME predicate,
+    // so an acked old signal is invisible to both.
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    await superDb.sentimentSignal.create({
+      data: {
+        tenantId: t.id,
+        classification: "EXTREME_NEG",
+        confidence: 0.9,
+        isAboutFirmHandling: true,
+        shouldEscalate: true,
+        escalatedAt: new Date(Date.now() - 10 * 60 * 60 * 1000),
+        acknowledgedAt: new Date(Date.now() - 9 * 60 * 60 * 1000),
+        assignedToMembershipId: user.id,
+      },
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/sentiment`]).toBeUndefined();
+    expect(badges.tones[`/${t.slug}/sentiment`]).toBeUndefined();
+  });
 });
 
 describe("Notifications — aggregate (helper)", () => {
