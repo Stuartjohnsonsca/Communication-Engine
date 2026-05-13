@@ -8,6 +8,8 @@ import {
   DUE_SOON_HORIZON_HOURS,
   RECENTLY_CLOSED_HORIZON_DAYS,
 } from "@/lib/drafts";
+import { AutoRefresh } from "@/components/AutoRefresh";
+import { LiveDeadline } from "./LiveDeadline";
 
 /**
  * Post-PRD hardening item 64 — FCG-deadline triage on the Member
@@ -68,6 +70,7 @@ export default async function DraftsPage({
   });
 
   const now = new Date();
+  const initialNowMs = now.getTime();
   const open = bucketDrafts(openDrafts, now);
   const closed = bucketDrafts(closedDrafts, now);
   const overdue = open.overdue;
@@ -80,6 +83,14 @@ export default async function DraftsPage({
 
   return (
     <div className="space-y-4">
+      {/*
+        Item 87: visibility-gated 60s page refresh + per-row live FCG
+        countdown. Mirrors the /sentiment surface from item 82 so the
+        Member feels deadline pressure mounting between server refreshes
+        and externally-sent drafts disappear within ~60s without manual
+        reload.
+      */}
+      <AutoRefresh />
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Drafts</h1>
         <Link href={`/${tenantSlug}/drafts/new`} className="btn btn-primary">
@@ -129,6 +140,8 @@ export default async function DraftsPage({
           tenantSlug={tenantSlug}
           accentClass="border-l-4 border-l-red-500"
           now={now}
+          initialNowMs={initialNowMs}
+          live
         />
       )}
 
@@ -140,6 +153,8 @@ export default async function DraftsPage({
           tenantSlug={tenantSlug}
           accentClass="border-l-4 border-l-amber-500"
           now={now}
+          initialNowMs={initialNowMs}
+          live
         />
       )}
 
@@ -151,6 +166,8 @@ export default async function DraftsPage({
           tenantSlug={tenantSlug}
           accentClass=""
           now={now}
+          initialNowMs={initialNowMs}
+          live
         />
       )}
 
@@ -162,6 +179,8 @@ export default async function DraftsPage({
           tenantSlug={tenantSlug}
           accentClass="opacity-70"
           now={now}
+          initialNowMs={initialNowMs}
+          live={false}
         />
       )}
     </div>
@@ -191,6 +210,8 @@ function DraftSection({
   tenantSlug,
   accentClass,
   now,
+  initialNowMs,
+  live,
 }: {
   title: string;
   subtitle: string;
@@ -198,6 +219,13 @@ function DraftSection({
   tenantSlug: string;
   accentClass: string;
   now: Date;
+  /** Item 87: passed once per page render so every LiveDeadline in the
+   * section hydrates against the same server timestamp. */
+  initialNowMs: number;
+  /** Item 87: open sections render a live-tick countdown; recently
+   * closed renders the static historic label because a sent / discarded
+   * draft has no actionable deadline left. */
+  live: boolean;
 }) {
   return (
     <section className="space-y-2">
@@ -237,19 +265,31 @@ function DraftSection({
                       {d.noGoSubjectHit && (
                         <span className="tag bg-red-100">no-go subject</span>
                       )}
-                      {deadlineLabel && (
-                        <span
-                          className={
-                            deadline && deadline.getTime() < now.getTime()
-                              ? "tag bg-red-100 text-red-900"
-                              : "tag bg-amber-100 text-amber-900"
-                          }
-                        >
-                          {deadlineLabel}
-                          <span className="ml-1 text-ink/50">
-                            ({deadline!.toISOString().slice(0, 16).replace("T", " ")})
+                      {deadline && (
+                        live ? (
+                          <span className="inline-flex items-center gap-1">
+                            <LiveDeadline
+                              deadline={deadline.toISOString()}
+                              initialNowMs={initialNowMs}
+                            />
+                            <span className="text-ink/50">
+                              ({deadline.toISOString().slice(0, 16).replace("T", " ")})
+                            </span>
                           </span>
-                        </span>
+                        ) : (
+                          <span
+                            className={
+                              deadline.getTime() < now.getTime()
+                                ? "tag bg-red-100 text-red-900"
+                                : "tag bg-amber-100 text-amber-900"
+                            }
+                          >
+                            {deadlineLabel}
+                            <span className="ml-1 text-ink/50">
+                              ({deadline.toISOString().slice(0, 16).replace("T", " ")})
+                            </span>
+                          </span>
+                        )
                       )}
                       <span>{d.createdAt.toISOString().slice(0, 16).replace("T", " ")}</span>
                       {d._count.actions > 0 && (

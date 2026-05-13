@@ -41,6 +41,7 @@
  */
 
 import { superDb } from "@/lib/db";
+import { formatDuration } from "@/lib/format/duration";
 import type { SentimentMetricsWindow } from "./metrics";
 
 export const UTF8_BOM = "﻿";
@@ -228,7 +229,7 @@ function ackRow(
     ackedLabel,
     r.ackMs.toString(),
     "",
-    formatDurationLabel(r.ackMs),
+    formatDuration(r.ackMs),
   ]
     .map(csvField)
     .join(",");
@@ -255,32 +256,10 @@ function openRow(
     "",
     "",
     r.outstandingMs.toString(),
-    formatDurationLabel(r.outstandingMs),
+    formatDuration(r.outstandingMs),
   ]
     .map(csvField)
     .join(",");
-}
-
-/**
- * Render a positive duration as `<1m` / `Nm` / `Nh` / `Nd` so the CSV
- * carries both the raw numeric (`ackMs` / `outstandingMs`, for
- * spreadsheet sorts) and a human-readable label. Mirrors the
- * `formatLateBy` formatter from drafts (item 74 page + item 76 CSV)
- * and the page's `formatTtaDuration`; this is now the fourth site
- * with the same shape — the duplication is mature enough that the
- * next caller should extract a shared `src/lib/format/duration.ts`
- * (the threshold mentioned in item 78's metrics.ts and item 76's
- * misses-export.ts). For now keeping the inline copy avoids
- * cross-module entanglement in a single shipped item.
- */
-function formatDurationLabel(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(ms / (60 * 60_000));
-  if (hours < 48) return `${hours}h`;
-  const days = Math.round(ms / (24 * 60 * 60_000));
-  return `${days}d`;
 }
 
 const CSV_NEEDS_QUOTING = /[",\r\n]/;

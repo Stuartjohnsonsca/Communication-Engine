@@ -11,8 +11,8 @@ import {
   type MemberSentimentMetrics,
   type SentimentMetrics,
 } from "@/lib/sentiment/metrics";
+import { AutoRefresh } from "@/components/AutoRefresh";
 import AcknowledgeButton from "./AcknowledgeButton";
-import { AutoRefresh } from "./AutoRefresh";
 import { LiveOutstanding } from "./LiveOutstanding";
 
 type Filter = "ALL" | "ESCALATED" | "EXTREME_NEG" | "EXTREME_POS" | "NEUTRAL";

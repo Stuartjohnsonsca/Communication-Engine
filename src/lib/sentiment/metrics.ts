@@ -411,22 +411,15 @@ function percentile(values: number[], p: number): number | null {
 }
 
 /**
- * Render a positive duration as `<1m` / `Nm` / `Nh` / `Nd`. Pure
- * formatter — shared between the page card and the metrics tooltip.
- * Mirrors the `formatLateBy` formatter from drafts (item 74 page +
- * item 76 CSV); at three sites the duplication threshold flips and
- * the helper should be extracted into a shared module.
+ * Re-exported under the historical name so existing call sites
+ * (`/sentiment` page, `/account`, `firm-ack-monitor.ts`, and the
+ * `sentiment-metrics.test.ts` suite) keep working unchanged. The
+ * implementation now lives in `@/lib/format/duration` — item 87
+ * extracted it after the fifth caller (the new `<LiveDeadline />`
+ * /drafts countdown) tripped the duplication threshold telegraphed
+ * by items 78 / 82 / 83.
  */
-export function formatTtaDuration(ms: number | null): string {
-  if (ms === null) return "—";
-  if (ms < 60_000) return "<1m";
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(ms / (60 * 60_000));
-  if (hours < 48) return `${hours}h`;
-  const days = Math.round(ms / (24 * 60 * 60_000));
-  return `${days}d`;
-}
+export { formatDurationOrDash as formatTtaDuration } from "@/lib/format/duration";
 
 /**
  * Post-PRD item 80 — bootstrap 95% CI on the median of an ack-duration

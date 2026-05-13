@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getTenantContext } from "@/lib/tenant";
 import { hasPermission } from "@/lib/rbac";
 import { superDb } from "@/lib/db";
+import { formatDuration } from "@/lib/format/duration";
 import {
   computeDraftRollup,
   computePriorPeriodFcgRate,
@@ -556,7 +557,7 @@ function MissesTable({
                     )}
                   </td>
                   <td className="py-2 pr-3 font-medium text-red-900">
-                    {formatLateBy(r.lateMs)}
+                    {formatDuration(r.lateMs)}
                   </td>
                 </tr>
               );
@@ -570,22 +571,6 @@ function MissesTable({
 
 function formatIsoMinute(d: Date): string {
   return d.toISOString().slice(0, 16).replace("T", " ");
-}
-
-/// Render a positive duration as a short "Nm" / "Nh" / "Nd" string.
-/// Sub-minute collapses to "<1m" so a 30-second tail doesn't read as
-/// "0m late". Mirror of `formatDeadlineRelative` from triage — same
-/// shape, but works on a raw ms duration rather than a deadline+now
-/// pair, so it can be used for both sent-after (sentAt - deadline)
-/// and open-overdue (now - deadline) without a wrapper.
-function formatLateBy(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(ms / (60 * 60_000));
-  if (hours < 48) return `${hours}h`;
-  const days = Math.round(ms / (24 * 60 * 60_000));
-  return `${days}d`;
 }
 
 /**

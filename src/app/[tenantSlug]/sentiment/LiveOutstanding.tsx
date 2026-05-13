@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatDuration } from "@/lib/format/duration";
 
 /**
  * Post-PRD hardening item 82 — client-side live "Xm outstanding"
@@ -26,7 +27,11 @@ import { useEffect, useState } from "react";
  * at render time would mismatch between server SSR and client hydrate).
  * The component starts displaying live time on the first client-side
  * effect tick, AFTER hydration. Initial display matches the server
- * (showing the static label from `formatOutstanding(initialAge)`).
+ * (showing the static label from `formatDuration(initialAge)`).
+ *
+ * Item 87: switched from the inline `formatOutstanding` to the shared
+ * `@/lib/format/duration` extraction (the fifth caller — items 78 / 82
+ * / 83 had telegraphed this).
  */
 export function LiveOutstanding({
   escalatedAt,
@@ -89,25 +94,7 @@ export function LiveOutstanding({
       }
       title={`Escalated ${escalatedAt}`}
     >
-      {formatOutstanding(ageMs)} outstanding
+      {formatDuration(ageMs)} outstanding
     </span>
   );
-}
-
-/**
- * Same bracket scheme as `formatTtaDuration` in the metrics lib —
- * `<1m` / `Nm` / `Nh` / `Nd` — but duplicated here to avoid pulling
- * the server-only `@/lib/sentiment/metrics` import (and its
- * transitive Prisma deps) into a `"use client"` bundle. If a third
- * client site needs the formatter, extract to `src/lib/format/duration.ts`
- * and import from both sides.
- */
-function formatOutstanding(ms: number): string {
-  if (ms < 60_000) return "<1m";
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(ms / (60 * 60_000));
-  if (hours < 48) return `${hours}h`;
-  const days = Math.round(ms / (24 * 60 * 60_000));
-  return `${days}d`;
 }

@@ -34,6 +34,7 @@
  */
 
 import { superDb } from "@/lib/db";
+import { formatDuration } from "@/lib/format/duration";
 import type { DraftRollupWindow, FcgMissRow } from "./rollup";
 
 export const UTF8_BOM = "﻿";
@@ -184,25 +185,10 @@ function csvRow(
     r.fcgWindowDeadline.toISOString(),
     r.sentMarkedAt ? r.sentMarkedAt.toISOString() : "",
     r.lateMs.toString(),
-    formatLateBy(r.lateMs),
+    formatDuration(r.lateMs),
   ]
     .map(csvField)
     .join(",");
-}
-
-/// Render a positive duration as `<1m` / `Nm` / `Nh` / `Nd` so the CSV
-/// carries both the raw numeric `lateMs` (for sorting in spreadsheets)
-/// and a human-readable label. Mirror of the page's inline formatter;
-/// two use sites is the duplicate threshold this codebase uses
-/// (extract at three).
-function formatLateBy(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(ms / (60 * 60_000));
-  if (hours < 48) return `${hours}h`;
-  const days = Math.round(ms / (24 * 60 * 60_000));
-  return `${days}d`;
 }
 
 const CSV_NEEDS_QUOTING = /[",\r\n]/;
