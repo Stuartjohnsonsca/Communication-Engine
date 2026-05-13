@@ -59,7 +59,94 @@ export type SentimentMetrics = {
   /// "in-window" scoping matters: a 90d-old unacked signal
   /// shouldn't dominate a 7d view.
   oldestUnackedMs: number | null;
+  /**
+   * Post-PRD item 80 — per-Member breakdown. Present (possibly empty)
+   * when the caller passed `withByMember: true`, undefined otherwise.
+   * Built in the same scan as the firm-wide aggregate so the table on
+   * /sentiment can't disagree with the headline tiles about which
+   * signals counted (mirrors item 67's invariant: per-Member counters
+   * derive from one classifier).
+   *
+   * Members with zero in-window signals do NOT appear (the FIRM_ADMIN
+   * doesn't need a "Bob: 0 signals" row cluttering the table).
+   * Members whose only signals lack an `assignedToMembershipId` also
+   * don't appear — unassigned signals are a separate triage problem,
+   * not a per-Member performance signal.
+   */
+  byMember?: MemberSentimentMetrics[];
 };
+
+/**
+ * Post-PRD item 80 — per-Member response-time breakdown row.
+ *
+ * Same headline fields as `SentimentMetrics`, plus the bootstrap CI
+ * on the median, plus the `lowVolume` flag for "we don't trust this
+ * number — too few signals to draw a conclusion."
+ *
+ * The CI is intentionally on the median ONLY: P90 confidence intervals
+ * from a bootstrap need 50+ samples to be stable (the tail behaviour
+ * is what we're trying to characterise, and resampling can't conjure
+ * tail data that wasn't there). Sentiment volumes are tens-per-tenant,
+ * so a P90 CI would always be too wide to be useful.
+ */
+export type MemberSentimentMetrics = {
+  membershipId: string;
+  /// In-window escalation count for THIS Member.
+  escalated: number;
+  /// Of those, how many were acked before the window's `asOf`.
+  acknowledged: number;
+  medianAckMs: number | null;
+  /**
+   * Bootstrap 95% confidence interval on `medianAckMs`. Null when
+   * `acknowledged < BOOTSTRAP_MIN_N` (with only 1-2 acked samples, the
+   * CI degenerates to a near-zero-width range and conveys false
+   * precision). When non-null, `loMs <= medianAckMs <= hiMs`.
+   *
+   * Computed by resampling the Member's `ackDurations` array with
+   * replacement `BOOTSTRAP_ITERATIONS` times, taking the median of
+   * each resample, and reading the 2.5th and 97.5th percentiles of
+   * the resulting distribution. The PRNG is SEEDED — page refreshes
+   * with the same data produce the same CI (no flickering bounds,
+   * deterministic tests).
+   */
+  medianAckCi95: { loMs: number; hiMs: number } | null;
+  p90AckMs: number | null;
+  oldestUnackedMs: number | null;
+  /// `true` when `escalated < MIN_SIGNALS_FLOOR`. The aggregates are
+  /// still computed (the operator may still want the count visible);
+  /// the UI uses this to render a clear "insufficient data" badge
+  /// instead of letting a 1-signal "median 8h" read as a verdict.
+  lowVolume: boolean;
+};
+
+/**
+ * Volume floor below which a Member's medians/percentiles aren't
+ * trustworthy enough to act on. Exported so future per-tenant
+ * sensitivity overrides can change it without refactor. 5 chosen to
+ * match the "small but non-trivial" threshold pattern from item 71
+ * (`MIN_DEADLINED_SENDS = 10`) — sentiment volumes are lower than
+ * adherence volumes, so 5 is the equivalent stability floor.
+ */
+export const MIN_SIGNALS_FLOOR = 5;
+
+/**
+ * Below this many acknowledged signals, the bootstrap CI degenerates:
+ * with n=1 the resample is always the same value; with n=2 there are
+ * three possible distinct medians (a, midpoint, b) and the CI is
+ * nearly always [a, b]. n=3 is the smallest sample where bootstrap
+ * yields a meaningful interval.
+ */
+export const BOOTSTRAP_MIN_N = 3;
+
+/**
+ * 500 resamples is enough to stabilise the 2.5%/97.5% percentile
+ * bounds on a median to ~1% of their true value — well within the
+ * resolution we render (minutes, hours). 1000+ adds compute without
+ * changing what the operator sees. Cost per Member is O(B * n) where
+ * n is the Member's ack count; for a tenant with 10 Members × 30
+ * signals × 500 resamples that's 150k operations — trivial.
+ */
+const BOOTSTRAP_ITERATIONS = 500;
 
 const PERCENTILES = { p50: 0.5, p90: 0.9 } as const;
 
@@ -70,6 +157,13 @@ export async function computeSentimentMetrics(input: {
   assignedToMembershipId?: string;
   /** Override now — tests pin a deterministic clock. */
   now?: Date;
+  /**
+   * Item 80 — when true, return `byMember` in the result. Firm-wide
+   * callers (FCT/Admin view on /sentiment) set this; self-view callers
+   * leave it false so the per-Member breakdown isn't computed for a
+   * scope that always has exactly one Member.
+   */
+  withByMember?: boolean;
 }): Promise<SentimentMetrics> {
   const windowDays = input.windowDays ?? 30;
   const now = input.now ?? new Date();
@@ -80,6 +174,7 @@ export async function computeSentimentMetrics(input: {
     since,
     until: now,
     asOf: now,
+    withByMember: input.withByMember,
   });
 }
 
@@ -104,6 +199,7 @@ async function computeSentimentMetricsForRange(input: {
   until: Date;
   asOf: Date;
   assignedToMembershipId?: string;
+  withByMember?: boolean;
 }): Promise<SentimentMetrics> {
   const windowDays = Math.round(
     (input.until.getTime() - input.since.getTime()) / (24 * 60 * 60 * 1000),
@@ -112,6 +208,9 @@ async function computeSentimentMetricsForRange(input: {
   // Narrow query — only escalated signals whose `escalatedAt` falls in
   // [since, until) contribute. SQL predicates apply scope + escalation
   // gate so we don't fetch non-escalated rows only to drop them.
+  // Item 80 — when `withByMember` is true we also need
+  // `assignedToMembershipId` to bucket per-Member; otherwise we don't
+  // select it (saves a column we'd never read).
   const rows = await superDb.sentimentSignal.findMany({
     where: {
       tenantId: input.tenantId,
@@ -123,6 +222,7 @@ async function computeSentimentMetricsForRange(input: {
     select: {
       escalatedAt: true,
       acknowledgedAt: true,
+      ...(input.withByMember ? { assignedToMembershipId: true } : {}),
     },
     // Defensive cap — sentiment volumes are low (tens-to-hundreds per
     // tenant per month) so 50k is generous.
@@ -135,6 +235,22 @@ async function computeSentimentMetricsForRange(input: {
   let oldestUnackedMs: number | null = null;
   const asOfMs = input.asOf.getTime();
 
+  // Item 80 — per-Member accumulators. Built from the SAME per-row
+  // classification (`ackedInRange` + outstanding-positive check) that
+  // bumps the firm-wide counters, so the two surfaces can't drift.
+  // Unassigned signals (`assignedToMembershipId === null`) are
+  // EXCLUDED from per-Member buckets but still contribute to the
+  // firm-wide aggregate — unassigned-triage is a separate problem.
+  type MemberBucket = {
+    escalated: number;
+    acknowledged: number;
+    ackDurations: number[];
+    oldestUnackedMs: number | null;
+  };
+  const byMemberBuckets = input.withByMember
+    ? new Map<string, MemberBucket>()
+    : null;
+
   for (const r of rows) {
     if (!r.escalatedAt) continue;
     escalated += 1;
@@ -144,21 +260,71 @@ async function computeSentimentMetricsForRange(input: {
     // prior-window ack rate.
     const ackedInRange =
       r.acknowledgedAt !== null && r.acknowledgedAt.getTime() < asOfMs;
+    let duration: number | null = null;
+    let outstanding: number | null = null;
     if (ackedInRange) {
       acknowledged += 1;
-      const dt = r.acknowledgedAt!.getTime() - r.escalatedAt.getTime();
-      // Negative durations would only happen with a clock skew or a
-      // manually-poked row; floor at 0 so percentile math stays sane.
-      ackDurations.push(Math.max(0, dt));
+      duration = Math.max(
+        0,
+        r.acknowledgedAt!.getTime() - r.escalatedAt.getTime(),
+      );
+      ackDurations.push(duration);
     } else {
-      const outstanding = asOfMs - r.escalatedAt.getTime();
-      if (outstandingPositive(outstanding)) {
-        if (oldestUnackedMs === null || outstanding > oldestUnackedMs) {
-          oldestUnackedMs = outstanding;
+      const ms = asOfMs - r.escalatedAt.getTime();
+      if (outstandingPositive(ms)) {
+        outstanding = ms;
+        if (oldestUnackedMs === null || ms > oldestUnackedMs) {
+          oldestUnackedMs = ms;
         }
       }
     }
+
+    if (byMemberBuckets) {
+      // The select only includes `assignedToMembershipId` when
+      // withByMember=true, so the field is present at runtime; the
+      // cast keeps TS honest about that conditional select shape.
+      const mid = (r as { assignedToMembershipId?: string | null })
+        .assignedToMembershipId;
+      if (mid) {
+        const b: MemberBucket = byMemberBuckets.get(mid) ?? {
+          escalated: 0,
+          acknowledged: 0,
+          ackDurations: [],
+          oldestUnackedMs: null,
+        };
+        b.escalated += 1;
+        if (duration !== null) {
+          b.acknowledged += 1;
+          b.ackDurations.push(duration);
+        } else if (outstanding !== null) {
+          if (b.oldestUnackedMs === null || outstanding > b.oldestUnackedMs) {
+            b.oldestUnackedMs = outstanding;
+          }
+        }
+        byMemberBuckets.set(mid, b);
+      }
+    }
   }
+
+  const byMember: MemberSentimentMetrics[] | undefined = byMemberBuckets
+    ? Array.from(byMemberBuckets.entries()).map(([membershipId, b]) => ({
+        membershipId,
+        escalated: b.escalated,
+        acknowledged: b.acknowledged,
+        medianAckMs: percentile(b.ackDurations, PERCENTILES.p50),
+        // Bootstrap CI is seeded deterministically per Member from
+        // their own data so a refresh on the same numbers produces
+        // the same bounds — operators don't see the interval bobble
+        // between two consecutive page loads.
+        medianAckCi95: bootstrapMedianCi95(
+          b.ackDurations,
+          seededPrng(seedFromDurations(b.ackDurations)),
+        ),
+        p90AckMs: percentile(b.ackDurations, PERCENTILES.p90),
+        oldestUnackedMs: b.oldestUnackedMs,
+        lowVolume: b.escalated < MIN_SIGNALS_FLOOR,
+      }))
+    : undefined;
 
   return {
     windowDays,
@@ -168,6 +334,7 @@ async function computeSentimentMetricsForRange(input: {
     medianAckMs: percentile(ackDurations, PERCENTILES.p50),
     p90AckMs: percentile(ackDurations, PERCENTILES.p90),
     oldestUnackedMs,
+    byMember,
   };
 }
 
@@ -259,4 +426,76 @@ export function formatTtaDuration(ms: number | null): string {
   if (hours < 48) return `${hours}h`;
   const days = Math.round(ms / (24 * 60 * 60_000));
   return `${days}d`;
+}
+
+/**
+ * Post-PRD item 80 — bootstrap 95% CI on the median of an ack-duration
+ * array. Returns null below `BOOTSTRAP_MIN_N` because the interval
+ * degenerates at tiny sample sizes (see `BOOTSTRAP_MIN_N` doc).
+ *
+ * Exported for direct testing with a known seed; the production path
+ * always goes through `computeSentimentMetricsForRange` which seeds
+ * deterministically from the data.
+ */
+export function bootstrapMedianCi95(
+  durations: number[],
+  random: () => number,
+): { loMs: number; hiMs: number } | null {
+  const n = durations.length;
+  if (n < BOOTSTRAP_MIN_N) return null;
+  const samples = new Array<number>(BOOTSTRAP_ITERATIONS);
+  for (let b = 0; b < BOOTSTRAP_ITERATIONS; b++) {
+    // Resample with replacement, then read the median of the resample.
+    // We reuse the `percentile` helper so resampled medians use the
+    // same linear-interpolation definition as the headline median —
+    // mixing definitions here would let the CI bracket NOT contain
+    // the headline median.
+    const resample = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      resample[i] = durations[Math.floor(random() * n)]!;
+    }
+    samples[b] = percentile(resample, PERCENTILES.p50)!;
+  }
+  samples.sort((a, b) => a - b);
+  // 2.5% / 97.5% percentiles of the bootstrap distribution.
+  const loIdx = Math.floor(0.025 * BOOTSTRAP_ITERATIONS);
+  const hiIdx = Math.ceil(0.975 * BOOTSTRAP_ITERATIONS) - 1;
+  return { loMs: samples[loIdx]!, hiMs: samples[hiIdx]! };
+}
+
+/**
+ * Seeded LCG (numerical recipes constants). Deterministic across runs
+ * for the same seed. Adequate for bootstrap resampling — we don't
+ * need cryptographic randomness, just an unbiased uniform draw.
+ *
+ * Not exported for use elsewhere — if another caller needs a seeded
+ * PRNG, extract into a shared util at that point.
+ */
+function seededPrng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+/**
+ * Derive a stable seed from a duration array so the bootstrap CI
+ * for the same Member's data is reproducible across page refreshes.
+ * Hashing the sum-of-durations is enough — two distinct Members with
+ * identical ack-duration arrays will share a CI (correct: the CI
+ * depends only on the data), and small changes (one new ack) shift
+ * the seed enough to scramble the resample sequence.
+ */
+function seedFromDurations(durations: number[]): number {
+  let s = durations.length;
+  for (const d of durations) {
+    // Mix in milliseconds; bit-rotate to spread entropy across the
+    // 32-bit word so two arrays with the same sum but different
+    // composition produce different seeds.
+    s = (Math.imul(s, 31) + (d | 0)) >>> 0;
+  }
+  // Bias the seed away from 0 (LCG output for seed=0 is just the
+  // constant — not catastrophic but degrades the spread of resamples).
+  return s === 0 ? 1 : s;
 }

@@ -7,6 +7,8 @@ import {
   computePriorPeriodSentimentMetrics,
   computeSentimentMetrics,
   formatTtaDuration,
+  MIN_SIGNALS_FLOOR,
+  type MemberSentimentMetrics,
   type SentimentMetrics,
 } from "@/lib/sentiment/metrics";
 import AcknowledgeButton from "./AcknowledgeButton";
@@ -100,11 +102,16 @@ export default async function SentimentPage({
     // the page's existing firmWide split: firm-wide for FCT/Admin,
     // self-scoped otherwise. Default window matches /admin/drafts and
     // /account so the surfaces speak the same period.
+    //
+    // Item 80 — `withByMember` is only meaningful for firm-wide
+    // viewers; in the self-view the table would always have exactly
+    // one row (the viewer themselves), which is no more useful than
+    // the headline card.
     computeSentimentMetrics({
       tenantId: ctx.tenant.id,
       windowDays: 30,
       ...(firmWide
-        ? {}
+        ? { withByMember: true }
         : { assignedToMembershipId: ctx.membership.id }),
     }),
     // Item 79 — prior 30d snapshot for the trend pills. Same scope as
@@ -122,6 +129,26 @@ export default async function SentimentPage({
 
   const countMap: Record<string, number> = {};
   for (const c of counts) countMap[c.classification] = c._count._all;
+
+  // Item 80 — resolve labels for the per-Member response-time table.
+  // Separate query (not joined inside `computeSentimentMetrics`) so
+  // the lib stays pure-data — the page is the only surface that needs
+  // human-readable labels, and the lib doesn't know about User.
+  const memberLabels: Record<string, string> = {};
+  const byMember = metrics.byMember;
+  if (firmWide && byMember && byMember.length > 0) {
+    const ids = byMember.map((m) => m.membershipId);
+    const rows = await superDb.membership.findMany({
+      where: { tenantId: ctx.tenant.id, id: { in: ids } },
+      select: {
+        id: true,
+        user: { select: { email: true, name: true } },
+      },
+    });
+    for (const r of rows) {
+      memberLabels[r.id] = r.user.name ?? r.user.email ?? r.id;
+    }
+  }
 
   const totals: Record<Filter, number> = {
     ESCALATED: escalatedCount,
@@ -146,6 +173,10 @@ export default async function SentimentPage({
       </p>
 
       <SentimentResponseTimeCard metrics={metrics} prior={priorMetrics} />
+
+      {firmWide && byMember && byMember.length > 0 && (
+        <MemberResponseTimeTable rows={byMember} labels={memberLabels} />
+      )}
 
       <div className="flex flex-wrap gap-1 text-xs">
         {FILTERS.map((f) => {
@@ -484,5 +515,122 @@ function MedianTtaTrendPill({
         {deltaLabel} vs prior {windowDays}d
       </span>
     </span>
+  );
+}
+
+/**
+ * Post-PRD item 80 — per-Member response-time breakdown.
+ *
+ * Surfaces "who needs to speed up" alongside the firm-wide
+ * "are we slow." Rendered only on the firm-wide view (FCT/Admin); the
+ * self-view's table would always have exactly one row. Sort order is
+ * slowest-median first so the operator's eye lands on action items —
+ * rows with no median (no acks in window) drop to the bottom by
+ * escalation count desc.
+ *
+ * **`lowVolume` rows render an "insufficient data" badge** instead of
+ * suppression. A Member with 1-4 signals still has their count
+ * visible (operationally useful — "Jane's only seen one signal, did
+ * the assignment work?") but the median/CI is rendered to communicate
+ * that the number isn't trustworthy. The bootstrap CI is the
+ * statistical truth here; the badge is a UX flag for non-statistical
+ * readers.
+ *
+ * **CI is rendered as a hover-readable bracket** next to the median
+ * — `23m [12m, 41m]`. Wide intervals tell the operator "you can't
+ * draw conclusions from this Member's data yet." Hide the CI when
+ * the median itself is null (no acks).
+ */
+function MemberResponseTimeTable({
+  rows,
+  labels,
+}: {
+  rows: MemberSentimentMetrics[];
+  labels: Record<string, string>;
+}) {
+  const sorted = [...rows].sort((a, b) => {
+    // Slowest-median first; null medians sink to the bottom.
+    const am = a.medianAckMs;
+    const bm = b.medianAckMs;
+    if (am === null && bm === null) return b.escalated - a.escalated;
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return bm - am;
+  });
+
+  return (
+    <div className="card space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-base font-medium">By Member</h2>
+        <span
+          className="text-xs text-ink/50"
+          title={`Bootstrap 95% CI on median, ${MIN_SIGNALS_FLOOR}+ signal floor for confidence.`}
+        >
+          per-assignee response time
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs uppercase tracking-wider text-ink/50">
+              <th className="py-1 pr-3 font-normal">Member</th>
+              <th className="py-1 pr-3 font-normal">Signals</th>
+              <th className="py-1 pr-3 font-normal">Acked</th>
+              <th className="py-1 pr-3 font-normal">Median TTA</th>
+              <th className="py-1 pr-3 font-normal">P90 TTA</th>
+              <th className="py-1 font-normal">Oldest unacked</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => {
+              const label = labels[r.membershipId] ?? r.membershipId;
+              const oldestTone =
+                r.oldestUnackedMs !== null &&
+                r.oldestUnackedMs > 4 * 60 * 60_000
+                  ? "text-red-900 font-medium"
+                  : "text-ink/80";
+              return (
+                <tr
+                  key={r.membershipId}
+                  className="border-t border-ink/10 align-top"
+                >
+                  <td className="py-1 pr-3">
+                    <span className="font-medium">{label}</span>
+                    {r.lowVolume && (
+                      <span
+                        className="ml-2 inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-900"
+                        title={`Fewer than ${MIN_SIGNALS_FLOOR} signals in window — median is not a reliable indicator yet.`}
+                      >
+                        insufficient data
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-3 tabular-nums">{r.escalated}</td>
+                  <td className="py-1 pr-3 tabular-nums">{r.acknowledged}</td>
+                  <td className="py-1 pr-3 tabular-nums">
+                    {formatTtaDuration(r.medianAckMs)}
+                    {r.medianAckMs !== null && r.medianAckCi95 && (
+                      <span
+                        className="ml-1 text-[11px] font-normal text-ink/50"
+                        title={`Bootstrap 95% CI on median across ${r.acknowledged} acked signals. Wide intervals = not enough data to act on the median.`}
+                      >
+                        [{formatTtaDuration(r.medianAckCi95.loMs)},{" "}
+                        {formatTtaDuration(r.medianAckCi95.hiMs)}]
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-3 tabular-nums">
+                    {formatTtaDuration(r.p90AckMs)}
+                  </td>
+                  <td className={`py-1 tabular-nums ${oldestTone}`}>
+                    {formatTtaDuration(r.oldestUnackedMs)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

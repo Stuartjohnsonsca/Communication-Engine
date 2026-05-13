@@ -16,9 +16,11 @@ import { randomUUID } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { superDb } from "@/lib/db";
 import {
+  bootstrapMedianCi95,
   computePriorPeriodSentimentMetrics,
   computeSentimentMetrics,
   formatTtaDuration,
+  MIN_SIGNALS_FLOOR,
 } from "@/lib/sentiment/metrics";
 import {
   createTestTenant,
@@ -427,6 +429,229 @@ describe("computePriorPeriodSentimentMetrics — item 79 trend pill source", () 
     expect(a.medianAckMs).toBe(2 * HOUR);
     expect(b.escalated).toBe(1);
     expect(b.medianAckMs).toBe(8 * HOUR);
+  });
+});
+
+describe("computeSentimentMetrics — item 80 per-Member breakdown", () => {
+  it("returns byMember only when withByMember is true", async () => {
+    const tenant = await createTestTenant();
+    const m1 = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("by-member-1"),
+    });
+    const now = new Date();
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: m1.membership.id,
+      escalatedAt: new Date(now.getTime() - 2 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 1 * HOUR),
+    });
+
+    const without = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(without.byMember).toBeUndefined();
+
+    const withIt = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(withIt.byMember).toBeDefined();
+    expect(withIt.byMember).toHaveLength(1);
+    expect(withIt.byMember![0]!.membershipId).toBe(m1.membership.id);
+  });
+
+  it("excludes unassigned signals from byMember but counts them in firm-wide totals", async () => {
+    const tenant = await createTestTenant();
+    const m1 = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("by-member-assigned"),
+    });
+    const now = new Date();
+    // One assigned signal.
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: m1.membership.id,
+      escalatedAt: new Date(now.getTime() - 3 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 2 * HOUR),
+    });
+    // One UNASSIGNED signal (no `assignedToMembershipId`). Common in
+    // practice for tenants whose FCG hasn't wired a default assignee.
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: null,
+      escalatedAt: new Date(now.getTime() - 5 * HOUR),
+    });
+
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    // Firm-wide totals include the unassigned signal.
+    expect(m.escalated).toBe(2);
+    expect(m.acknowledged).toBe(1);
+    // But the byMember table only has the assigned Member.
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.membershipId).toBe(m1.membership.id);
+    expect(m.byMember![0]!.escalated).toBe(1);
+  });
+
+  it("flags lowVolume when a Member has fewer than MIN_SIGNALS_FLOOR signals", async () => {
+    const tenant = await createTestTenant();
+    const slow = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("low-vol"),
+    });
+    const now = new Date();
+    // 2 signals — well below the floor of 5.
+    for (let i = 0; i < 2; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: slow.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+      });
+    }
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.lowVolume).toBe(true);
+    expect(m.byMember![0]!.escalated).toBeLessThan(MIN_SIGNALS_FLOOR);
+  });
+
+  it("does NOT flag lowVolume when a Member meets the floor", async () => {
+    const tenant = await createTestTenant();
+    const member = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("at-floor"),
+    });
+    const now = new Date();
+    for (let i = 0; i < MIN_SIGNALS_FLOOR; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: member.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 20 * 60_000),
+      });
+    }
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember![0]!.lowVolume).toBe(false);
+    expect(m.byMember![0]!.escalated).toBe(MIN_SIGNALS_FLOOR);
+  });
+
+  it("per-Member medians cannot drift from firm-wide totals", async () => {
+    // Same classifier invariant as item 67's per-Member adherence:
+    // summing the per-Member escalated counts must equal the firm-wide
+    // assigned-signal count.
+    const tenant = await createTestTenant();
+    const a = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("drift-a"),
+    });
+    const b = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("drift-b"),
+    });
+    const now = new Date();
+    for (let i = 0; i < 3; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: a.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: b.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+      });
+    }
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    const sum = m.byMember!.reduce((acc, r) => acc + r.escalated, 0);
+    expect(sum).toBe(m.escalated); // no unassigned signals in this test
+    const ackSum = m.byMember!.reduce((acc, r) => acc + r.acknowledged, 0);
+    expect(ackSum).toBe(m.acknowledged);
+  });
+});
+
+describe("bootstrapMedianCi95 — item 80 confidence interval", () => {
+  // Deterministic seeded PRNG copy used only for this test — we test
+  // the bootstrap function directly with a known seed so the
+  // assertions are stable across runs.
+  function makeSeed(seed: number): () => number {
+    let s = seed >>> 0;
+    return () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 0x100000000;
+    };
+  }
+
+  it("returns null below BOOTSTRAP_MIN_N (n=2)", () => {
+    expect(bootstrapMedianCi95([100, 200], makeSeed(1))).toBeNull();
+  });
+
+  it("returns null on empty input", () => {
+    expect(bootstrapMedianCi95([], makeSeed(1))).toBeNull();
+  });
+
+  it("returns a valid bracket containing the data range for small n", () => {
+    const ci = bootstrapMedianCi95([1000, 2000, 3000], makeSeed(42));
+    expect(ci).not.toBeNull();
+    // CI bounds must fall inside [min, max] of the data — bootstrap
+    // resamples can't conjure values outside the observed set.
+    expect(ci!.loMs).toBeGreaterThanOrEqual(1000);
+    expect(ci!.hiMs).toBeLessThanOrEqual(3000);
+    expect(ci!.loMs).toBeLessThanOrEqual(ci!.hiMs);
+  });
+
+  it("CI is tight when n is large and values are clustered", () => {
+    // 30 acks all within 5m of each other → CI should be narrow.
+    const tight = Array.from({ length: 30 }, (_, i) => 600_000 + i * 10_000);
+    const ci = bootstrapMedianCi95(tight, makeSeed(7));
+    expect(ci).not.toBeNull();
+    // Range of data is ~290s; CI width should be a small fraction.
+    const width = ci!.hiMs - ci!.loMs;
+    expect(width).toBeLessThan(180_000); // under 3m
+  });
+
+  it("CI is wide when n is small and values are spread", () => {
+    // 4 acks across 1m → 4h.
+    const spread = [60_000, 30 * 60_000, 2 * HOUR, 4 * HOUR];
+    const ci = bootstrapMedianCi95(spread, makeSeed(99));
+    expect(ci).not.toBeNull();
+    // The CI width should be most of the data range — bootstrap on
+    // 4 spread points yields a wide interval.
+    const width = ci!.hiMs - ci!.loMs;
+    expect(width).toBeGreaterThan(30 * 60_000); // at least 30m wide
+  });
+
+  it("is deterministic across calls with the same seed", () => {
+    const data = [100, 250, 400, 800, 1600];
+    const a = bootstrapMedianCi95(data, makeSeed(123));
+    const b = bootstrapMedianCi95(data, makeSeed(123));
+    expect(a).toEqual(b);
   });
 });
 
