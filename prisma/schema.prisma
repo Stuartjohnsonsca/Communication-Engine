@@ -445,6 +445,16 @@ enum AuditEventType {
   /// RBAC gate `sentiment:export` — governance not commercial, so
   /// FIRM_ADMIN + FCT_MEMBER, same posture as `drafts:read-rollup`.
   SENTIMENT_RESPONSES_EXPORTED
+  /// Post-PRD hardening item 84 — a daily cron found the tenant's 7-day
+  /// sentiment acknowledgement rate below `ACK_RATE_THRESHOLD` while
+  /// the volume floor (`MIN_ESCALATED_FOR_ALERT`) was met. Sister to
+  /// `FIRM_ADHERENCE_BELOW_THRESHOLD` (item 71) on the sentiment side.
+  /// Payload: `{ windowDays, escalated, acknowledged, acknowledgedRate,
+  /// medianAckMs, oldestUnackedMs, threshold, minEscalated, isoWeek }`.
+  /// One event per (tenant, ISO week) — same dedupe slot as the
+  /// notification — so a chronically slow tenant doesn't fill the
+  /// chain with daily duplicates.
+  FIRM_SENTIMENT_ACK_RATE_BELOW_THRESHOLD
 }
 
 enum BillingPeriodStatus {

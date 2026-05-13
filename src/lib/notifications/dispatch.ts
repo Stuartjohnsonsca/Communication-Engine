@@ -109,7 +109,20 @@ export type NotificationKind =
   /// would let extreme-negative counterparty signals sit
   /// indefinitely. dedupeKey is the SentimentSignal id so each
   /// unacked escalation fires the nudge exactly once.
-  | "sentiment_escalation_stale";
+  | "sentiment_escalation_stale"
+  /// Post-PRD item 84 — mandatory governance escalation. The daily
+  /// firm-ack-monitor cron found this tenant's 7-day sentiment
+  /// acknowledgement rate below `ACK_RATE_THRESHOLD` with at least
+  /// `MIN_ESCALATED_FOR_ALERT` escalated signals in the window (the
+  /// volume floor exists so a fresh tenant with 1-2 unacked
+  /// counterparty complaints doesn't trip the alert before it has
+  /// had a chance to be operational). Fans out to every active
+  /// FIRM_ADMIN. Not opt-outable: ack-rate is the firm's response
+  /// posture to PRD §9.3 escalations; muting "we're ignoring
+  /// complaints" defeats governance. dedupeKey is the ISO week so
+  /// a chronically-slow tenant gets one alert per week, not one per
+  /// cron tick. Sister to item 71's `firm_adherence_below_threshold`.
+  | "firm_sentiment_ack_rate_below_threshold";
 
 export type DispatchResult = {
   alreadySent: boolean;

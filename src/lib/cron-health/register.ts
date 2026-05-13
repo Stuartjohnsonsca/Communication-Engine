@@ -89,6 +89,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "Item 71 — daily firm-adherence escalation. Computes each tenant's 7d FCG-window adherence rate via the /admin/drafts rollup and fires a mandatory firm_adherence_below_threshold notification to every FIRM_ADMIN when the rate is below ADHERENCE_THRESHOLD with at least MIN_DEADLINED_SENDS deadlined sends. Deduped per ISO week so a chronically-poor tenant gets one alert per week, not one per cron tick.",
   },
+  {
+    cronName: "sentiment-firm-ack-monitor",
+    expectedIntervalMinutes: 24 * 60,
+    description:
+      "Item 84 — daily firm-wide sentiment ack-rate escalation. Sister to adherence-monitor (item 71) on the sentiment side. Computes each tenant's 7d sentiment ack rate via computeSentimentMetrics (same numbers as /sentiment) and fires a mandatory firm_sentiment_ack_rate_below_threshold notification to every FIRM_ADMIN when the rate is below ACK_RATE_THRESHOLD with at least MIN_ESCALATED_FOR_ALERT escalations. Deduped per ISO week.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {
