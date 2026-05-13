@@ -596,6 +596,113 @@ describe("computeSentimentMetrics — item 80 per-Member breakdown", () => {
   });
 });
 
+describe("computeSentimentMetrics — item 81 self-view with byMember", () => {
+  // /account uses `assignedToMembershipId` + `withByMember: true` so
+  // the Member sees their own bootstrap CI bracket. The lib invariant
+  // is that byMember has exactly one row in this configuration — the
+  // page reads `byMember[0]` to pluck the CI. Drift here breaks the
+  // self-view card.
+  it("self-view with withByMember returns exactly one byMember row", async () => {
+    const tenant = await createTestTenant();
+    const me = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("self-view"),
+    });
+    const other = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("self-view-other"),
+    });
+    const now = new Date();
+    // 4 of mine, 3 of someone else's.
+    for (let i = 0; i < 4; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: me.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+      });
+    }
+    for (let i = 0; i < 3; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: other.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 2 * HOUR),
+      });
+    }
+
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      assignedToMembershipId: me.membership.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    // Headline numbers reflect ONLY my signals (scope filter).
+    expect(m.escalated).toBe(4);
+    expect(m.acknowledged).toBe(4);
+    // byMember has exactly one row — the page reads byMember[0].
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.membershipId).toBe(me.membership.id);
+    // The byMember row's numbers match the headline (single classifier).
+    expect(m.byMember![0]!.escalated).toBe(m.escalated);
+    expect(m.byMember![0]!.acknowledged).toBe(m.acknowledged);
+    // 4 acks >= BOOTSTRAP_MIN_N (3), so CI is computed.
+    expect(m.byMember![0]!.medianAckCi95).not.toBeNull();
+  });
+
+  it("self-view with no signals returns an empty byMember array", async () => {
+    // A Member who's never been assigned a sentiment signal must get
+    // an empty byMember array (not undefined when withByMember=true,
+    // not a synthetic zero row). The page renders nothing on the
+    // self-view card when escalated === 0.
+    const tenant = await createTestTenant();
+    const me = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("self-view-empty"),
+    });
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      assignedToMembershipId: me.membership.id,
+      windowDays: 30,
+      withByMember: true,
+    });
+    expect(m.escalated).toBe(0);
+    expect(m.byMember).toBeDefined();
+    expect(m.byMember).toHaveLength(0);
+  });
+
+  it("self-view with too few acks returns null CI but a valid byMember row", async () => {
+    // Member has 2 acked signals — below BOOTSTRAP_MIN_N. The byMember
+    // row still exists (escalated > 0) but medianAckCi95 is null. The
+    // /account card renders the median without a bracket in this case.
+    const tenant = await createTestTenant();
+    const me = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("self-view-low-ack"),
+    });
+    const now = new Date();
+    for (let i = 0; i < 2; i++) {
+      await makeSignal({
+        tenantId: tenant.id,
+        assignedToMembershipId: me.membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 15 * 60_000),
+      });
+    }
+    const m = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      assignedToMembershipId: me.membership.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.medianAckMs).not.toBeNull();
+    expect(m.byMember![0]!.medianAckCi95).toBeNull();
+  });
+});
+
 describe("bootstrapMedianCi95 — item 80 confidence interval", () => {
   // Deterministic seeded PRNG copy used only for this test — we test
   // the bootstrap function directly with a known seed so the

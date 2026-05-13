@@ -9,6 +9,12 @@ import {
   type MemberFcgAdherence,
   type MemberFcgAdherenceForRange,
 } from "@/lib/drafts";
+import {
+  computePriorPeriodSentimentMetrics,
+  computeSentimentMetrics,
+  formatTtaDuration,
+  type SentimentMetrics,
+} from "@/lib/sentiment/metrics";
 import { revokeAccess, reauthoriseAccess, getMemberLifecycleState } from "@/lib/lifecycle";
 import {
   SUPPORTED_LOCALES,
@@ -63,6 +69,8 @@ export default async function AccountPage({
     notificationPrefs,
     adherence,
     priorAdherence,
+    sentimentMetrics,
+    priorSentimentMetrics,
   ] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
@@ -87,6 +95,25 @@ export default async function AccountPage({
     computeMemberPriorPeriodFcgRate({
       tenantId: ctx.tenant.id,
       membershipId: ctx.membership.id,
+      windowDays: 30,
+    }),
+    // Item 81 — first-person sentiment response-time. Self-view scope
+    // (the SQL predicate filters to this Member's assigned signals).
+    // `withByMember: true` so the bootstrap 95% CI is computed on the
+    // Member's own median — `byMember[0]` carries the bracket the card
+    // renders. Reusing the existing lib path (vs a separate self-view
+    // helper) keeps the classifier identical across the firm view
+    // (item 80) and the self-view, so a Member's "my median" can
+    // never disagree with the row representing them on /sentiment.
+    computeSentimentMetrics({
+      tenantId: ctx.tenant.id,
+      assignedToMembershipId: ctx.membership.id,
+      windowDays: 30,
+      withByMember: true,
+    }),
+    computePriorPeriodSentimentMetrics({
+      tenantId: ctx.tenant.id,
+      assignedToMembershipId: ctx.membership.id,
       windowDays: 30,
     }),
   ]);
@@ -399,6 +426,12 @@ export default async function AccountPage({
         tenantSlug={tenantSlug}
         adherence={adherence}
         priorAdherence={priorAdherence}
+      />
+
+      <MySentimentResponseTimeCard
+        tenantSlug={tenantSlug}
+        metrics={sentimentMetrics}
+        prior={priorSentimentMetrics}
       />
 
       <form action={setMyLocaleAction} className="card space-y-3">
@@ -802,6 +835,174 @@ function MyAdherenceTrendPill({
       <span>
         {deltaPp >= 0 ? "+" : ""}
         {deltaPp}pp vs prior {windowDays}d
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Post-PRD hardening item 81 — first-person sentiment response-time
+ * card. Counterpart to item 80's per-Member breakdown on /sentiment:
+ * the firm view tells the FCT/Admin "Jane is slow," this surface
+ * tells Jane herself. Behavioural change without requiring the
+ * FIRM_ADMIN to nag.
+ *
+ * **Renders nothing when the Member has zero in-window escalations** —
+ * matches the firm-wide card's invariant (item 78). A Member who's
+ * never been assigned a sentiment signal doesn't see a confused
+ * "—" card on their account page.
+ *
+ * **Bootstrap CI bracket is sourced from `byMember[0]`** — the lib's
+ * per-Member path produces the same statistical bound the firm view
+ * shows for this Member's row. Same number, same display, no drift.
+ * If the Member has fewer than `BOOTSTRAP_MIN_N` acks the CI is
+ * null and the bracket is hidden; the median still renders.
+ *
+ * **Trend pill on median TTA** mirrors item 79's firm-wide pill —
+ * inverted colour mapping (lower latency = green) — but scoped to
+ * the Member's own current vs prior window. Self-view ack-rate pill
+ * is omitted (the Member's escalation volume is usually low enough
+ * that pp deltas on a 3-out-of-5 vs 2-out-of-3 comparison aren't
+ * informative).
+ */
+function MySentimentResponseTimeCard({
+  tenantSlug,
+  metrics,
+  prior,
+}: {
+  tenantSlug: string;
+  metrics: SentimentMetrics;
+  prior: SentimentMetrics;
+}) {
+  if (metrics.escalated === 0) return null;
+  const ratePct =
+    metrics.acknowledgedRate === null
+      ? "—"
+      : `${Math.round(metrics.acknowledgedRate * 100)}%`;
+  const unackedTone =
+    metrics.oldestUnackedMs !== null && metrics.oldestUnackedMs > 4 * 60 * 60_000
+      ? "text-red-900 font-medium"
+      : "text-ink/80";
+  // The lib invariant for `withByMember: true` with a single-Member
+  // scope is exactly one row in `byMember`; pluck the CI off it.
+  const myCi = metrics.byMember?.[0]?.medianAckCi95 ?? null;
+  return (
+    <div className="card space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 className="text-base font-medium">My sentiment response time</h2>
+          <MyMedianTtaTrendPill
+            current={metrics.medianAckMs}
+            prior={prior.medianAckMs}
+            windowDays={metrics.windowDays}
+          />
+        </div>
+        <span className="text-xs text-ink/50">last {metrics.windowDays} days</span>
+      </div>
+      <p className="text-sm text-ink/70">
+        How quickly you&rsquo;ve been acknowledging counterparty-dissatisfaction
+        signals routed to you. See the firm-wide view and full list on{" "}
+        <Link className="underline decoration-dotted" href={`/${tenantSlug}/sentiment`}>
+          /sentiment
+        </Link>
+        .
+      </p>
+      <dl className="grid gap-3 text-sm sm:grid-cols-4">
+        <div>
+          <dt className="text-xs uppercase tracking-wider text-ink/50">Acknowledged</dt>
+          <dd className="font-medium">
+            {ratePct}
+            <span className="ml-1 text-[11px] font-normal text-ink/50">
+              ({metrics.acknowledged}/{metrics.escalated})
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Median time from escalation to your acknowledgement, over acked signals only."
+          >
+            Median TTA
+          </dt>
+          <dd className="font-medium">
+            {formatTtaDuration(metrics.medianAckMs)}
+            {metrics.medianAckMs !== null && myCi && (
+              <span
+                className="ml-1 text-[11px] font-normal text-ink/50"
+                title={`Bootstrap 95% CI on your median across ${metrics.acknowledged} acked signals. Wide brackets = not enough data to draw conclusions yet.`}
+              >
+                [{formatTtaDuration(myCi.loMs)},{" "}
+                {formatTtaDuration(myCi.hiMs)}]
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="P90 — most of your acks are below this. A small median with a large P90 means most are fast but some sit."
+          >
+            P90 TTA
+          </dt>
+          <dd className="font-medium">{formatTtaDuration(metrics.p90AckMs)}</dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Oldest signal routed to you still waiting for an ack. Red past 4h (the stale-warn threshold)."
+          >
+            Oldest unacked
+          </dt>
+          <dd className={unackedTone}>{formatTtaDuration(metrics.oldestUnackedMs)}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Post-PRD item 81 — self-view counterpart to item 79's
+ * `MedianTtaTrendPill`. Same arithmetic, same flat-band rule
+ * (`max(60s, 10% of prior)`), same inverted colour mapping — only the
+ * data source differs (self vs firm-wide).
+ */
+function MyMedianTtaTrendPill({
+  current,
+  prior,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  windowDays: number;
+}) {
+  if (current === null || prior === null) return null;
+  const ABS_FLOOR_MS = 60_000;
+  const REL_THRESHOLD = 0.1;
+  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
+  const delta = current - prior;
+  const priorLabel = formatTtaDuration(prior);
+  const deltaLabel = formatTtaDuration(Math.abs(delta));
+  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta < -flatBand) {
+    arrow = "↓";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta > flatBand) {
+    arrow = "↑";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {directionWord}
+        {deltaLabel} vs prior {windowDays}d
       </span>
     </span>
   );
