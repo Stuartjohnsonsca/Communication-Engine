@@ -26,8 +26,13 @@ export { runAutoDraftBackfill, BACKFILL_DAYS_BOUNDS } from "./backfill";
 export type { BackfillInput, BackfillResult } from "./backfill";
 export { runDraftStaleSweep } from "./stale-sweep";
 export type { DraftStaleSweepResult } from "./stale-sweep";
-export { computeDraftRollup } from "./rollup";
-export type { DraftRollup, DraftRollupWindow, DraftSource } from "./rollup";
+export { computeDraftRollup, RECENT_MISSES_LIMIT } from "./rollup";
+export type {
+  DraftRollup,
+  DraftRollupWindow,
+  DraftSource,
+  FcgMissRow,
+} from "./rollup";
 export { formatDraftsRollupAsCsv, DRAFTS_ROLLUP_CSV_HEADER } from "./rollup-csv";
 export {
   computeMemberFcgAdherence,

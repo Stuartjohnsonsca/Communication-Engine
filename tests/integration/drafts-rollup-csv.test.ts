@@ -239,6 +239,14 @@ function makeEmptyRollup() {
       sentAfterWindow: 0,
       openOverdue: 0,
       withinWindowRate: null,
+      // Item 74 — present-but-empty in the fixture. The CSV exporter
+      // doesn't render miss rows (rate-shaped, not list-shaped) so
+      // populating these wouldn't change CSV output; the fields exist
+      // to satisfy the DraftRollup type.
+      recentMisses: {
+        sentAfterWindow: [],
+        openOverdue: [],
+      },
     },
     regeneration: {
       childDrafts: 0,

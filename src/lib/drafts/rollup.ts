@@ -96,6 +96,23 @@ export type DraftRollup = {
     openOverdue: number;
     /// sentWithinWindow / sentWithDeadline. Null when no deadlined sends.
     withinWindowRate: number | null;
+    /**
+     * Post-PRD item 74 — the actual draft rows that constitute
+     * `sentAfterWindow` and `openOverdue`, capped at
+     * `RECENT_MISSES_LIMIT` rows per list, ordered by lateness
+     * (most overdue first).
+     *
+     * The counters above tell a FIRM_ADMIN *that* the promise was
+     * broken; this tells them *which* specific drafts so they can
+     * act — DM the Member, send the open-overdue draft, or
+     * investigate why it slipped. Sourced from the same per-row
+     * `fcgBucket` classification as the counters so the two
+     * surfaces can't disagree about which drafts count.
+     */
+    recentMisses: {
+      sentAfterWindow: FcgMissRow[];
+      openOverdue: FcgMissRow[];
+    };
   };
   regeneration: {
     /// Drafts with `parentId` set — i.e. drafts that ARE a regeneration
@@ -142,6 +159,33 @@ export type DraftRollup = {
 /// A tenant sending 50k drafts in 30 days should move to server-side
 /// aggregation (Prisma groupBy); current product scale is <1k/month.
 const MAX_ROWS = 50_000;
+
+/// Item 74 — recent-misses cap. Ten rows each side fits on one screen
+/// without scrolling and matches the operator workflow: identify the
+/// worst offenders, act on them, refresh. Exported so a future
+/// per-window override can change it without refactor.
+export const RECENT_MISSES_LIMIT = 10;
+
+/**
+ * Post-PRD item 74 — a single row inside `DraftRollup.fcgWindow.recentMisses`.
+ *
+ * `lateMs` is always positive. For `sentAfterWindow` rows it's
+ * `sentMarkedAt - fcgWindowDeadline` (how late did we send?); for
+ * `openOverdue` rows it's `now - fcgWindowDeadline` (how overdue is
+ * it right now?). Same unit, same direction, so a single UI
+ * formatter renders both. `status` is included so the operator can
+ * see if an open-overdue draft is PROPOSED (not even reviewed),
+ * EDITED (reviewed but not sent), or ACCEPTED (queued to send) —
+ * each demands different follow-up.
+ */
+export type FcgMissRow = {
+  draftId: string;
+  membershipId: string | null;
+  fcgWindowDeadline: Date;
+  sentMarkedAt: Date | null;
+  status: "PROPOSED" | "EDITED" | "ACCEPTED" | "SENT";
+  lateMs: number;
+};
 
 /**
  * Post-PRD item 72 — FCG-window adherence rate over an arbitrary
@@ -338,6 +382,14 @@ export async function computeDraftRollup(input: {
   let fcgSentAfterWindow = 0;
   let fcgOpenOverdue = 0;
 
+  // Item 74 — collect rows for the recent-misses panel. We push every
+  // miss into these arrays during the scan, then sort by lateness and
+  // slice at the end. Cost is bounded by the miss count, which is at
+  // most `MAX_ROWS` and in practice dozens — a constant-time
+  // operation against the existing single-pass scan.
+  const sentAfterMisses: FcgMissRow[] = [];
+  const openOverdueMisses: FcgMissRow[] = [];
+
   for (const r of rows) {
     const source = classifySource(r);
     const bucket = bySource[source];
@@ -390,8 +442,40 @@ export async function computeDraftRollup(input: {
     } else if (fcgBucket === "after") {
       fcgSentWithDeadline += 1;
       fcgSentAfterWindow += 1;
+      // Sourced from the same fcgBucket value as the counter — the
+      // list and the count can't drift. `sentMarkedAt` and
+      // `fcgWindowDeadline` are both proven non-null by the bucket
+      // classification above, but the type is still nullable.
+      if (r.sentMarkedAt && r.fcgWindowDeadline) {
+        sentAfterMisses.push({
+          draftId: r.id,
+          membershipId: r.membershipId,
+          fcgWindowDeadline: r.fcgWindowDeadline,
+          sentMarkedAt: r.sentMarkedAt,
+          // The `fcgBucket` classification guarantees status is one of
+          // PROPOSED / EDITED / ACCEPTED (openOverdue) or SENT (after).
+          // DISCARDED is excluded earlier. Narrowing here so the
+          // FcgMissRow type stays operator-meaningful.
+          status: r.status as Exclude<typeof r.status, "DISCARDED">,
+          lateMs: r.sentMarkedAt.getTime() - r.fcgWindowDeadline.getTime(),
+        });
+      }
     } else if (fcgBucket === "openOverdue") {
       fcgOpenOverdue += 1;
+      if (r.fcgWindowDeadline) {
+        openOverdueMisses.push({
+          draftId: r.id,
+          membershipId: r.membershipId,
+          fcgWindowDeadline: r.fcgWindowDeadline,
+          sentMarkedAt: r.sentMarkedAt,
+          // The `fcgBucket` classification guarantees status is one of
+          // PROPOSED / EDITED / ACCEPTED (openOverdue) or SENT (after).
+          // DISCARDED is excluded earlier. Narrowing here so the
+          // FcgMissRow type stays operator-meaningful.
+          status: r.status as Exclude<typeof r.status, "DISCARDED">,
+          lateMs: now.getTime() - r.fcgWindowDeadline.getTime(),
+        });
+      }
     }
 
     if (r.parentId) {
@@ -467,6 +551,18 @@ export async function computeDraftRollup(input: {
   const withinWindowRate =
     fcgSentWithDeadline > 0 ? fcgSentWithinWindow / fcgSentWithDeadline : null;
 
+  // Most-late first — the operator priority is "what's the worst
+  // miss right now?" not "what's the freshest miss?". Recency is
+  // already enforced by `windowDays`. Tie-break by deadline ascending
+  // (older deadlines first) so identical-lateness rows have a stable
+  // order rather than insertion order.
+  const sortByLateness = (a: FcgMissRow, b: FcgMissRow) => {
+    if (b.lateMs !== a.lateMs) return b.lateMs - a.lateMs;
+    return a.fcgWindowDeadline.getTime() - b.fcgWindowDeadline.getTime();
+  };
+  sentAfterMisses.sort(sortByLateness);
+  openOverdueMisses.sort(sortByLateness);
+
   return {
     windowDays,
     totals,
@@ -479,6 +575,10 @@ export async function computeDraftRollup(input: {
       sentAfterWindow: fcgSentAfterWindow,
       openOverdue: fcgOpenOverdue,
       withinWindowRate,
+      recentMisses: {
+        sentAfterWindow: sentAfterMisses.slice(0, RECENT_MISSES_LIMIT),
+        openOverdue: openOverdueMisses.slice(0, RECENT_MISSES_LIMIT),
+      },
     },
     regeneration: {
       childDrafts,

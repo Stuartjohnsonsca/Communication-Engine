@@ -619,3 +619,195 @@ describe("computeDraftRollup — per-Member FCG-window adherence (item 67)", () 
     expect(row?.fcgWindow.withinWindowRate).toBeNull();
   });
 });
+
+/**
+ * Post-PRD item 74 — recent FCG-window misses (row-level drilldown).
+ *
+ * Critical invariants tested below:
+ *   - the count and the list match — if `sentAfterWindow = N`, the
+ *     list contains MIN(N, RECENT_MISSES_LIMIT) rows that all share
+ *     the late-send classification.
+ *   - sort order is most-late first within each list (operator
+ *     priority is "worst miss right now").
+ *   - exclusions match the firm-wide block (bypassed-synth, no-deadline,
+ *     DISCARDED past-deadline) so the list can't contain rows that
+ *     wouldn't show up in the count.
+ *   - lateMs is positive in both lists and represents the right thing
+ *     (sent - deadline for sent-after, now - deadline for openOverdue).
+ *   - cap at `RECENT_MISSES_LIMIT` even if there are 100 actual misses.
+ */
+describe("computeDraftRollup — recent FCG-window misses (item 74)", () => {
+  it("sentAfterWindow list mirrors the count, ordered most-late first", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("misses-sent"),
+    });
+
+    const base = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    // 3 late sends with increasing lateness: 10m, 60m, 120m late.
+    const lateMinutes = [10, 60, 120];
+    for (const m of lateMinutes) {
+      await seedDraft({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        status: "SENT",
+        createdAt: base,
+        fcgWindowDeadline: new Date(base.getTime() + 30 * 60_000),
+        sentMarkedAt: new Date(base.getTime() + (30 + m) * 60_000),
+      });
+    }
+    // One within-window send — must NOT appear in the list.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 60 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 20 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.sentAfterWindow).toBe(3);
+    expect(r.fcgWindow.recentMisses.sentAfterWindow).toHaveLength(3);
+    // Most-late first.
+    const minutesLate = r.fcgWindow.recentMisses.sentAfterWindow.map((row) =>
+      Math.round(row.lateMs / 60_000),
+    );
+    expect(minutesLate).toEqual([120, 60, 10]);
+    // Sourced from the right rows: every entry has positive lateMs and
+    // a sentMarkedAt strictly after its deadline.
+    for (const row of r.fcgWindow.recentMisses.sentAfterWindow) {
+      expect(row.lateMs).toBeGreaterThan(0);
+      expect(row.sentMarkedAt).not.toBeNull();
+      expect(row.sentMarkedAt!.getTime()).toBeGreaterThan(
+        row.fcgWindowDeadline.getTime(),
+      );
+      expect(row.status).toBe("SENT");
+    }
+  });
+
+  it("openOverdue list mirrors the count, ordered most-overdue first", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("misses-open"),
+    });
+
+    const now = Date.now();
+    // 3 open drafts overdue by 30m, 2h, 6h.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "PROPOSED",
+      fcgWindowDeadline: new Date(now - 30 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "EDITED",
+      fcgWindowDeadline: new Date(now - 2 * 60 * 60_000),
+    });
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "ACCEPTED",
+      fcgWindowDeadline: new Date(now - 6 * 60 * 60_000),
+    });
+    // Open but deadline still future → not in list.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "PROPOSED",
+      fcgWindowDeadline: new Date(now + 60 * 60_000),
+    });
+    // DISCARDED past deadline → not in list.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "DISCARDED",
+      fcgWindowDeadline: new Date(now - 60 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.openOverdue).toBe(3);
+    expect(r.fcgWindow.recentMisses.openOverdue).toHaveLength(3);
+    // Most-overdue first.
+    const statuses = r.fcgWindow.recentMisses.openOverdue.map((row) => row.status);
+    expect(statuses).toEqual(["ACCEPTED", "EDITED", "PROPOSED"]);
+    for (const row of r.fcgWindow.recentMisses.openOverdue) {
+      expect(row.lateMs).toBeGreaterThan(0);
+      expect(row.sentMarkedAt).toBeNull();
+      expect(row.status).not.toBe("SENT");
+      expect(row.status).not.toBe("DISCARDED");
+    }
+  });
+
+  it("bypassed-synth late sends never appear in the misses list", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("misses-bypass"),
+    });
+
+    const base = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    // A bypassed-synth row 3h late — would dominate if not excluded.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      synthesisedFromOutboundIngest: true,
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 30 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 210 * 60_000),
+    });
+    // A real engine row 20 min late.
+    await seedDraft({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      status: "SENT",
+      createdAt: base,
+      fcgWindowDeadline: new Date(base.getTime() + 30 * 60_000),
+      sentMarkedAt: new Date(base.getTime() + 50 * 60_000),
+    });
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.sentAfterWindow).toBe(1);
+    expect(r.fcgWindow.recentMisses.sentAfterWindow).toHaveLength(1);
+    expect(
+      Math.round(r.fcgWindow.recentMisses.sentAfterWindow[0]!.lateMs / 60_000),
+    ).toBe(20);
+  });
+
+  it("caps each list at RECENT_MISSES_LIMIT rows even with many misses", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("misses-cap"),
+    });
+
+    const base = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    // 15 late sends — list cap is 10.
+    for (let i = 1; i <= 15; i += 1) {
+      await seedDraft({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        status: "SENT",
+        createdAt: base,
+        fcgWindowDeadline: new Date(base.getTime() + 30 * 60_000),
+        sentMarkedAt: new Date(base.getTime() + (30 + i) * 60_000),
+      });
+    }
+
+    const r = await computeDraftRollup({ tenantId: tenant.id });
+    expect(r.fcgWindow.sentAfterWindow).toBe(15);
+    expect(r.fcgWindow.recentMisses.sentAfterWindow).toHaveLength(10);
+    // Top 10 by lateness should be the 6th-to-15th rows (15m..6m late
+    // are dropped). Most-late first.
+    const minutesLate = r.fcgWindow.recentMisses.sentAfterWindow.map((row) =>
+      Math.round(row.lateMs / 60_000),
+    );
+    expect(minutesLate[0]).toBe(15);
+    expect(minutesLate[minutesLate.length - 1]).toBe(6);
+  });
+});

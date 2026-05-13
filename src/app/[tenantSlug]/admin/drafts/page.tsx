@@ -8,6 +8,7 @@ import {
   computePriorPeriodFcgRate,
   type DraftRollup,
   type DraftRollupWindow,
+  type FcgMissRow,
   type SourceBucket,
 } from "@/lib/drafts/rollup";
 
@@ -90,10 +91,22 @@ export default async function DraftsRollupPage({
     }),
   ]);
 
-  const topMemberIds = rollup.byMembership.map((m) => m.membershipId);
-  const memberships = topMemberIds.length
+  // Top-drafters table + item 74's recent-misses panel both need
+  // human-readable member labels. Union the two ID sets and resolve in
+  // a single query rather than two round trips.
+  const memberIdSet = new Set<string>(
+    rollup.byMembership.map((m) => m.membershipId),
+  );
+  for (const r of rollup.fcgWindow.recentMisses.sentAfterWindow) {
+    if (r.membershipId) memberIdSet.add(r.membershipId);
+  }
+  for (const r of rollup.fcgWindow.recentMisses.openOverdue) {
+    if (r.membershipId) memberIdSet.add(r.membershipId);
+  }
+  const memberIds = Array.from(memberIdSet);
+  const memberships = memberIds.length
     ? await superDb.membership.findMany({
-        where: { id: { in: topMemberIds } },
+        where: { id: { in: memberIds } },
         include: { user: { select: { email: true, name: true } } },
       })
     : [];
@@ -215,6 +228,13 @@ export default async function DraftsRollupPage({
           />
         </div>
       </section>
+
+      <RecentFcgMissesSection
+        sentAfterWindow={rollup.fcgWindow.recentMisses.sentAfterWindow}
+        openOverdue={rollup.fcgWindow.recentMisses.openOverdue}
+        memberLabel={memberLabel}
+        windowDays={windowDays}
+      />
 
       <section className="card space-y-3">
         <h2 className="text-base font-medium">By draft source</h2>
@@ -375,6 +395,160 @@ function Field({
       {hint && <dd className="text-[11px] text-ink/50">{hint}</dd>}
     </div>
   );
+}
+
+/**
+ * Post-PRD item 74 — recent FCG-window misses panel.
+ *
+ * Closes the loop from items 66-73 (operator sees the rate / trend /
+ * who's missing) to operator action ("these specific drafts broke the
+ * promise — go act on them"). Two stacked tables: late sends in the
+ * window and currently-overdue open drafts, each capped at
+ * `RECENT_MISSES_LIMIT` rows ordered by lateness.
+ *
+ * No draft body, no link. The operator follows up out-of-band — DM
+ * the Member, check email, escalate. Body content is private to the
+ * Member's own /drafts inbox; the admin sees just enough to identify
+ * and triage.
+ */
+function RecentFcgMissesSection({
+  sentAfterWindow,
+  openOverdue,
+  memberLabel,
+  windowDays,
+}: {
+  sentAfterWindow: FcgMissRow[];
+  openOverdue: FcgMissRow[];
+  memberLabel: Map<string, string>;
+  windowDays: number;
+}) {
+  const hasAny = sentAfterWindow.length > 0 || openOverdue.length > 0;
+  return (
+    <section className="card space-y-4">
+      <div>
+        <h2 className="text-base font-medium">Recent FCG-window misses</h2>
+        <p className="text-xs text-ink/60">
+          Specific drafts behind the &ldquo;sent after window&rdquo; and
+          &ldquo;open + overdue&rdquo; counts. Sorted most-late first —
+          worst misses at the top. Body content stays private to each
+          Member&apos;s own /drafts inbox.
+        </p>
+      </div>
+      {!hasAny ? (
+        <p className="text-sm text-ink/60">
+          No broken FCG-window promises in the last {windowDays} days.
+        </p>
+      ) : null}
+      <MissesTable
+        heading="Sent after window"
+        emptyLabel={`No late sends in the last ${windowDays} days.`}
+        rows={sentAfterWindow}
+        memberLabel={memberLabel}
+        whenColumnLabel="Sent"
+        whenAccessor={(r) => r.sentMarkedAt}
+      />
+      <MissesTable
+        heading="Open + overdue"
+        emptyLabel={`No open drafts past their deadline.`}
+        rows={openOverdue}
+        memberLabel={memberLabel}
+        whenColumnLabel="Status"
+        whenAccessor={() => null}
+        showStatusInsteadOfWhen
+      />
+    </section>
+  );
+}
+
+function MissesTable({
+  heading,
+  emptyLabel,
+  rows,
+  memberLabel,
+  whenColumnLabel,
+  whenAccessor,
+  showStatusInsteadOfWhen,
+}: {
+  heading: string;
+  emptyLabel: string;
+  rows: FcgMissRow[];
+  memberLabel: Map<string, string>;
+  whenColumnLabel: string;
+  whenAccessor: (r: FcgMissRow) => Date | null;
+  showStatusInsteadOfWhen?: boolean;
+}) {
+  return (
+    <div className="space-y-1">
+      <h3 className="text-xs font-medium uppercase tracking-wider text-ink/50">
+        {heading}
+      </h3>
+      {rows.length === 0 ? (
+        <p className="text-sm text-ink/60">{emptyLabel}</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs uppercase tracking-wider text-ink/50">
+            <tr>
+              <th className="py-1 pr-3">Member</th>
+              <th className="py-1 pr-3">Deadline</th>
+              <th className="py-1 pr-3">{whenColumnLabel}</th>
+              <th className="py-1 pr-3">Late by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const label =
+                (r.membershipId && memberLabel.get(r.membershipId)) ??
+                r.membershipId ??
+                "(no member)";
+              const when = whenAccessor(r);
+              return (
+                <tr key={r.draftId} className="border-t border-ink/5 align-top">
+                  <td className="py-2 pr-3">{label}</td>
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    {formatIsoMinute(r.fcgWindowDeadline)}
+                  </td>
+                  <td className="py-2 pr-3 font-mono text-xs">
+                    {showStatusInsteadOfWhen ? (
+                      <span className="tag bg-amber-50 text-amber-900">
+                        {r.status}
+                      </span>
+                    ) : when ? (
+                      formatIsoMinute(when)
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 font-medium text-red-900">
+                    {formatLateBy(r.lateMs)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function formatIsoMinute(d: Date): string {
+  return d.toISOString().slice(0, 16).replace("T", " ");
+}
+
+/// Render a positive duration as a short "Nm" / "Nh" / "Nd" string.
+/// Sub-minute collapses to "<1m" so a 30-second tail doesn't read as
+/// "0m late". Mirror of `formatDeadlineRelative` from triage — same
+/// shape, but works on a raw ms duration rather than a deadline+now
+/// pair, so it can be used for both sent-after (sentAt - deadline)
+/// and open-overdue (now - deadline) without a wrapper.
+function formatLateBy(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(ms / (60 * 60_000));
+  if (hours < 48) return `${hours}h`;
+  const days = Math.round(ms / (24 * 60 * 60_000));
+  return `${days}d`;
 }
 
 /**
