@@ -16,7 +16,10 @@
 import { randomUUID } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { superDb } from "@/lib/db";
-import { computeAdherenceMetrics } from "@/lib/adherence/metrics";
+import {
+  computeAdherenceMetrics,
+  computePriorPeriodAdherenceMetrics,
+} from "@/lib/adherence/metrics";
 import {
   createTestTenant,
   createTestUserAndMembership,
@@ -313,5 +316,192 @@ describe("computeAdherenceMetrics — window + scope", () => {
     expect(m.escalated).toBe(1);
     expect(m.oldestUnackedMs).toBeGreaterThanOrEqual(3 * HOUR - 1000);
     expect(m.oldestUnackedMs).toBeLessThanOrEqual(3 * HOUR + 60_000);
+  });
+});
+
+describe("computePriorPeriodAdherenceMetrics — item 91 trend pill source", () => {
+  it("prior 30d window is [now-60d, now-30d) — current + prior never overlap", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-window"),
+    });
+    const now = new Date();
+    // Row at exactly the cutoff (now - 30d) belongs to PRIOR (lt: now-30
+    // for prior, gte: now-30 for current) — but actually our impl uses
+    // [since, until) so the prior window's until = now-30 is exclusive.
+    // A row escalated at exactly now-30d would belong to CURRENT, not
+    // prior. Verify by placing rows on either side.
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR), // prior
+      acknowledgedAt: new Date(now.getTime() - 44 * 24 * HOUR),
+      acknowledgedById: membership.id,
+    });
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      escalatedAt: new Date(now.getTime() - 5 * 24 * HOUR), // current
+      acknowledgedAt: new Date(now.getTime() - 4 * 24 * HOUR),
+      acknowledgedById: membership.id,
+    });
+    const cur = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    const prev = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(cur.escalated).toBe(1);
+    expect(prev.escalated).toBe(1);
+  });
+
+  it("ack landing in current window does NOT credit prior (asOf pinned to until)", async () => {
+    // Row escalated 40d ago — squarely in prior 30d window. But the ack
+    // didn't land until 10d ago, which is in CURRENT. Without asOf
+    // pinning, prior would see this as "acked" (inflating prior ack
+    // rate); with pinning, prior sees it as "still open at window
+    // close" and acknowledged is 0.
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-asof"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      // Ack inside current window:
+      acknowledgedAt: new Date(now.getTime() - 10 * 24 * HOUR),
+      acknowledgedById: membership.id,
+    });
+    const prev = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prev.escalated).toBe(1);
+    // Load-bearing: this is 0, NOT 1. The ack lives in the current
+    // window's evidence, not the prior window's.
+    expect(prev.acknowledged).toBe(0);
+    expect(prev.acknowledgedRate).toBe(0);
+    expect(prev.medianAckMs).toBeNull();
+  });
+
+  it("oldestUnackedMs in prior window measured at asOf=until, not now", async () => {
+    // Row escalated 50d ago, never acked. If asOf were now, prior would
+    // report ~50d outstanding. With asOf pinned to until (= now-30d),
+    // prior reports ~20d outstanding — the age when the prior window
+    // closed.
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-oldest"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      escalatedAt: new Date(now.getTime() - 50 * 24 * HOUR),
+    });
+    const prev = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    // 50d ago → 20d outstanding at asOf=now-30d
+    const TWENTY_D = 20 * 24 * HOUR;
+    expect(prev.oldestUnackedMs).not.toBeNull();
+    expect(prev.oldestUnackedMs!).toBeGreaterThanOrEqual(TWENTY_D - 60_000);
+    expect(prev.oldestUnackedMs!).toBeLessThanOrEqual(TWENTY_D + 60_000);
+  });
+
+  it("scope filter symmetry: prior + current both honour membershipId", async () => {
+    const tenant = await createTestTenant();
+    const { membership: m1 } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-scope-1"),
+    });
+    const { membership: m2 } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-scope-2"),
+    });
+    const now = new Date();
+    // m1: prior-window escalation
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: m1.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 39 * 24 * HOUR),
+      acknowledgedById: m1.id,
+    });
+    // m2: prior-window escalation
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: m2.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 35 * 24 * HOUR),
+      acknowledgedById: m2.id,
+    });
+    const prevAll = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    const prevMine = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      membershipId: m1.id,
+      now,
+    });
+    expect(prevAll.escalated).toBe(2);
+    expect(prevMine.escalated).toBe(1);
+  });
+
+  it("tenant-scoped: A's prior data doesn't leak into B", async () => {
+    const tenantA = await createTestTenant();
+    const tenantB = await createTestTenant();
+    const { membership: a } = await createTestUserAndMembership(tenantA.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-iso-a"),
+    });
+    const { membership: b } = await createTestUserAndMembership(tenantB.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-iso-b"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenantA.id,
+      membershipId: a.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 45 * 24 * HOUR + 2 * HOUR),
+      acknowledgedById: a.id,
+    });
+    await makeAdherence({
+      tenantId: tenantB.id,
+      membershipId: b.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 45 * 24 * HOUR + 8 * HOUR),
+      acknowledgedById: b.id,
+    });
+    const prevA = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenantA.id,
+      windowDays: 30,
+      now,
+    });
+    const prevB = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenantB.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prevA.escalated).toBe(1);
+    expect(prevA.medianAckMs).toBe(2 * HOUR);
+    expect(prevB.escalated).toBe(1);
+    expect(prevB.medianAckMs).toBe(8 * HOUR);
   });
 });

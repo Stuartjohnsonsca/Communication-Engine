@@ -81,6 +81,43 @@ export async function computeAdherenceMetrics(input: {
   const windowDays = input.windowDays ?? 30;
   const now = input.now ?? new Date();
   const since = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  return computeAdherenceMetricsForRange({
+    tenantId: input.tenantId,
+    membershipId: input.membershipId,
+    since,
+    until: now,
+    asOf: now,
+  });
+}
+
+/**
+ * Post-PRD item 91 — internal range helper. Same query + classification
+ * logic as `computeAdherenceMetrics` but takes an explicit `[since,
+ * until)` range so `computePriorPeriodAdherenceMetrics` can reuse it
+ * without duplicating the percentile loop.
+ *
+ * `asOf` is the clock used for `oldestUnackedMs` and for the
+ * "acknowledged-in-range" predicate:
+ *   - CURRENT window callers pass `now` so the gauge reflects real
+ *     outstanding age + every ack that's landed by request time counts.
+ *   - PRIOR window callers pass the END of the prior window (`until`)
+ *     so an ack landing AFTER the window closed (i.e. inside the
+ *     current window) does NOT inflate the prior ack rate. Without this
+ *     pin, "we improved" would falsely read as "we got worse"
+ *     (item 79's load-bearing rule on the sentiment side).
+ *
+ * Mirrors `computeSentimentMetricsForRange` from item 79.
+ */
+async function computeAdherenceMetricsForRange(input: {
+  tenantId: string;
+  since: Date;
+  until: Date;
+  asOf: Date;
+  membershipId?: string;
+}): Promise<AdherenceMetrics> {
+  const windowDays = Math.round(
+    (input.until.getTime() - input.since.getTime()) / (24 * 60 * 60 * 1000),
+  );
 
   // Narrow query — SQL predicates apply scope + escalation gate so
   // non-escalated adherence rows (scored-but-OK sends) don't get
@@ -90,7 +127,7 @@ export async function computeAdherenceMetrics(input: {
     where: {
       tenantId: input.tenantId,
       ...(input.membershipId ? { membershipId: input.membershipId } : {}),
-      escalatedAt: { not: null, gte: since, lt: now },
+      escalatedAt: { not: null, gte: input.since, lt: input.until },
     },
     select: {
       escalatedAt: true,
@@ -106,20 +143,26 @@ export async function computeAdherenceMetrics(input: {
   let acknowledged = 0;
   const ackDurations: number[] = [];
   let oldestUnackedMs: number | null = null;
-  const nowMs = now.getTime();
+  const asOfMs = input.asOf.getTime();
 
   for (const r of rows) {
     if (!r.escalatedAt) continue;
     escalated += 1;
-    if (r.acknowledgedAt !== null) {
+    // For prior-window callers: only count acks landed BEFORE the
+    // prior window closed. An ack inside the CURRENT window (i.e.
+    // after `asOf` for prior callers) is current-window evidence, not
+    // prior evidence (item 79's invariant).
+    const ackedInRange =
+      r.acknowledgedAt !== null && r.acknowledgedAt.getTime() < asOfMs;
+    if (ackedInRange) {
       acknowledged += 1;
       const duration = Math.max(
         0,
-        r.acknowledgedAt.getTime() - r.escalatedAt.getTime(),
+        r.acknowledgedAt!.getTime() - r.escalatedAt.getTime(),
       );
       ackDurations.push(duration);
     } else {
-      const ms = nowMs - r.escalatedAt.getTime();
+      const ms = asOfMs - r.escalatedAt.getTime();
       if (outstandingPositive(ms)) {
         if (oldestUnackedMs === null || ms > oldestUnackedMs) {
           oldestUnackedMs = ms;
@@ -137,6 +180,45 @@ export async function computeAdherenceMetrics(input: {
     p90AckMs: percentile(ackDurations, PERCENTILES.p90),
     oldestUnackedMs,
   };
+}
+
+/**
+ * Post-PRD item 91 — adherence trend pill prior-period snapshot. Same
+ * `AdherenceMetrics` shape as the current call but for the immediately-
+ * prior same-length window. For a 30d call, prior = `[now-60d, now-30d)`.
+ * Current and prior never overlap (the cutoff is `now - windowDays`,
+ * used as `until` of prior and `since` of current).
+ *
+ * `asOf` pinned to `until` so:
+ *   - `oldestUnackedMs` reads as "how long had this signal been
+ *     outstanding when the prior window closed?" — without that pin, an
+ *     unacked row from 40d ago would always read as "40d outstanding"
+ *     instead of however old it was when its window ended.
+ *   - An ack landing inside the current window doesn't get credited to
+ *     prior — otherwise "we improved" would falsely read "we got worse."
+ *
+ * Renders nothing in the UI when current OR prior is null OR prior
+ * escalated === 0 (same null-prior invariant as items 72/73/75/79/88).
+ * Mirrors `computePriorPeriodSentimentMetrics` from item 79.
+ */
+export async function computePriorPeriodAdherenceMetrics(input: {
+  tenantId: string;
+  windowDays?: AdherenceMetricsWindow;
+  membershipId?: string;
+  now?: Date;
+}): Promise<AdherenceMetrics> {
+  const windowDays = input.windowDays ?? 30;
+  const now = input.now ?? new Date();
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  const until = new Date(now.getTime() - windowMs);
+  const since = new Date(until.getTime() - windowMs);
+  return computeAdherenceMetricsForRange({
+    tenantId: input.tenantId,
+    membershipId: input.membershipId,
+    since,
+    until,
+    asOf: until,
+  });
 }
 
 function outstandingPositive(ms: number): boolean {

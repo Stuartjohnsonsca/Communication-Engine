@@ -6,9 +6,10 @@ import { hasPermission, requirePermission } from "@/lib/rbac";
 import { ADHERENCE_ESCALATION_THRESHOLD } from "@/lib/adherence/escalation";
 import {
   computeAdherenceMetrics,
+  computePriorPeriodAdherenceMetrics,
   type AdherenceMetrics,
 } from "@/lib/adherence/metrics";
-import { formatDurationOrDash } from "@/lib/format/duration";
+import { formatDuration, formatDurationOrDash } from "@/lib/format/duration";
 import AcknowledgeButton from "./AcknowledgeButton";
 
 type Filter = "OPEN" | "ALL" | "ACKNOWLEDGED";
@@ -64,7 +65,7 @@ export default async function AdherenceEscalationsPage({
         ? { acknowledgedAt: null }
         : { acknowledgedAt: { not: null } };
 
-  const [rows, openCount, ackCount, allCount, metrics] = await Promise.all([
+  const [rows, openCount, ackCount, allCount, metrics, priorMetrics] = await Promise.all([
     superDb.communicationAdherence.findMany({
       where: { ...baseWhere, ...filterWhere },
       orderBy: [{ escalatedAt: "desc" }, { createdAt: "desc" }],
@@ -92,6 +93,15 @@ export default async function AdherenceEscalationsPage({
     // self-scoped otherwise. Default window matches /sentiment /
     // /admin/drafts / /account so the surfaces speak the same period.
     computeAdherenceMetrics({
+      tenantId: ctx.tenant.id,
+      windowDays: 30,
+      ...(firmWide ? {} : { membershipId: ctx.membership.id }),
+    }),
+    // Item 91 — prior 30d snapshot for the trend pills. Same scope as
+    // `metrics` so current/prior speak the same view. Empty prior →
+    // pills render nothing (don't fake a delta against missing data,
+    // same null-prior invariant as items 72/73/75/79/88).
+    computePriorPeriodAdherenceMetrics({
       tenantId: ctx.tenant.id,
       windowDays: 30,
       ...(firmWide ? {} : { membershipId: ctx.membership.id }),
@@ -132,7 +142,7 @@ export default async function AdherenceEscalationsPage({
         the FCT — whether the send went through the drafting UI or bypassed it via the connected mailbox.
       </p>
 
-      <AdherenceResponseTimeCard metrics={metrics} />
+      <AdherenceResponseTimeCard metrics={metrics} prior={priorMetrics} />
 
 
       <div className="flex flex-wrap gap-1 text-xs">
@@ -243,24 +253,32 @@ export default async function AdherenceEscalationsPage({
 }
 
 /**
- * Post-PRD item 90 — adherence response-time card. Adherence-pillar
- * analog of item 78's `SentimentResponseTimeCard`. Same four-tile
- * layout (Acknowledged / Median TTA / P90 TTA / Oldest unacked), same
- * null-when-no-data rules, same 4h-stale red-tone on `Oldest unacked`
- * — operator mental model is "4h = bad" everywhere across response-
- * time gauges.
+ * Post-PRD items 90 + 91 — adherence response-time card with trend pills.
+ *
+ * Adherence-pillar analog of item 78's `SentimentResponseTimeCard` + item
+ * 79's trend pills. Same four-tile layout (Acknowledged / Median TTA /
+ * P90 TTA / Oldest unacked), same null-when-no-data rules, same 4h-stale
+ * red-tone on `Oldest unacked` — operator mental model is "4h = bad"
+ * everywhere across response-time gauges.
  *
  * Renders nothing when `escalated === 0` — a clean-adherence tenant
  * doesn't need a "—" card cluttering the page. The list section below
  * already prints "No escalations match this filter" in that state.
  *
- * Trend pills are deliberately omitted in this first iteration —
- * shipping the headline gauge first matches item 78's cadence (the
- * trend pills came later in item 79). A future item can add an
- * AdherenceAckRateTrendPill + AdherenceMedianTtaTrendPill against a
- * prior-period helper, same shape as items 79/72.
+ * Item 91 — Acknowledged AND Median TTA both carry a trend pill against
+ * the immediately-prior same-length window. P90 + Oldest unacked
+ * deliberately don't get pills (P90 is noisy at typical N, Oldest
+ * unacked is a point-in-time gauge — same exclusions as item 79).
+ * Per-Member breakdown deliberately omitted; that'd be a separate item
+ * mirroring item 80.
  */
-function AdherenceResponseTimeCard({ metrics }: { metrics: AdherenceMetrics }) {
+function AdherenceResponseTimeCard({
+  metrics,
+  prior,
+}: {
+  metrics: AdherenceMetrics;
+  prior: AdherenceMetrics;
+}) {
   if (metrics.escalated === 0) return null;
 
   const ratePct =
@@ -291,6 +309,12 @@ function AdherenceResponseTimeCard({ metrics }: { metrics: AdherenceMetrics }) {
               ({metrics.acknowledged}/{metrics.escalated})
             </span>
           </dd>
+          <AdherenceAckRateTrendPill
+            current={metrics.acknowledgedRate}
+            prior={prior.acknowledgedRate}
+            priorEscalated={prior.escalated}
+            windowDays={metrics.windowDays}
+          />
         </div>
         <div>
           <dt
@@ -302,6 +326,11 @@ function AdherenceResponseTimeCard({ metrics }: { metrics: AdherenceMetrics }) {
           <dd className="font-medium">
             {formatDurationOrDash(metrics.medianAckMs)}
           </dd>
+          <AdherenceMedianTtaTrendPill
+            current={metrics.medianAckMs}
+            prior={prior.medianAckMs}
+            windowDays={metrics.windowDays}
+          />
         </div>
         <div>
           <dt
@@ -327,6 +356,108 @@ function AdherenceResponseTimeCard({ metrics }: { metrics: AdherenceMetrics }) {
         </div>
       </dl>
     </div>
+  );
+}
+
+/**
+ * Post-PRD item 91 — acknowledged-rate trend pill on the adherence card.
+ * Sibling of item 79's sentiment-side `AckRateTrendPill`: percentage-
+ * point delta vs prior same-length window, 1pp flat band, ↑green = good
+ * (acked more), ↓red = bad. Renders nothing when current or prior is
+ * null, or when prior had zero escalations — don't fake a delta against
+ * missing data. Same null-prior invariant as items 72/73/75/79/88.
+ */
+function AdherenceAckRateTrendPill({
+  current,
+  prior,
+  priorEscalated,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  priorEscalated: number;
+  windowDays: number;
+}) {
+  if (current === null || prior === null || priorEscalated === 0) return null;
+  const FLAT_THRESHOLD = 0.01;
+  const delta = current - prior;
+  const deltaPp = Math.round(delta * 100);
+  const priorPct = Math.round(prior * 100);
+  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta > FLAT_THRESHOLD) {
+    arrow = "↑";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta < -FLAT_THRESHOLD) {
+    arrow = "↓";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {deltaPp >= 0 ? "+" : ""}
+        {deltaPp}pp vs prior {windowDays}d
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Post-PRD item 91 — median-TTA trend pill on the adherence card.
+ * Sibling of item 79's sentiment-side `MedianTtaTrendPill`: inverted
+ * colour rule (lower latency is BETTER, so faster=↓green, slower=↑red),
+ * `max(60s, 10% of prior)` flat band so neither absolute jitter at high
+ * values nor sampling noise at low values trips the colour change.
+ *
+ * Renders nothing when either side is null — typically because zero
+ * escalations were acked in one of the windows, so there's no median to
+ * compare. Same null-prior invariant as items 72/73/75/79/88.
+ */
+function AdherenceMedianTtaTrendPill({
+  current,
+  prior,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  windowDays: number;
+}) {
+  if (current === null || prior === null) return null;
+  const ABS_FLOOR_MS = 60_000;
+  const REL_THRESHOLD = 0.1;
+  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
+  const delta = current - prior;
+  const priorLabel = formatDuration(prior);
+  const deltaLabel = formatDuration(Math.abs(delta));
+  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta < -flatBand) {
+    arrow = "↓";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta > flatBand) {
+    arrow = "↑";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {directionWord}
+        {deltaLabel} vs prior {windowDays}d
+      </span>
+    </span>
   );
 }
 
