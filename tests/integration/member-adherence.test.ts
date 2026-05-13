@@ -15,7 +15,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { superDb } from "@/lib/db";
-import { computeMemberFcgAdherence } from "@/lib/drafts";
+import {
+  computeMemberFcgAdherence,
+  computeMemberFcgAdherenceForRange,
+  computeMemberPriorPeriodFcgRate,
+} from "@/lib/drafts";
 import {
   createTestTenant,
   createTestUserAndMembership,
@@ -299,5 +303,225 @@ describe("computeMemberFcgAdherence — isolation + window", () => {
       windowDays: 90,
     });
     expect(r90.sentWithDeadline).toBe(2);
+  });
+});
+
+/**
+ * Post-PRD hardening item 73 — per-Member prior-period adherence rate.
+ *
+ * The same coverage the firm-wide trend helper has (item 72), one
+ * scope tighter. Critical invariants:
+ *   - the prior window is the immediately-prior same-length range
+ *     (current and prior never overlap)
+ *   - per-Member scoping isolates one Membership's prior data from
+ *     another's (the trend pill is personal, not firm-wide)
+ *   - same exclusions as `computeMemberFcgAdherence`: bypassed-synth
+ *     and no-deadline drafts never contribute
+ *   - null rate when the prior window is empty, never 0/0
+ */
+const DAY = 24 * 60 * 60 * 1000;
+
+async function seedMemberSend(opts: {
+  tenantId: string;
+  membershipId: string;
+  createdAt: Date;
+  deadline: Date;
+  sentMarkedAt: Date;
+  synthesisedFromOutboundIngest?: boolean;
+  fcgWindowDeadline?: Date | null;
+}) {
+  await superDb.draft.create({
+    data: {
+      tenantId: opts.tenantId,
+      membershipId: opts.membershipId,
+      kind: "EMAIL",
+      channel: "EMAIL",
+      status: "SENT",
+      body: "x",
+      createdAt: opts.createdAt,
+      fcgWindowDeadline:
+        opts.fcgWindowDeadline === undefined
+          ? opts.deadline
+          : opts.fcgWindowDeadline,
+      sentMarkedAt: opts.sentMarkedAt,
+      synthesisedFromOutboundIngest: opts.synthesisedFromOutboundIngest ?? false,
+    },
+  });
+}
+
+describe("computeMemberPriorPeriodFcgRate — window scoping", () => {
+  it("queries only the prior same-length window (per-Member)", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("mtrend-scope"),
+    });
+    const now = new Date();
+
+    // CURRENT 30d: 4 within, 0 after (100% — must NOT be counted in prior)
+    for (let i = 0; i < 4; i += 1) {
+      const created = new Date(now.getTime() - 1 * DAY);
+      const deadline = new Date(now.getTime() - 0.5 * DAY);
+      await seedMemberSend({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      });
+    }
+    // PRIOR 30d: (-60d, -30d) — 1 within, 3 after (25%)
+    {
+      const created = new Date(now.getTime() - 45 * DAY);
+      const deadline = new Date(now.getTime() - 44 * DAY);
+      await seedMemberSend({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      });
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const created = new Date(now.getTime() - 45 * DAY);
+      const deadline = new Date(now.getTime() - 44 * DAY);
+      await seedMemberSend({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() + 60_000),
+      });
+    }
+
+    const prior = await computeMemberPriorPeriodFcgRate({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prior.sentWithDeadline).toBe(4);
+    expect(prior.sentWithinWindow).toBe(1);
+    expect(prior.sentAfterWindow).toBe(3);
+    expect(prior.withinWindowRate).toBe(0.25);
+  });
+
+  it("returns null rate when the Member's prior window is empty", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("mtrend-empty"),
+    });
+    const now = new Date();
+    // Only a recent send — prior window stays empty.
+    await seedMemberSend({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      createdAt: new Date(now.getTime() - 1 * DAY),
+      deadline: new Date(now.getTime() - 0.5 * DAY),
+      sentMarkedAt: new Date(now.getTime() - 0.6 * DAY),
+    });
+    const prior = await computeMemberPriorPeriodFcgRate({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prior.sentWithDeadline).toBe(0);
+    expect(prior.withinWindowRate).toBeNull();
+  });
+});
+
+describe("computeMemberFcgAdherenceForRange — exclusions + scope", () => {
+  it("excludes bypassed-synth + no-deadline rows", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("mtrend-bypass"),
+    });
+    const now = new Date();
+    const created = new Date(now.getTime() - 40 * DAY);
+    const deadline = new Date(now.getTime() - 39 * DAY);
+
+    // 1 normal within, 1 bypassed-synth within, 1 no-deadline.
+    await seedMemberSend({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      createdAt: created,
+      deadline,
+      sentMarkedAt: new Date(deadline.getTime() - 60_000),
+    });
+    await seedMemberSend({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      createdAt: created,
+      deadline,
+      sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      synthesisedFromOutboundIngest: true,
+    });
+    await seedMemberSend({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      createdAt: created,
+      deadline,
+      sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      fcgWindowDeadline: null,
+    });
+
+    const r = await computeMemberFcgAdherenceForRange({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      since: new Date(now.getTime() - 60 * DAY),
+      until: new Date(now.getTime() - 30 * DAY),
+    });
+    expect(r.sentWithDeadline).toBe(1);
+    expect(r.withinWindowRate).toBe(1);
+  });
+
+  it("is per-Member scoped — another member's prior drafts don't leak", async () => {
+    const tenant = await createTestTenant();
+    const a = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("mtrend-iso-a"),
+    });
+    const other = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("mtrend-iso-other"),
+    });
+    const now = new Date();
+
+    // Other member had a bad prior month (2 after).
+    for (let i = 0; i < 2; i += 1) {
+      const created = new Date(now.getTime() - 45 * DAY);
+      const deadline = new Date(now.getTime() - 44 * DAY);
+      await seedMemberSend({
+        tenantId: tenant.id,
+        membershipId: other.membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() + 60_000),
+      });
+    }
+    // Mine in the prior window: 1 within → my rate is 100%, not 33%.
+    {
+      const created = new Date(now.getTime() - 45 * DAY);
+      const deadline = new Date(now.getTime() - 44 * DAY);
+      await seedMemberSend({
+        tenantId: tenant.id,
+        membershipId: a.membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      });
+    }
+
+    const prior = await computeMemberPriorPeriodFcgRate({
+      tenantId: tenant.id,
+      membershipId: a.membership.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prior.sentWithDeadline).toBe(1);
+    expect(prior.withinWindowRate).toBe(1);
   });
 });

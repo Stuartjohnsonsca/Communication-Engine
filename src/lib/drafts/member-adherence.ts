@@ -33,6 +33,35 @@ export type MemberFcgAdherence = {
   withinWindowRate: number | null;
 };
 
+/**
+ * Post-PRD hardening item 73 — per-Member FCG-window rate over an
+ * arbitrary `[since, until)` range. The matching first-person helper
+ * for `computeFcgAdherenceForRange` (item 72), used by the /account
+ * trend pill to compare a Member's current 30d adherence against their
+ * own immediately-prior 30d.
+ *
+ * Same exclusions as `computeMemberFcgAdherence` and the firm-wide
+ * trend helper: bypassed-synth drafts never count, drafts without
+ * `fcgWindowDeadline` never count, and only SENT rows contribute to
+ * the rate.
+ *
+ * `withinWindowRate` is null when `sentWithDeadline === 0` — same
+ * null-when-no-data invariant the rest of the codebase uses. The pill
+ * then renders nothing rather than faking a 0pp delta against missing
+ * data.
+ *
+ * Open-overdue is NOT computed for the prior window — same reason as
+ * item 72: "what was open and overdue 30 days ago" requires status as
+ * of historic point, which is a different query shape and isn't load-
+ * bearing for a rate-vs-rate pill.
+ */
+export type MemberFcgAdherenceForRange = {
+  sentWithDeadline: number;
+  sentWithinWindow: number;
+  sentAfterWindow: number;
+  withinWindowRate: number | null;
+};
+
 export async function computeMemberFcgAdherence(input: {
   tenantId: string;
   membershipId: string;
@@ -94,4 +123,74 @@ export async function computeMemberFcgAdherence(input: {
     withinWindowRate:
       sentWithDeadline > 0 ? sentWithinWindow / sentWithDeadline : null,
   };
+}
+
+export async function computeMemberFcgAdherenceForRange(input: {
+  tenantId: string;
+  membershipId: string;
+  since: Date;
+  until: Date;
+}): Promise<MemberFcgAdherenceForRange> {
+  const rows = await superDb.draft.findMany({
+    where: {
+      tenantId: input.tenantId,
+      membershipId: input.membershipId,
+      createdAt: { gte: input.since, lt: input.until },
+      // Same exclusions as `computeMemberFcgAdherence` — applied at the
+      // query layer so we don't pay to fetch rows we'd only drop.
+      synthesisedFromOutboundIngest: false,
+      fcgWindowDeadline: { not: null },
+      status: "SENT",
+    },
+    select: {
+      sentMarkedAt: true,
+      fcgWindowDeadline: true,
+    },
+    take: 50_000,
+  });
+
+  let sentWithinWindow = 0;
+  let sentAfterWindow = 0;
+  for (const r of rows) {
+    if (!r.fcgWindowDeadline || !r.sentMarkedAt) continue;
+    if (r.sentMarkedAt.getTime() <= r.fcgWindowDeadline.getTime()) {
+      sentWithinWindow += 1;
+    } else {
+      sentAfterWindow += 1;
+    }
+  }
+  const sentWithDeadline = sentWithinWindow + sentAfterWindow;
+  return {
+    sentWithDeadline,
+    sentWithinWindow,
+    sentAfterWindow,
+    withinWindowRate:
+      sentWithDeadline > 0 ? sentWithinWindow / sentWithDeadline : null,
+  };
+}
+
+/**
+ * Convenience wrapper: the immediately-prior same-length window for
+ * the given Membership. For a 30d call, returns adherence over the
+ * [-60d, -30d) range. Current and prior never overlap — the cutoff is
+ * `now - windowDays`, used as both `until` of prior and (implicitly,
+ * via `computeMemberFcgAdherence`'s `since = now - windowDays`) `since`
+ * of current.
+ */
+export async function computeMemberPriorPeriodFcgRate(input: {
+  tenantId: string;
+  membershipId: string;
+  windowDays: number;
+  now?: Date;
+}): Promise<MemberFcgAdherenceForRange> {
+  const now = input.now ?? new Date();
+  const windowMs = input.windowDays * 24 * 60 * 60 * 1000;
+  const until = new Date(now.getTime() - windowMs);
+  const since = new Date(until.getTime() - windowMs);
+  return computeMemberFcgAdherenceForRange({
+    tenantId: input.tenantId,
+    membershipId: input.membershipId,
+    since,
+    until,
+  });
 }
