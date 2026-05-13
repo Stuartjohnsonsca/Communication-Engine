@@ -66,7 +66,97 @@ export type AdherenceMetrics = {
   /// matters: a 90d-old unacked escalation shouldn't dominate a 7d
   /// view.
   oldestUnackedMs: number | null;
+  /**
+   * Post-PRD item 92 — per-Member breakdown. Present (possibly empty)
+   * when the caller passed `withByMember: true`, undefined otherwise.
+   * Built in the same scan as the firm-wide aggregate so the table on
+   * /adherence/escalations can't disagree with the headline tiles about
+   * which escalations counted (mirrors item 67's per-Member invariant
+   * and item 80's sentiment-side equivalent: per-Member counters derive
+   * from one classifier).
+   *
+   * **Adherence-pillar invariant — sum is exact**: every
+   * `CommunicationAdherence` row has a non-null `membershipId` (the
+   * sender of the scored send), so unlike sentiment — where unassigned
+   * signals are excluded from per-Member but still count firm-wide —
+   * per-Member escalated counts MUST sum to firm-wide `escalated`. A
+   * drift here is a bug, not a triage-state quirk.
+   */
+  byMember?: MemberAdherenceMetrics[];
 };
+
+/**
+ * Post-PRD item 92 — per-Member adherence response-time row. Adherence-
+ * pillar analog of item 80's `MemberSentimentMetrics`. Same headline
+ * fields as `AdherenceMetrics`, plus the bootstrap CI on the median,
+ * plus the `lowVolume` flag for "we don't trust this number — too few
+ * escalations to draw a conclusion."
+ *
+ * CI is on the median ONLY (not P90) — same rationale as item 80: P90
+ * confidence intervals need 50+ samples to stabilise, and tail
+ * behaviour can't be conjured by resampling. Adherence escalation
+ * volumes per Member are typically lower than firm-wide sentiment
+ * (only below-threshold sends escalate), so a P90 CI would always be
+ * too wide to be useful.
+ */
+export type MemberAdherenceMetrics = {
+  membershipId: string;
+  /// In-window escalation count for THIS Member.
+  escalated: number;
+  /// Of those, how many were acked before the window's `asOf`.
+  acknowledged: number;
+  medianAckMs: number | null;
+  /**
+   * Bootstrap 95% confidence interval on `medianAckMs`. Null when
+   * `acknowledged < BOOTSTRAP_MIN_N` (with 1-2 acked samples the CI
+   * degenerates to a near-zero-width range and conveys false
+   * precision). When non-null, `loMs <= medianAckMs <= hiMs`.
+   *
+   * Computed by resampling the Member's `ackDurations` array with
+   * replacement `BOOTSTRAP_ITERATIONS` times, taking the median of
+   * each resample, and reading the 2.5th and 97.5th percentiles of
+   * the resulting distribution. The PRNG is SEEDED — page refreshes
+   * with the same data produce the same CI (no flickering bounds,
+   * deterministic tests).
+   */
+  medianAckCi95: { loMs: number; hiMs: number } | null;
+  p90AckMs: number | null;
+  oldestUnackedMs: number | null;
+  /// `true` when `escalated < MIN_SIGNALS_FLOOR`. Aggregates still
+  /// render (the operator may want the count visible) but the UI
+  /// flags the row so a 1-escalation "median 8h" doesn't read as a
+  /// verdict.
+  lowVolume: boolean;
+};
+
+/**
+ * Volume floor below which a Member's medians/percentiles aren't
+ * trustworthy enough to act on. Exported so future per-tenant
+ * sensitivity overrides can change it without refactor. 5 chosen to
+ * match the sentiment-side `MIN_SIGNALS_FLOOR` (item 80) so a
+ * FIRM_ADMIN reading /sentiment and /adherence/escalations applies
+ * the same mental model — "fewer than 5 signals in the window =
+ * don't act on the median yet" — across both pillars.
+ */
+export const MIN_SIGNALS_FLOOR = 5;
+
+/**
+ * Below this many acknowledged escalations, the bootstrap CI
+ * degenerates: with n=1 the resample is always the same value; with
+ * n=2 there are three possible distinct medians (a, midpoint, b) and
+ * the CI is nearly always [a, b]. n=3 is the smallest sample where
+ * bootstrap yields a meaningful interval. Mirrors item 80.
+ */
+export const BOOTSTRAP_MIN_N = 3;
+
+/**
+ * 500 resamples stabilises the 2.5%/97.5% percentile bounds on a
+ * median to ~1% of their true value, well within the resolution we
+ * render (minutes, hours). Same as item 80; if the value diverges
+ * between pillars, the duplicated `bootstrapMedianCi95` lets one
+ * tune independently.
+ */
+const BOOTSTRAP_ITERATIONS = 500;
 
 const PERCENTILES = { p50: 0.5, p90: 0.9 } as const;
 
@@ -77,6 +167,13 @@ export async function computeAdherenceMetrics(input: {
   membershipId?: string;
   /** Override now — tests pin a deterministic clock. */
   now?: Date;
+  /**
+   * Item 92 — when true, return `byMember` in the result. Firm-wide
+   * callers (FCT/Admin view on /adherence/escalations) set this; self-
+   * view callers leave it false so the per-Member breakdown isn't
+   * computed for a scope that has at most one Member.
+   */
+  withByMember?: boolean;
 }): Promise<AdherenceMetrics> {
   const windowDays = input.windowDays ?? 30;
   const now = input.now ?? new Date();
@@ -87,6 +184,7 @@ export async function computeAdherenceMetrics(input: {
     since,
     until: now,
     asOf: now,
+    withByMember: input.withByMember,
   });
 }
 
@@ -114,6 +212,7 @@ async function computeAdherenceMetricsForRange(input: {
   until: Date;
   asOf: Date;
   membershipId?: string;
+  withByMember?: boolean;
 }): Promise<AdherenceMetrics> {
   const windowDays = Math.round(
     (input.until.getTime() - input.since.getTime()) / (24 * 60 * 60 * 1000),
@@ -123,6 +222,11 @@ async function computeAdherenceMetricsForRange(input: {
   // non-escalated adherence rows (scored-but-OK sends) don't get
   // fetched only to drop them. Same "bytes we'd only drop in-app
   // aren't fetched" rule as items 69 / 76 / 78 / 89.
+  //
+  // Item 92 — `membershipId` is selected only when `withByMember` is
+  // true, mirroring item 80's conditional select on
+  // `assignedToMembershipId`. Unlike sentiment, the column is non-null
+  // on this table, so the runtime cast is safe without a fallback.
   const rows = await superDb.communicationAdherence.findMany({
     where: {
       tenantId: input.tenantId,
@@ -132,6 +236,7 @@ async function computeAdherenceMetricsForRange(input: {
     select: {
       escalatedAt: true,
       acknowledgedAt: true,
+      ...(input.withByMember ? { membershipId: true } : {}),
     },
     // Defensive cap — adherence escalations could spike during a
     // regression but 50k in a 90d window is generous at typical
@@ -145,6 +250,23 @@ async function computeAdherenceMetricsForRange(input: {
   let oldestUnackedMs: number | null = null;
   const asOfMs = input.asOf.getTime();
 
+  // Item 92 — per-Member accumulators. Built from the SAME per-row
+  // classification (`ackedInRange` + outstanding-positive check) that
+  // bumps the firm-wide counters, so the two surfaces can't drift.
+  // Mirror of item 80's sentiment-side buckets; the only behavioural
+  // delta is that adherence's `membershipId` is non-null, so every
+  // counted row contributes to exactly one Member bucket — per-Member
+  // sums MUST equal the firm-wide total (asserted in tests).
+  type MemberBucket = {
+    escalated: number;
+    acknowledged: number;
+    ackDurations: number[];
+    oldestUnackedMs: number | null;
+  };
+  const byMemberBuckets = input.withByMember
+    ? new Map<string, MemberBucket>()
+    : null;
+
   for (const r of rows) {
     if (!r.escalatedAt) continue;
     escalated += 1;
@@ -154,9 +276,11 @@ async function computeAdherenceMetricsForRange(input: {
     // prior evidence (item 79's invariant).
     const ackedInRange =
       r.acknowledgedAt !== null && r.acknowledgedAt.getTime() < asOfMs;
+    let duration: number | null = null;
+    let outstanding: number | null = null;
     if (ackedInRange) {
       acknowledged += 1;
-      const duration = Math.max(
+      duration = Math.max(
         0,
         r.acknowledgedAt!.getTime() - r.escalatedAt.getTime(),
       );
@@ -164,12 +288,57 @@ async function computeAdherenceMetricsForRange(input: {
     } else {
       const ms = asOfMs - r.escalatedAt.getTime();
       if (outstandingPositive(ms)) {
+        outstanding = ms;
         if (oldestUnackedMs === null || ms > oldestUnackedMs) {
           oldestUnackedMs = ms;
         }
       }
     }
+
+    if (byMemberBuckets) {
+      // The select only includes `membershipId` when withByMember=true,
+      // so the field is present at runtime; the cast keeps TS honest
+      // about that conditional select shape. The column is NOT NULL on
+      // this table — see schema.prisma — so no null branch is needed.
+      const mid = (r as { membershipId?: string }).membershipId!;
+      const b: MemberBucket = byMemberBuckets.get(mid) ?? {
+        escalated: 0,
+        acknowledged: 0,
+        ackDurations: [],
+        oldestUnackedMs: null,
+      };
+      b.escalated += 1;
+      if (duration !== null) {
+        b.acknowledged += 1;
+        b.ackDurations.push(duration);
+      } else if (outstanding !== null) {
+        if (b.oldestUnackedMs === null || outstanding > b.oldestUnackedMs) {
+          b.oldestUnackedMs = outstanding;
+        }
+      }
+      byMemberBuckets.set(mid, b);
+    }
   }
+
+  const byMember: MemberAdherenceMetrics[] | undefined = byMemberBuckets
+    ? Array.from(byMemberBuckets.entries()).map(([membershipId, b]) => ({
+        membershipId,
+        escalated: b.escalated,
+        acknowledged: b.acknowledged,
+        medianAckMs: percentile(b.ackDurations, PERCENTILES.p50),
+        // Bootstrap CI is seeded deterministically per Member from
+        // their own data so a refresh on the same numbers produces
+        // the same bounds — operators don't see the interval bobble
+        // between consecutive page loads (mirrors item 80).
+        medianAckCi95: bootstrapMedianCi95(
+          b.ackDurations,
+          seededPrng(seedFromDurations(b.ackDurations)),
+        ),
+        p90AckMs: percentile(b.ackDurations, PERCENTILES.p90),
+        oldestUnackedMs: b.oldestUnackedMs,
+        lowVolume: b.escalated < MIN_SIGNALS_FLOOR,
+      }))
+    : undefined;
 
   return {
     windowDays,
@@ -179,6 +348,7 @@ async function computeAdherenceMetricsForRange(input: {
     medianAckMs: percentile(ackDurations, PERCENTILES.p50),
     p90AckMs: percentile(ackDurations, PERCENTILES.p90),
     oldestUnackedMs,
+    byMember,
   };
 }
 
@@ -206,6 +376,16 @@ export async function computePriorPeriodAdherenceMetrics(input: {
   windowDays?: AdherenceMetricsWindow;
   membershipId?: string;
   now?: Date;
+  /**
+   * Item 92 — mirror of item 88's sentiment-side option. Present for
+   * shape parity with the current-window helper; today no page surface
+   * consumes the prior-window per-Member breakdown (the
+   * /adherence/escalations table doesn't render a per-Member trend pill
+   * yet — that'd be a separate item analogous to item 88). When a future
+   * item wires up a per-Member trend pill it can opt in here without a
+   * lib refactor.
+   */
+  withByMember?: boolean;
 }): Promise<AdherenceMetrics> {
   const windowDays = input.windowDays ?? 30;
   const now = input.now ?? new Date();
@@ -218,6 +398,7 @@ export async function computePriorPeriodAdherenceMetrics(input: {
     since,
     until,
     asOf: until,
+    withByMember: input.withByMember,
   });
 }
 
@@ -245,4 +426,72 @@ function percentile(values: number[], p: number): number | null {
   if (lo === hi) return sorted[lo]!;
   const frac = rank - lo;
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * frac;
+}
+
+/**
+ * Post-PRD item 92 — bootstrap 95% CI on the median of an ack-duration
+ * array. Adherence-pillar duplicate of item 80's
+ * `bootstrapMedianCi95` in `@/lib/sentiment/metrics`. Duplicating
+ * preserves pillar independence — if a future per-pillar sensitivity
+ * change wants to tune `BOOTSTRAP_ITERATIONS` (or use a different
+ * resampler) on one side without disturbing the other, the seam is
+ * already where it needs to be. The codebase's duplicate-at-two,
+ * extract-at-three rule (items 68 / 70 / 73 / 75 / 88) applies: a
+ * third bootstrap site would be the natural extraction trigger into
+ * a shared stats util.
+ *
+ * Exported for direct testing with a known seed; the production path
+ * always routes through `computeAdherenceMetricsForRange` which seeds
+ * deterministically from the data array.
+ */
+export function bootstrapMedianCi95(
+  durations: number[],
+  random: () => number,
+): { loMs: number; hiMs: number } | null {
+  const n = durations.length;
+  if (n < BOOTSTRAP_MIN_N) return null;
+  const samples = new Array<number>(BOOTSTRAP_ITERATIONS);
+  for (let b = 0; b < BOOTSTRAP_ITERATIONS; b++) {
+    // Resample with replacement, then read the median of the resample.
+    // Reuses the same `percentile` helper as the headline median so
+    // the CI bracket can't disagree on the median definition.
+    const resample = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      resample[i] = durations[Math.floor(random() * n)]!;
+    }
+    samples[b] = percentile(resample, PERCENTILES.p50)!;
+  }
+  samples.sort((a, b) => a - b);
+  const loIdx = Math.floor(0.025 * BOOTSTRAP_ITERATIONS);
+  const hiIdx = Math.ceil(0.975 * BOOTSTRAP_ITERATIONS) - 1;
+  return { loMs: samples[loIdx]!, hiMs: samples[hiIdx]! };
+}
+
+/**
+ * Seeded LCG (numerical recipes constants). Mirror of item 80 in
+ * `@/lib/sentiment/metrics` — deterministic across runs for the same
+ * seed, adequate for bootstrap resampling (no cryptographic
+ * requirement, just an unbiased uniform draw).
+ */
+function seededPrng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+/**
+ * Derive a stable seed from a duration array so the bootstrap CI for
+ * the same Member's data is reproducible across page refreshes.
+ * Identical Members with identical data share a CI (correct: the CI
+ * is a function of the data); small changes (one new ack) scramble
+ * the resample sequence. Mirror of item 80.
+ */
+function seedFromDurations(durations: number[]): number {
+  let s = durations.length;
+  for (const d of durations) {
+    s = (Math.imul(s, 31) + (d | 0)) >>> 0;
+  }
+  return s === 0 ? 1 : s;
 }

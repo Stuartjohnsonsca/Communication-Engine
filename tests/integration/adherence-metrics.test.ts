@@ -17,8 +17,11 @@ import { randomUUID } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { superDb } from "@/lib/db";
 import {
+  BOOTSTRAP_MIN_N,
+  bootstrapMedianCi95,
   computeAdherenceMetrics,
   computePriorPeriodAdherenceMetrics,
+  MIN_SIGNALS_FLOOR,
 } from "@/lib/adherence/metrics";
 import {
   createTestTenant,
@@ -503,5 +506,243 @@ describe("computePriorPeriodAdherenceMetrics — item 91 trend pill source", () 
     expect(prevA.medianAckMs).toBe(2 * HOUR);
     expect(prevB.escalated).toBe(1);
     expect(prevB.medianAckMs).toBe(8 * HOUR);
+  });
+});
+
+describe("computeAdherenceMetrics — item 92 per-Member breakdown", () => {
+  it("returns byMember only when withByMember is true", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-by-member-1"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      escalatedAt: new Date(now.getTime() - 2 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 1 * HOUR),
+      acknowledgedById: membership.id,
+    });
+
+    const without = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(without.byMember).toBeUndefined();
+
+    const withIt = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(withIt.byMember).toBeDefined();
+    expect(withIt.byMember).toHaveLength(1);
+    expect(withIt.byMember![0]!.membershipId).toBe(membership.id);
+  });
+
+  it("per-Member counts sum EXACTLY to firm-wide totals (adherence-side invariant)", async () => {
+    // Adherence rows always have a non-null `membershipId` (the sender),
+    // so unlike sentiment — where unassigned signals exist — the sum
+    // here MUST be exact. A drift would be a bug, not a triage-state
+    // quirk. Asserted explicitly so a future schema change that
+    // somehow nullable-fies `membershipId` would fail this test before
+    // shipping.
+    const tenant = await createTestTenant();
+    const { membership: a } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-sum-a"),
+    });
+    const { membership: b } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-sum-b"),
+    });
+    const now = new Date();
+    for (let i = 0; i < 3; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: a.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+        acknowledgedById: a.id,
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: b.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+      });
+    }
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    const sum = m.byMember!.reduce((acc, r) => acc + r.escalated, 0);
+    expect(sum).toBe(m.escalated);
+    const ackSum = m.byMember!.reduce((acc, r) => acc + r.acknowledged, 0);
+    expect(ackSum).toBe(m.acknowledged);
+  });
+
+  it("flags lowVolume when a Member has fewer than MIN_SIGNALS_FLOOR escalations", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-low-vol"),
+    });
+    const now = new Date();
+    // 2 escalations — well below the floor of 5.
+    for (let i = 0; i < 2; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+        acknowledgedById: membership.id,
+      });
+    }
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.lowVolume).toBe(true);
+    expect(m.byMember![0]!.escalated).toBeLessThan(MIN_SIGNALS_FLOOR);
+  });
+
+  it("does NOT flag lowVolume when a Member meets the floor", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-at-floor"),
+    });
+    const now = new Date();
+    for (let i = 0; i < MIN_SIGNALS_FLOOR; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: membership.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 20 * 60_000),
+        acknowledgedById: membership.id,
+      });
+    }
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember![0]!.lowVolume).toBe(false);
+    expect(m.byMember![0]!.escalated).toBe(MIN_SIGNALS_FLOOR);
+  });
+
+  it("bootstrap CI is null below BOOTSTRAP_MIN_N acked, non-null at/above it", async () => {
+    // n=2: degenerate CI ⇒ null. n=3: should produce a bracket that
+    // contains the headline median (load-bearing — a CI that excludes
+    // the point estimate would be a bug in the bootstrap path).
+    const tenant = await createTestTenant();
+    const { membership: low } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-ci-low"),
+    });
+    const { membership: ok } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-ci-ok"),
+    });
+    const now = new Date();
+    // 2 acked for `low` — below BOOTSTRAP_MIN_N
+    for (let i = 0; i < 2; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: low.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+        acknowledgedById: low.id,
+      });
+    }
+    // 4 acked for `ok` — at/above BOOTSTRAP_MIN_N
+    for (let i = 0; i < 4; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: ok.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 20 * 60_000),
+        acknowledgedById: ok.id,
+      });
+    }
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    const lowRow = m.byMember!.find((r) => r.membershipId === low.id)!;
+    const okRow = m.byMember!.find((r) => r.membershipId === ok.id)!;
+    expect(lowRow.medianAckCi95).toBeNull();
+    expect(okRow.medianAckCi95).not.toBeNull();
+    // CI must contain the headline median — bracket and point estimate
+    // share the same `percentile` definition (item 92's invariant).
+    expect(okRow.medianAckCi95!.loMs).toBeLessThanOrEqual(okRow.medianAckMs!);
+    expect(okRow.medianAckCi95!.hiMs).toBeGreaterThanOrEqual(okRow.medianAckMs!);
+  });
+
+  it("bootstrapMedianCi95 returns null below BOOTSTRAP_MIN_N (direct unit test)", () => {
+    // Direct test of the exported helper — same seeded PRNG every time.
+    const seed = () => 0.5;
+    const tooFew = [60_000, 120_000];
+    expect(tooFew.length).toBeLessThan(BOOTSTRAP_MIN_N);
+    expect(bootstrapMedianCi95(tooFew, seed)).toBeNull();
+  });
+
+  it("self-view (membershipId set) ignores withByMember — does not need a one-row table", async () => {
+    // Mirror of item 80's "self-view returns one row" invariant, but
+    // expressed differently: the adherence page sets withByMember ONLY
+    // on the firm-wide path. Verify the lib accepts `withByMember +
+    // membershipId` together and returns a single row (defensive — a
+    // future caller might combine them).
+    const tenant = await createTestTenant();
+    const { membership: me } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-self-view"),
+    });
+    const { membership: other } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-self-view-other"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: me.id,
+      escalatedAt: new Date(now.getTime() - 2 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 1 * HOUR),
+      acknowledgedById: me.id,
+    });
+    // Other Member's row must NOT appear in self-view byMember.
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: other.id,
+      escalatedAt: new Date(now.getTime() - 2 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 1 * HOUR),
+      acknowledgedById: other.id,
+    });
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      membershipId: me.id,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.membershipId).toBe(me.id);
+    // The byMember row's numbers match the headline (single classifier
+    // invariant — item 92 mirrors item 80's per-Member-can't-drift rule).
+    expect(m.byMember![0]!.escalated).toBe(m.escalated);
+    expect(m.byMember![0]!.acknowledged).toBe(m.acknowledged);
   });
 });

@@ -7,7 +7,9 @@ import { ADHERENCE_ESCALATION_THRESHOLD } from "@/lib/adherence/escalation";
 import {
   computeAdherenceMetrics,
   computePriorPeriodAdherenceMetrics,
+  MIN_SIGNALS_FLOOR,
   type AdherenceMetrics,
+  type MemberAdherenceMetrics,
 } from "@/lib/adherence/metrics";
 import { formatDuration, formatDurationOrDash } from "@/lib/format/duration";
 import AcknowledgeButton from "./AcknowledgeButton";
@@ -92,10 +94,18 @@ export default async function AdherenceEscalationsPage({
     // the page's existing firmWide split: firm-wide for FCT/Admin,
     // self-scoped otherwise. Default window matches /sentiment /
     // /admin/drafts / /account so the surfaces speak the same period.
+    //
+    // Item 92 — firm-wide path asks for `withByMember` so the
+    // per-Member response-time table can render below the headline
+    // card. Self-view doesn't need it: the table would have at most
+    // one row (the viewer themselves), no more informative than the
+    // headline tiles.
     computeAdherenceMetrics({
       tenantId: ctx.tenant.id,
       windowDays: 30,
-      ...(firmWide ? {} : { membershipId: ctx.membership.id }),
+      ...(firmWide
+        ? { withByMember: true }
+        : { membershipId: ctx.membership.id }),
     }),
     // Item 91 — prior 30d snapshot for the trend pills. Same scope as
     // `metrics` so current/prior speak the same view. Empty prior →
@@ -110,6 +120,27 @@ export default async function AdherenceEscalationsPage({
 
   const totals: Record<Filter, number> = { OPEN: openCount, ACKNOWLEDGED: ackCount, ALL: allCount };
   const thresholdPct = Math.round(ADHERENCE_ESCALATION_THRESHOLD * 100);
+
+  // Item 92 — resolve human-readable labels for the per-Member table.
+  // Separate query (not joined inside `computeAdherenceMetrics`) so the
+  // lib stays pure-data — the page is the only surface that needs
+  // labels, and the lib doesn't know about User. Mirrors the same
+  // sentiment-side pattern from item 80.
+  const memberLabels: Record<string, string> = {};
+  const byMember = metrics.byMember;
+  if (firmWide && byMember && byMember.length > 0) {
+    const ids = byMember.map((m) => m.membershipId);
+    const memberRows = await superDb.membership.findMany({
+      where: { tenantId: ctx.tenant.id, id: { in: ids } },
+      select: {
+        id: true,
+        user: { select: { email: true, name: true } },
+      },
+    });
+    for (const mr of memberRows) {
+      memberLabels[mr.id] = mr.user.name ?? mr.user.email ?? mr.id;
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -144,6 +175,12 @@ export default async function AdherenceEscalationsPage({
 
       <AdherenceResponseTimeCard metrics={metrics} prior={priorMetrics} />
 
+      {firmWide && byMember && byMember.length > 0 && (
+        <MemberAdherenceResponseTimeTable
+          rows={byMember}
+          labels={memberLabels}
+        />
+      )}
 
       <div className="flex flex-wrap gap-1 text-xs">
         {FILTERS.map((f) => {
@@ -461,3 +498,127 @@ function AdherenceMedianTtaTrendPill({
   );
 }
 
+/**
+ * Post-PRD item 92 — per-Member adherence response-time breakdown.
+ *
+ * Adherence-pillar analog of item 80's `MemberResponseTimeTable` on
+ * /sentiment. Surfaces "who's slow to acknowledge below-threshold sends
+ * they made" alongside the firm-wide "are we slow." Rendered only on
+ * the firm-wide view (FCT/Admin); a self-view table would have at most
+ * one row.
+ *
+ * Sort order is slowest-median first so the operator's eye lands on
+ * action items. Rows with no median (escalations but no acks in
+ * window) drop to the bottom by escalation count desc.
+ *
+ * **`lowVolume` rows render an "insufficient data" badge** rather than
+ * suppression — a Member with 1-4 escalations still has their count
+ * visible (operationally useful: "Jane only has one escalation, did
+ * the routing work?") but the median+CI conveys "this isn't a verdict
+ * yet." Same UX pattern as item 80.
+ *
+ * **CI rendered as `23m [12m, 41m]`** — bootstrap 95% CI on the
+ * median, computed from the Member's own ack durations. Wide brackets
+ * tell the operator "you can't draw conclusions from this Member's
+ * data yet" without needing a separate confidence-score column.
+ *
+ * No trend pill in the table today — that'd be a separate item
+ * analogous to item 88 (sentiment per-Member trend pill). The
+ * `computePriorPeriodAdherenceMetrics` helper already accepts
+ * `withByMember` so a future pill can be wired without lib changes.
+ */
+function MemberAdherenceResponseTimeTable({
+  rows,
+  labels,
+}: {
+  rows: MemberAdherenceMetrics[];
+  labels: Record<string, string>;
+}) {
+  const sorted = [...rows].sort((a, b) => {
+    // Slowest median first; null medians sink to the bottom and
+    // tie-break by escalation count desc — a Member with many
+    // unack'd escalations should appear above a Member with one.
+    const am = a.medianAckMs;
+    const bm = b.medianAckMs;
+    if (am === null && bm === null) return b.escalated - a.escalated;
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return bm - am;
+  });
+
+  return (
+    <div className="card space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-base font-medium">By Member</h2>
+        <span
+          className="text-xs text-ink/50"
+          title={`Bootstrap 95% CI on median, ${MIN_SIGNALS_FLOOR}+ escalation floor for confidence.`}
+        >
+          per-sender response time
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs uppercase tracking-wider text-ink/50">
+              <th className="py-1 pr-3 font-normal">Member</th>
+              <th className="py-1 pr-3 font-normal">Escalations</th>
+              <th className="py-1 pr-3 font-normal">Acked</th>
+              <th className="py-1 pr-3 font-normal">Median TTA</th>
+              <th className="py-1 pr-3 font-normal">P90 TTA</th>
+              <th className="py-1 font-normal">Oldest unacked</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r) => {
+              const label = labels[r.membershipId] ?? r.membershipId;
+              const oldestTone =
+                r.oldestUnackedMs !== null &&
+                r.oldestUnackedMs > 4 * 60 * 60_000
+                  ? "text-red-900 font-medium"
+                  : "text-ink/80";
+              return (
+                <tr
+                  key={r.membershipId}
+                  className="border-t border-ink/10 align-top"
+                >
+                  <td className="py-1 pr-3">
+                    <span className="font-medium">{label}</span>
+                    {r.lowVolume && (
+                      <span
+                        className="ml-2 inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-900"
+                        title={`Fewer than ${MIN_SIGNALS_FLOOR} escalations in window — median is not a reliable indicator yet.`}
+                      >
+                        insufficient data
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-3 tabular-nums">{r.escalated}</td>
+                  <td className="py-1 pr-3 tabular-nums">{r.acknowledged}</td>
+                  <td className="py-1 pr-3 tabular-nums">
+                    {formatDurationOrDash(r.medianAckMs)}
+                    {r.medianAckMs !== null && r.medianAckCi95 && (
+                      <span
+                        className="ml-1 text-[11px] font-normal text-ink/50"
+                        title={`Bootstrap 95% CI on median across ${r.acknowledged} acked escalations. Wide intervals = not enough data to act on the median.`}
+                      >
+                        [{formatDurationOrDash(r.medianAckCi95.loMs)},{" "}
+                        {formatDurationOrDash(r.medianAckCi95.hiMs)}]
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-3 tabular-nums">
+                    {formatDurationOrDash(r.p90AckMs)}
+                  </td>
+                  <td className={`py-1 tabular-nums ${oldestTone}`}>
+                    {formatDurationOrDash(r.oldestUnackedMs)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
