@@ -263,6 +263,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // enforced inside the route, mirroring sentiment acknowledge.
   "adherence:read":        ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER"],
   "adherence:acknowledge": ["FIRM_ADMIN", "FCT_MEMBER", "USER", "SALES_REVIEWER"],
+  // Item 89 — adherence escalations CSV export. Sister to
+  // `sentiment:export` (item 83): the "every escalation in the window
+  // with full ack metadata" CSV that pairs with the in-page list. Same
+  // governance-not-commercial posture as `sentiment:export` and
+  // `drafts:read-rollup`: FIRM_ADMIN + FCT_MEMBER. Distinct from
+  // `adherence:read` (which widens to USER + SALES_REVIEWER for the
+  // self-scoped page view) so a future policy change can split list
+  // visibility from export rights without touching the page logic.
+  "adherence:export":      ["FIRM_ADMIN", "FCT_MEMBER"],
 
   // Post-PRD hardening item 12 — TOTP 2FA. Every Membership can enroll
   // / disable / verify their own TOTP. Only FIRM_ADMIN can flip the

@@ -40,6 +40,12 @@ export default async function AdherenceEscalationsPage({
   // FCT/Admin see firm-wide; everyone else sees only escalations on
   // sends attributed to them.
   const firmWide = hasPermission(ctx.membership.role, "members:read");
+  // Item 89 — uncapped per-escalation CSV export is firm-wide
+  // governance evidence. Same gate as `firmWide` today (FIRM_ADMIN +
+  // FCT_MEMBER) but a separate permission so a future policy change
+  // can split list-view from export rights without touching the page
+  // logic. Mirrors item 83's `sentiment:export` shape.
+  const canExport = hasPermission(ctx.membership.role, "adherence:export");
 
   const baseWhere = {
     tenantId: ctx.tenant.id,
@@ -85,9 +91,26 @@ export default async function AdherenceEscalationsPage({
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Adherence escalations</h1>
-        <span className="text-xs text-ink/50">
-          {firmWide ? "firm-wide view" : "your sends only"}
-        </span>
+        <div className="flex items-baseline gap-3">
+          {/* Item 89 — uncapped per-escalation CSV. Only rendered when
+              the operator both has the permission AND there are
+              escalations to export — a quiet tenant doesn't see a
+              "download nothing" link. Window matches the firm
+              compliance defaults (30d) shared with /sentiment + /admin
+              /drafts exports for consistency. */}
+          {canExport && allCount > 0 && (
+            <a
+              href={`/api/admin/adherence/export?tenant=${tenantSlug}&window=30`}
+              className="text-xs underline decoration-dotted text-ink/60 hover:text-ink"
+              title="Download every escalation in the last 30 days with full ack metadata. Acknowledged + open-overdue, uncapped."
+            >
+              Export CSV (30d)
+            </a>
+          )}
+          <span className="text-xs text-ink/50">
+            {firmWide ? "firm-wide view" : "your sends only"}
+          </span>
+        </div>
       </div>
       <p className="text-xs text-ink/60">
         PRD §9.1 + post-PRD compliance gate. Every observed outbound communication is scored against the
