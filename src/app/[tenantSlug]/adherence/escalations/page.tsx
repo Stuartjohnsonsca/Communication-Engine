@@ -4,6 +4,11 @@ import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { hasPermission, requirePermission } from "@/lib/rbac";
 import { ADHERENCE_ESCALATION_THRESHOLD } from "@/lib/adherence/escalation";
+import {
+  computeAdherenceMetrics,
+  type AdherenceMetrics,
+} from "@/lib/adherence/metrics";
+import { formatDurationOrDash } from "@/lib/format/duration";
 import AcknowledgeButton from "./AcknowledgeButton";
 
 type Filter = "OPEN" | "ALL" | "ACKNOWLEDGED";
@@ -59,7 +64,7 @@ export default async function AdherenceEscalationsPage({
         ? { acknowledgedAt: null }
         : { acknowledgedAt: { not: null } };
 
-  const [rows, openCount, ackCount, allCount] = await Promise.all([
+  const [rows, openCount, ackCount, allCount, metrics] = await Promise.all([
     superDb.communicationAdherence.findMany({
       where: { ...baseWhere, ...filterWhere },
       orderBy: [{ escalatedAt: "desc" }, { createdAt: "desc" }],
@@ -82,6 +87,15 @@ export default async function AdherenceEscalationsPage({
     superDb.communicationAdherence.count({ where: { ...baseWhere, acknowledgedAt: null } }),
     superDb.communicationAdherence.count({ where: { ...baseWhere, acknowledgedAt: { not: null } } }),
     superDb.communicationAdherence.count({ where: baseWhere }),
+    // Item 90 — response-time metrics for the last 30d. Scope mirrors
+    // the page's existing firmWide split: firm-wide for FCT/Admin,
+    // self-scoped otherwise. Default window matches /sentiment /
+    // /admin/drafts / /account so the surfaces speak the same period.
+    computeAdherenceMetrics({
+      tenantId: ctx.tenant.id,
+      windowDays: 30,
+      ...(firmWide ? {} : { membershipId: ctx.membership.id }),
+    }),
   ]);
 
   const totals: Record<Filter, number> = { OPEN: openCount, ACKNOWLEDGED: ackCount, ALL: allCount };
@@ -117,6 +131,9 @@ export default async function AdherenceEscalationsPage({
         FCG / UCG used at the time. Sends scoring below {thresholdPct}% overall escalate to the User and
         the FCT — whether the send went through the drafting UI or bypassed it via the connected mailbox.
       </p>
+
+      <AdherenceResponseTimeCard metrics={metrics} />
+
 
       <div className="flex flex-wrap gap-1 text-xs">
         {FILTERS.map((f) => {
@@ -224,3 +241,92 @@ export default async function AdherenceEscalationsPage({
     </div>
   );
 }
+
+/**
+ * Post-PRD item 90 — adherence response-time card. Adherence-pillar
+ * analog of item 78's `SentimentResponseTimeCard`. Same four-tile
+ * layout (Acknowledged / Median TTA / P90 TTA / Oldest unacked), same
+ * null-when-no-data rules, same 4h-stale red-tone on `Oldest unacked`
+ * — operator mental model is "4h = bad" everywhere across response-
+ * time gauges.
+ *
+ * Renders nothing when `escalated === 0` — a clean-adherence tenant
+ * doesn't need a "—" card cluttering the page. The list section below
+ * already prints "No escalations match this filter" in that state.
+ *
+ * Trend pills are deliberately omitted in this first iteration —
+ * shipping the headline gauge first matches item 78's cadence (the
+ * trend pills came later in item 79). A future item can add an
+ * AdherenceAckRateTrendPill + AdherenceMedianTtaTrendPill against a
+ * prior-period helper, same shape as items 79/72.
+ */
+function AdherenceResponseTimeCard({ metrics }: { metrics: AdherenceMetrics }) {
+  if (metrics.escalated === 0) return null;
+
+  const ratePct =
+    metrics.acknowledgedRate === null
+      ? "—"
+      : `${Math.round(metrics.acknowledgedRate * 100)}%`;
+  const unackedTone =
+    metrics.oldestUnackedMs !== null && metrics.oldestUnackedMs > 4 * 60 * 60_000
+      ? "text-red-900 font-medium"
+      : "text-ink/80";
+
+  return (
+    <div className="card space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-base font-medium">Response time</h2>
+        <span className="text-xs text-ink/50">
+          last {metrics.windowDays} days
+        </span>
+      </div>
+      <dl className="grid gap-3 text-sm sm:grid-cols-4">
+        <div>
+          <dt className="text-xs uppercase tracking-wider text-ink/50">
+            Acknowledged
+          </dt>
+          <dd className="font-medium">
+            {ratePct}
+            <span className="ml-1 text-[11px] font-normal text-ink/50">
+              ({metrics.acknowledged}/{metrics.escalated})
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Median time from escalation to acknowledgement, over acked escalations only."
+          >
+            Median TTA
+          </dt>
+          <dd className="font-medium">
+            {formatDurationOrDash(metrics.medianAckMs)}
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="P90 time-to-acknowledge — long-tail signal. A small median with a large P90 means most are fast but some sit."
+          >
+            P90 TTA
+          </dt>
+          <dd className="font-medium">
+            {formatDurationOrDash(metrics.p90AckMs)}
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Oldest still-unacked escalation in window. Red past 4h."
+          >
+            Oldest unacked
+          </dt>
+          <dd className={unackedTone}>
+            {formatDurationOrDash(metrics.oldestUnackedMs)}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
