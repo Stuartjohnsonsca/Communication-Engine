@@ -762,6 +762,119 @@ describe("bootstrapMedianCi95 — item 80 confidence interval", () => {
   });
 });
 
+describe("computePriorPeriodSentimentMetrics — item 88 byMember", () => {
+  it("returns prior byMember only when withByMember is true", async () => {
+    const tenant = await createTestTenant();
+    const m1 = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("prior-by-1"),
+    });
+    const now = new Date();
+    // Signal IN prior window (35d ago for a 30d call).
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: m1.membership.id,
+      escalatedAt: new Date(now.getTime() - 35 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 35 * 24 * HOUR + 2 * HOUR),
+    });
+
+    const without = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(without.byMember).toBeUndefined();
+
+    const withIt = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+      withByMember: true,
+    });
+    expect(withIt.byMember).toBeDefined();
+    expect(withIt.byMember!).toHaveLength(1);
+    const row = withIt.byMember![0]!;
+    expect(row.membershipId).toBe(m1.membership.id);
+    // Prior-window byMember median matches the headline median: single
+    // ack at 2h.
+    expect(row.medianAckMs).toBe(2 * HOUR);
+  });
+
+  it("Member with no prior-window signal is absent from prior byMember", async () => {
+    const tenant = await createTestTenant();
+    const m1 = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("prior-absent-1"),
+    });
+    const m2 = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("prior-absent-2"),
+    });
+    const now = new Date();
+    // Only m1 has a signal IN the prior window. m2 has a CURRENT-window
+    // signal but nothing prior — must NOT appear in prior byMember.
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: m1.membership.id,
+      escalatedAt: new Date(now.getTime() - 35 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 35 * 24 * HOUR + 3 * HOUR),
+    });
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: m2.membership.id,
+      escalatedAt: new Date(now.getTime() - 5 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 5 * 24 * HOUR + 1 * HOUR),
+    });
+
+    const prior = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+      withByMember: true,
+    });
+    expect(prior.byMember).toBeDefined();
+    const ids = prior.byMember!.map((r) => r.membershipId);
+    expect(ids).toContain(m1.membership.id);
+    expect(ids).not.toContain(m2.membership.id);
+  });
+
+  it("prior byMember is tenant-scoped — another tenant's signals don't leak", async () => {
+    const tenantA = await createTestTenant();
+    const tenantB = await createTestTenant();
+    const a1 = await createTestUserAndMembership(tenantA.id, {
+      role: "USER",
+      email: uniqueEmail("prior-iso-a"),
+    });
+    const b1 = await createTestUserAndMembership(tenantB.id, {
+      role: "USER",
+      email: uniqueEmail("prior-iso-b"),
+    });
+    const now = new Date();
+    await makeSignal({
+      tenantId: tenantA.id,
+      assignedToMembershipId: a1.membership.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 1 * HOUR),
+    });
+    await makeSignal({
+      tenantId: tenantB.id,
+      assignedToMembershipId: b1.membership.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 9 * HOUR),
+    });
+
+    const priorA = await computePriorPeriodSentimentMetrics({
+      tenantId: tenantA.id,
+      windowDays: 30,
+      now,
+      withByMember: true,
+    });
+    const ids = priorA.byMember!.map((r) => r.membershipId);
+    expect(ids).toEqual([a1.membership.id]);
+    expect(priorA.byMember![0]!.medianAckMs).toBe(1 * HOUR);
+  });
+});
+
 describe("formatTtaDuration — bracket boundaries", () => {
   it("renders null as em-dash", () => {
     expect(formatTtaDuration(null)).toBe("—");

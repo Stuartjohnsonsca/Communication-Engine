@@ -367,6 +367,19 @@ export async function computePriorPeriodSentimentMetrics(input: {
   windowDays?: SentimentMetricsWindow;
   assignedToMembershipId?: string;
   now?: Date;
+  /**
+   * Item 88 — when true, the prior-window result includes `byMember` so
+   * the /sentiment top-table can compute a per-Member median-TTA trend
+   * pill against the same Member's prior numbers. The firm-wide view
+   * passes this alongside the current-window `withByMember`; self-view
+   * callers leave it off (their byMember has at most one row).
+   *
+   * Sharing the `computeSentimentMetricsForRange` helper preserves the
+   * load-bearing single-classifier invariant from items 67 / 80 — a
+   * Member's prior aggregate can never disagree with the headline tile
+   * representing the same Member.
+   */
+  withByMember?: boolean;
 }): Promise<SentimentMetrics> {
   const windowDays = input.windowDays ?? 30;
   const now = input.now ?? new Date();
@@ -379,6 +392,7 @@ export async function computePriorPeriodSentimentMetrics(input: {
     since,
     until,
     asOf: until,
+    withByMember: input.withByMember,
   });
 }
 

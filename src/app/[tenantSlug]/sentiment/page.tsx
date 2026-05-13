@@ -126,11 +126,17 @@ export default async function SentimentPage({
     // `metrics` so current/prior speak the same view. Empty prior →
     // pills render nothing (don't fake a delta against missing data,
     // same null-prior invariant as items 72/73/75).
+    //
+    // Item 88 — firm-wide path also asks for `withByMember` so each
+    // row of the per-Member table can render a compact median-TTA
+    // trend pill against the SAME Member's prior median. Self-view
+    // doesn't need per-Member prior (its byMember is at most one row
+    // and would just duplicate the headline pill).
     computePriorPeriodSentimentMetrics({
       tenantId: ctx.tenant.id,
       windowDays: 30,
       ...(firmWide
-        ? {}
+        ? { withByMember: true }
         : { assignedToMembershipId: ctx.membership.id }),
     }),
   ]);
@@ -161,6 +167,19 @@ export default async function SentimentPage({
     });
     for (const r of rows) {
       memberLabels[r.id] = r.user.name ?? r.user.email ?? r.id;
+    }
+  }
+
+  // Item 88 — index the prior-window byMember rows by membershipId so
+  // the per-row trend pill can look up its own prior median in O(1).
+  // Members in the current window who weren't in the prior window
+  // (their `byMember` row is undefined) will render no pill — the
+  // CompactMedianTtaTrendPill component enforces this null-prior rule
+  // (same invariant as items 72/73/75).
+  const priorByMemberMap: Record<string, MemberSentimentMetrics> = {};
+  if (firmWide && priorMetrics.byMember) {
+    for (const m of priorMetrics.byMember) {
+      priorByMemberMap[m.membershipId] = m;
     }
   }
 
@@ -201,7 +220,12 @@ export default async function SentimentPage({
       />
 
       {firmWide && byMember && byMember.length > 0 && (
-        <MemberResponseTimeTable rows={byMember} labels={memberLabels} />
+        <MemberResponseTimeTable
+          rows={byMember}
+          labels={memberLabels}
+          priorByMember={priorByMemberMap}
+          windowDays={metrics.windowDays}
+        />
       )}
 
       <div className="flex flex-wrap gap-1 text-xs">
@@ -577,6 +601,67 @@ function MedianTtaTrendPill({
 }
 
 /**
+ * Post-PRD item 88 — compact median-TTA trend pill for the per-Member
+ * response-time table.
+ *
+ * Sibling of `MedianTtaTrendPill`, NOT a refactor: same colour-inversion
+ * rule (faster = ↓ green, slower = ↑ red), same `max(60s, 10% of prior)`
+ * flat band, same null-prior suppression. The only behavioural delta is
+ * the rendered text — the table column heading "Median TTA" already
+ * carries the metric context, so the pill body drops the `"vs prior Nd"`
+ * suffix to fit inline next to a median value without wrapping. The
+ * tooltip still carries the full `"vs prior Nd median: <label> (±delta)"`
+ * for hover-readable detail.
+ *
+ * Two pills (`MedianTtaTrendPill` headline + this compact variant) is
+ * the same "two-sites = duplicate; three = extract" rule the codebase
+ * uses elsewhere (items 68/70/73/75). A third pill site (e.g. a future
+ * /account top-table) would be the natural extraction trigger into a
+ * shared component with a `compact: boolean` prop.
+ */
+function CompactMedianTtaTrendPill({
+  current,
+  prior,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  windowDays: number;
+}) {
+  if (current === null || prior === null) return null;
+  const ABS_FLOOR_MS = 60_000;
+  const REL_THRESHOLD = 0.1;
+  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
+  const delta = current - prior;
+  const priorLabel = formatTtaDuration(prior);
+  const deltaLabel = formatTtaDuration(Math.abs(delta));
+  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta < -flatBand) {
+    arrow = "↓";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta > flatBand) {
+    arrow = "↑";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`ml-2 inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0 text-[10px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {directionWord}
+        {deltaLabel}
+      </span>
+    </span>
+  );
+}
+
+/**
  * Post-PRD item 80 — per-Member response-time breakdown.
  *
  * Surfaces "who needs to speed up" alongside the firm-wide
@@ -602,9 +687,19 @@ function MedianTtaTrendPill({
 function MemberResponseTimeTable({
   rows,
   labels,
+  priorByMember,
+  windowDays,
 }: {
   rows: MemberSentimentMetrics[];
   labels: Record<string, string>;
+  /** Item 88 — per-Member prior-window snapshot, keyed by membershipId.
+   * A row whose `membershipId` is absent from this map renders no trend
+   * pill (the Member had no prior-window data — don't fake a delta). */
+  priorByMember: Record<string, MemberSentimentMetrics>;
+  /** Item 88 — passed through for the pill's tooltip (`"vs prior 30d"`).
+   * The compact pill in the table body itself drops the window suffix
+   * to save width; the tooltip keeps it for hover-readable context. */
+  windowDays: number;
 }) {
   const sorted = [...rows].sort((a, b) => {
     // Slowest-median first; null medians sink to the bottom.
@@ -676,6 +771,15 @@ function MemberResponseTimeTable({
                         {formatTtaDuration(r.medianAckCi95.hiMs)}]
                       </span>
                     )}
+                    {/* Item 88 — compact median-TTA trend pill against
+                        this Member's own prior-window median. Renders
+                        nothing when current OR prior is null (Member
+                        had no acks in one of the two windows). */}
+                    <CompactMedianTtaTrendPill
+                      current={r.medianAckMs}
+                      prior={priorByMember[r.membershipId]?.medianAckMs ?? null}
+                      windowDays={windowDays}
+                    />
                   </td>
                   <td className="py-1 pr-3 tabular-nums">
                     {formatTtaDuration(r.p90AckMs)}
