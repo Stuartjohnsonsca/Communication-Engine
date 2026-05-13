@@ -35,6 +35,12 @@ export type {
 } from "./rollup";
 export { formatDraftsRollupAsCsv, DRAFTS_ROLLUP_CSV_HEADER } from "./rollup-csv";
 export {
+  getAllFcgMisses,
+  formatFcgMissesAsCsv,
+  FCG_MISSES_CSV_HEADER,
+} from "./misses-export";
+export type { FcgMissesExport } from "./misses-export";
+export {
   computeMemberFcgAdherence,
   computeMemberFcgAdherenceForRange,
   computeMemberPriorPeriodFcgRate,

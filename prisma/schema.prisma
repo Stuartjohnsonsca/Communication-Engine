@@ -416,6 +416,14 @@ enum AuditEventType {
   /// (tenant, ISO week) — same dedupe slot as the notification — so a
   /// chronically-poor tenant doesn't fill the chain with daily duplicates.
   FIRM_ADHERENCE_BELOW_THRESHOLD
+  /// Post-PRD hardening item 76 — operator exported the full list of
+  /// FCG-window misses (sent-after-window + open-overdue) as CSV.
+  /// Distinct from `DRAFTS_ROLLUP_EXPORTED` (the aggregate rollup):
+  /// this carries every breach row in the window, uncapped by the
+  /// /admin/drafts page's `RECENT_MISSES_LIMIT`. Payload:
+  /// `{ windowDays, format, counts: { sentAfter, openOverdue } }`.
+  /// Same RBAC gate (`drafts:read-rollup`).
+  FCG_MISSES_EXPORTED
 }
 
 enum BillingPeriodStatus {

@@ -234,6 +234,7 @@ export default async function DraftsRollupPage({
         openOverdue={rollup.fcgWindow.recentMisses.openOverdue}
         memberLabel={memberLabel}
         windowDays={windowDays}
+        tenantSlug={tenantSlug}
       />
 
       <section className="card space-y-3">
@@ -435,23 +436,40 @@ function RecentFcgMissesSection({
   openOverdue,
   memberLabel,
   windowDays,
+  tenantSlug,
 }: {
   sentAfterWindow: FcgMissRow[];
   openOverdue: FcgMissRow[];
   memberLabel: Map<string, string>;
   windowDays: number;
+  tenantSlug: string;
 }) {
   const hasAny = sentAfterWindow.length > 0 || openOverdue.length > 0;
   return (
     <section className="card space-y-4">
-      <div>
-        <h2 className="text-base font-medium">Recent FCG-window misses</h2>
-        <p className="text-xs text-ink/60">
-          Specific drafts behind the &ldquo;sent after window&rdquo; and
-          &ldquo;open + overdue&rdquo; counts. Sorted most-late first —
-          worst misses at the top. Body content stays private to each
-          Member&apos;s own /drafts inbox.
-        </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-medium">Recent FCG-window misses</h2>
+          <p className="text-xs text-ink/60">
+            Specific drafts behind the &ldquo;sent after window&rdquo; and
+            &ldquo;open + overdue&rdquo; counts. Sorted most-late first —
+            worst misses at the top. Body content stays private to each
+            Member&apos;s own /drafts inbox.
+          </p>
+        </div>
+        {hasAny && (
+          // Item 76 — full-list CSV. The on-screen panel caps at 10
+          // rows per bucket (item 74); a compliance review wants every
+          // breach in the window. The link sits inside the section so
+          // it reads as "download THESE rows" rather than the rollup
+          // CSV link in the page header.
+          <a
+            href={`/api/admin/drafts/misses-export?tenant=${tenantSlug}&window=${windowDays}`}
+            className="rounded border border-ink/20 px-2 py-1 text-xs hover:bg-ink/5"
+          >
+            Download full list (CSV)
+          </a>
+        )}
       </div>
       {!hasAny ? (
         <p className="text-sm text-ink/60">
