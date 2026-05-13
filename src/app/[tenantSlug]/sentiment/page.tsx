@@ -3,6 +3,11 @@ import { redirect } from "next/navigation";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
+import {
+  computeSentimentMetrics,
+  formatTtaDuration,
+  type SentimentMetrics,
+} from "@/lib/sentiment/metrics";
 import AcknowledgeButton from "./AcknowledgeButton";
 
 type Filter = "ALL" | "ESCALATED" | "EXTREME_NEG" | "EXTREME_POS" | "NEUTRAL";
@@ -62,7 +67,7 @@ export default async function SentimentPage({
         ? { escalatedAt: { not: null } }
         : { classification: filter };
 
-  const [signals, counts, escalatedCount] = await Promise.all([
+  const [signals, counts, escalatedCount, metrics] = await Promise.all([
     superDb.sentimentSignal.findMany({
       where: { ...baseWhere, ...filterWhere },
       orderBy: [{ escalatedAt: "desc" }, { createdAt: "desc" }],
@@ -90,6 +95,17 @@ export default async function SentimentPage({
     superDb.sentimentSignal.count({
       where: { ...baseWhere, escalatedAt: { not: null }, acknowledgedAt: null },
     }),
+    // Item 78 — response-time metrics for the last 30d. Scope mirrors
+    // the page's existing firmWide split: firm-wide for FCT/Admin,
+    // self-scoped otherwise. Default window matches /admin/drafts and
+    // /account so the surfaces speak the same period.
+    computeSentimentMetrics({
+      tenantId: ctx.tenant.id,
+      windowDays: 30,
+      ...(firmWide
+        ? {}
+        : { assignedToMembershipId: ctx.membership.id }),
+    }),
   ]);
 
   const countMap: Record<string, number> = {};
@@ -116,6 +132,8 @@ export default async function SentimentPage({
         handling of the matter</em>. General displeasure with their own outcomes is not flagged.
         Negatives that clear the confidence bar are escalated to the assigned User and to the FCT.
       </p>
+
+      <SentimentResponseTimeCard metrics={metrics} />
 
       <div className="flex flex-wrap gap-1 text-xs">
         {FILTERS.map((f) => {
@@ -232,6 +250,86 @@ export default async function SentimentPage({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Post-PRD hardening item 78 — response-time observability card.
+ *
+ * Sits above the filter chips so the operator reads "how fast are we
+ * responding" before drilling into individual signals. Scope is set
+ * by the parent (`computeSentimentMetrics` with or without
+ * `assignedToMembershipId`); the card itself is scope-agnostic.
+ *
+ * Renders nothing when there are zero escalated signals in the
+ * window — a sentiment-quiet tenant doesn't need a "—" card cluttering
+ * the page. Pairs with item 77's 4h stale-nudge: oldest-unacked
+ * crossing 4h is the same boundary that fires the nudge, so the card
+ * gives the operator visibility on what's about to alert.
+ */
+function SentimentResponseTimeCard({ metrics }: { metrics: SentimentMetrics }) {
+  if (metrics.escalated === 0) return null;
+
+  const ratePct =
+    metrics.acknowledgedRate === null
+      ? "—"
+      : `${Math.round(metrics.acknowledgedRate * 100)}%`;
+  const unackedTone =
+    metrics.oldestUnackedMs !== null && metrics.oldestUnackedMs > 4 * 60 * 60_000
+      ? "text-red-900 font-medium"
+      : "text-ink/80";
+
+  return (
+    <div className="card space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-base font-medium">Response time</h2>
+        <span className="text-xs text-ink/50">
+          last {metrics.windowDays} days
+        </span>
+      </div>
+      <dl className="grid gap-3 text-sm sm:grid-cols-4">
+        <div>
+          <dt className="text-xs uppercase tracking-wider text-ink/50">
+            Acknowledged
+          </dt>
+          <dd className="font-medium">
+            {ratePct}
+            <span className="ml-1 text-[11px] font-normal text-ink/50">
+              ({metrics.acknowledged}/{metrics.escalated})
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Median time from escalation to acknowledgement, over acked signals only."
+          >
+            Median TTA
+          </dt>
+          <dd className="font-medium">{formatTtaDuration(metrics.medianAckMs)}</dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="P90 time-to-acknowledge — long-tail signal. A small median with a large P90 means most are fast but some sit."
+          >
+            P90 TTA
+          </dt>
+          <dd className="font-medium">{formatTtaDuration(metrics.p90AckMs)}</dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Oldest still-unacked escalation in window. Red past 4h (the stale-warn threshold)."
+          >
+            Oldest unacked
+          </dt>
+          <dd className={unackedTone}>
+            {formatTtaDuration(metrics.oldestUnackedMs)}
+          </dd>
+        </div>
+      </dl>
     </div>
   );
 }
