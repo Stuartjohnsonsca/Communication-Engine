@@ -16,6 +16,8 @@
  *   - runHealthCheck NEVER alerts on the health-check cron itself.
  */
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, beforeAll } from "vitest";
 import { superDb } from "@/lib/db";
 import {
@@ -386,6 +388,63 @@ describe("cron-health — runHealthCheck", () => {
       where: { tenantId: acumon.id, kind: "cron_stalled" },
     });
     expect(inbox.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/**
+ * Static guard (item 86): every `withCronHeartbeat("<name>", ...)` invocation
+ * inside the cron route directory must reference a name declared in
+ * REGISTERED_CRONS. `withCronHeartbeat` throws "unknown cron name" at runtime
+ * when the name is missing — but that throw only surfaces when the cron actually
+ * fires in production (which for a hourly/daily cron can mean the gap is
+ * invisible for days). This test pulls the check forward into the suite so an
+ * unregistered cron fails CI on the same commit that introduces it.
+ *
+ * Scope is `src/app/api/cron/**\/route.ts` — operator schedules live there and
+ * Railway only invokes those paths. `withCronHeartbeat` is also occasionally
+ * called from tests with a known-bad name (e.g. "not-a-real-cron" above) so we
+ * deliberately don't scan the whole repo.
+ */
+function listCronRouteFiles(): string[] {
+  const root = join(process.cwd(), "src", "app", "api", "cron");
+  const out: string[] = [];
+  function walk(dir: string) {
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      const s = statSync(p);
+      if (s.isDirectory()) walk(p);
+      else if (entry === "route.ts" || entry === "route.tsx") out.push(p);
+    }
+  }
+  walk(root);
+  return out;
+}
+
+function extractCronNames(source: string): string[] {
+  const out: string[] = [];
+  const re = /withCronHeartbeat\(\s*["']([^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) out.push(m[1]!);
+  return out;
+}
+
+describe("cron-health — every cron route registers its name", () => {
+  const routes = listCronRouteFiles();
+
+  it("found at least one cron route to scan (sanity)", () => {
+    expect(routes.length).toBeGreaterThan(0);
+  });
+
+  it("every withCronHeartbeat name in a cron route is declared in REGISTERED_CRONS", () => {
+    const registered = new Set(REGISTERED_CRONS.map((c) => c.cronName));
+    const orphans: { file: string; cronName: string }[] = [];
+    for (const file of routes) {
+      const src = readFileSync(file, "utf8");
+      for (const name of extractCronNames(src)) {
+        if (!registered.has(name)) orphans.push({ file, cronName: name });
+      }
+    }
+    expect(orphans).toEqual([]);
   });
 });
 

@@ -90,6 +90,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
       "Item 71 — daily firm-adherence escalation. Computes each tenant's 7d FCG-window adherence rate via the /admin/drafts rollup and fires a mandatory firm_adherence_below_threshold notification to every FIRM_ADMIN when the rate is below ADHERENCE_THRESHOLD with at least MIN_DEADLINED_SENDS deadlined sends. Deduped per ISO week so a chronically-poor tenant gets one alert per week, not one per cron tick.",
   },
   {
+    cronName: "sentiment-stale",
+    expectedIntervalMinutes: 60,
+    description:
+      "Item 77 — hourly stale-sentiment-escalation sweeper. Re-notifies the original PRD §9.3 escalation audience when a signal has been unacked for STALE_THRESHOLD_HOURS (4h). One nudge per signal ever — audit chain is the dedupe gate. Bounds the second-chance signal to within an hour of the 4h stale mark.",
+  },
+  {
     cronName: "sentiment-firm-ack-monitor",
     expectedIntervalMinutes: 24 * 60,
     description:
