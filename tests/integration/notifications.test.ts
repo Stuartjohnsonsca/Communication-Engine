@@ -488,6 +488,151 @@ describe("Notifications — nav badges", () => {
     expect(badges.byHref[`/${t.slug}/sentiment`]).toBeUndefined();
     expect(badges.tones[`/${t.slug}/sentiment`]).toBeUndefined();
   });
+
+  // Item 94 — adherence/escalations badge gets a `stale` tone when
+  // the oldest unacked adherence escalation has been outstanding >4h.
+  // Same 4h threshold + same `findFirst + count` shared-scope shape
+  // as item 82's sentiment-side. The /adherence/escalations href
+  // tone replaces (does not co-exist with) any sentiment tone on the
+  // same nav row.
+  it("flags stale tone on adherence/escalations when oldest unacked > 4h", async () => {
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    // A draft is required for the FK on CommunicationAdherence.
+    const draft = await superDb.draft.create({
+      data: {
+        tenantId: t.id,
+        membershipId: user.id,
+        kind: "EMAIL",
+        status: "SENT",
+        channel: "EMAIL",
+        subject: "stale-tone test",
+        body: "body",
+        sentText: "body",
+        sentMarkedAt: new Date(),
+      },
+    });
+    await superDb.communicationAdherence.create({
+      data: {
+        tenantId: t.id,
+        draftId: draft.id,
+        membershipId: user.id,
+        fcgVersionUsed: 1,
+        overall: 0.4,
+        perDimension: {},
+        perRule: [],
+        escalatedAt: new Date(Date.now() - 5 * 60 * 60 * 1000),
+      },
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/adherence/escalations`]).toBe(1);
+    expect(badges.tones[`/${t.slug}/adherence/escalations`]).toBe("stale");
+  });
+
+  it("no adherence stale tone when oldest unacked is under 4h", async () => {
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    const draft = await superDb.draft.create({
+      data: {
+        tenantId: t.id,
+        membershipId: user.id,
+        kind: "EMAIL",
+        status: "SENT",
+        channel: "EMAIL",
+        subject: "fresh-escalation test",
+        body: "body",
+        sentText: "body",
+        sentMarkedAt: new Date(),
+      },
+    });
+    await superDb.communicationAdherence.create({
+      data: {
+        tenantId: t.id,
+        draftId: draft.id,
+        membershipId: user.id,
+        fcgVersionUsed: 1,
+        overall: 0.4,
+        perDimension: {},
+        perRule: [],
+        escalatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      },
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/adherence/escalations`]).toBe(1);
+    expect(badges.tones[`/${t.slug}/adherence/escalations`]).toBeUndefined();
+  });
+
+  it("no adherence stale tone when zero unacked escalations", async () => {
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/adherence/escalations`]).toBeUndefined();
+    expect(badges.tones[`/${t.slug}/adherence/escalations`]).toBeUndefined();
+  });
+
+  it("ignores an acked-old adherence row when computing stale tone", async () => {
+    // An acked row escalated 10h ago must NOT trigger the stale tone
+    // — the badge count predicate filters to `acknowledgedAt: null`,
+    // and the oldest-unacked findFirst uses the SAME shared scope so
+    // an acked old row is invisible to both. Mirrors the sentiment-
+    // side invariant test above (no drift between count + tone).
+    const t = await createTestTenant();
+    const { membership: user } = await createTestUserAndMembership(t.id, {
+      role: "USER",
+    });
+    const draft = await superDb.draft.create({
+      data: {
+        tenantId: t.id,
+        membershipId: user.id,
+        kind: "EMAIL",
+        status: "SENT",
+        channel: "EMAIL",
+        subject: "acked-old test",
+        body: "body",
+        sentText: "body",
+        sentMarkedAt: new Date(),
+      },
+    });
+    await superDb.communicationAdherence.create({
+      data: {
+        tenantId: t.id,
+        draftId: draft.id,
+        membershipId: user.id,
+        fcgVersionUsed: 1,
+        overall: 0.4,
+        perDimension: {},
+        perRule: [],
+        escalatedAt: new Date(Date.now() - 10 * 60 * 60 * 1000),
+        acknowledgedAt: new Date(Date.now() - 9 * 60 * 60 * 1000),
+        acknowledgedById: user.id,
+      },
+    });
+    const badges = await getNavBadges({
+      tenantId: t.id,
+      tenantSlug: t.slug,
+      membership: user,
+    });
+    expect(badges.byHref[`/${t.slug}/adherence/escalations`]).toBeUndefined();
+    expect(badges.tones[`/${t.slug}/adherence/escalations`]).toBeUndefined();
+  });
 });
 
 describe("Notifications — aggregate (helper)", () => {

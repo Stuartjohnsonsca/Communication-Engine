@@ -17,18 +17,20 @@ export type NavBadges = {
   /** href → numeric badge (0 = no badge). */
   byHref: Record<string, number>;
   /**
-   * Item 82 — per-href tone hint for the sidebar renderer. Today only
-   * `stale` is emitted, for the /sentiment row when the oldest unacked
-   * escalation has been outstanding longer than `STALE_THRESHOLD_HOURS`
-   * (item 77's 4h boundary — same number the stale-sweep cron uses to
-   * fire `sentiment_escalation_stale`). The renderer paints a red badge
-   * instead of black so the Member sees "you have unacked work AND some
-   * of it has crossed the stale line" at a glance from any page.
+   * Items 82 + 94 — per-href tone hint for the sidebar renderer.
+   * `stale` is emitted for /sentiment AND /adherence/escalations when
+   * the oldest unacked escalation on that pillar has been outstanding
+   * longer than `STALE_THRESHOLD_HOURS` (4h, item 77's boundary on the
+   * sentiment side; reused for adherence at item 94 so the operator
+   * sees the same threshold across both pillars). The renderer paints
+   * a red badge instead of black so the Member sees "you have unacked
+   * work AND some of it has crossed the stale line" at a glance from
+   * any page.
    *
-   * `byHref` and `tones` are independent: a stale sentiment badge with
-   * count 1 is meaningfully different from a fresh sentiment badge with
-   * count 10. Future tones (e.g. `urgent` for >24h) can extend this
-   * without touching the badge count contract.
+   * `byHref` and `tones` are independent: a stale badge with count 1
+   * is meaningfully different from a fresh badge with count 10.
+   * Future tones (e.g. `urgent` for >24h) can extend this without
+   * touching the badge count contract.
    */
   tones: Record<string, "stale">;
   /** Total unread NotificationInbox rows for this membership. */
@@ -36,11 +38,19 @@ export type NavBadges = {
 };
 
 /**
- * Item 82 — kept in sync with item 77's `STALE_THRESHOLD_HOURS` in
- * `src/lib/sentiment/stale-sweep.ts`. Exported so a future per-tenant
- * sensitivity override can reuse it for both the cron and the badge.
+ * Items 82 + 94 — kept in sync with item 77's `STALE_THRESHOLD_HOURS`
+ * in `src/lib/sentiment/stale-sweep.ts` AND with item 94's
+ * `LiveOutstanding` per-row red-text boundary on /sentiment +
+ * /adherence/escalations. Exported so a future per-tenant sensitivity
+ * override can reuse it across cron + badge + per-row tone.
+ *
+ * Adherence has no equivalent stale-sweep cron yet (a future item
+ * analogous to 77 / 84 would fire `adherence_escalation_stale` and
+ * `firm_adherence_below_threshold` is already the daily floor from
+ * item 71). The badge + per-row threshold agree at 4h regardless,
+ * so when that cron eventually ships it will also tick at 4h.
  */
-const SENTIMENT_STALE_THRESHOLD_HOURS = 4;
+const STALE_THRESHOLD_HOURS = 4;
 
 export async function getNavBadges(input: {
   tenantId: string;
@@ -67,6 +77,19 @@ export async function getNavBadges(input: {
     ...(canSeeFirmWide ? {} : { assignedToMembershipId: membership.id }),
   };
 
+  // Item 94 — same factoring rule on the adherence side. Note the
+  // scope field is `membershipId` (the sender), not
+  // `assignedToMembershipId` — adherence escalates the sender of the
+  // bad send directly, sentiment routes to an assignee. Sharing this
+  // local between the existing `adherenceMine` count AND the new
+  // `adherenceOldest` findFirst forecloses the same drift class.
+  const adherenceScope = {
+    tenantId,
+    escalatedAt: { not: null },
+    acknowledgedAt: null,
+    ...(canSeeFirmWide ? {} : { membershipId: membership.id }),
+  };
+
   const [
     fcgProposalsOpen,
     actionsOverdue,
@@ -74,6 +97,7 @@ export async function getNavBadges(input: {
     sentimentMine,
     sentimentOldest,
     adherenceMine,
+    adherenceOldest,
     breachPending,
     inboxUnread,
   ] = await Promise.all([
@@ -118,22 +142,17 @@ export async function getNavBadges(input: {
       select: { escalatedAt: true },
       orderBy: { escalatedAt: "asc" },
     }),
-    canSeeFirmWide
-      ? superDb.communicationAdherence.count({
-          where: {
-            tenantId,
-            escalatedAt: { not: null },
-            acknowledgedAt: null,
-          },
-        })
-      : superDb.communicationAdherence.count({
-          where: {
-            tenantId,
-            escalatedAt: { not: null },
-            acknowledgedAt: null,
-            membershipId: membership.id,
-          },
-        }),
+    superDb.communicationAdherence.count({ where: adherenceScope }),
+    // Item 94 — oldest unacked adherence escalation, paired with the
+    // count above and used to compute the `stale` tone flag for the
+    // /adherence/escalations badge. Same `findFirst + escalatedAt asc`
+    // shape as the sentiment side; returns null when nothing's unacked
+    // (no badge, no tone — tone logic below handles the empty case).
+    superDb.communicationAdherence.findFirst({
+      where: adherenceScope,
+      select: { escalatedAt: true },
+      orderBy: { escalatedAt: "asc" },
+    }),
     canAckBreach
       ? superDb.breachClientNotification.count({
           where: { tenantId, status: "NOTIFIED" },
@@ -162,17 +181,28 @@ export async function getNavBadges(input: {
   if (breachPending) byHref[`/${tenantSlug}/compliance/breaches`] = breachPending;
   if (inboxUnread) byHref[`/${tenantSlug}/notifications`] = inboxUnread;
 
-  // Item 82 — stale-tone flag for the sentiment badge. Only emitted
-  // when the badge itself is present (sentimentMine > 0); a tone on
-  // a zero-count badge would never be rendered anyway. Threshold
-  // matches item 77's cron — same number, so the badge turns red at
-  // exactly the moment the stale-sweep cron would have warned (or
-  // already has).
+  // Items 82 + 94 — stale-tone flags for the sentiment AND adherence
+  // badges. Each tone is only emitted when its badge is present
+  // (`*Mine > 0`); a tone on a zero-count badge would never render.
+  // Threshold is shared (`STALE_THRESHOLD_HOURS`) so the operator's
+  // mental model is "4h = bad" across both pillars + cron (item 77 on
+  // sentiment side) + per-row red text (item 94's `LiveOutstanding`).
+  //
+  // `now` snapshotted once so the two pillars judge staleness against
+  // an identical clock — otherwise on a slow query path the badges
+  // could trip on different cutoffs by milliseconds (harmless but
+  // wrong-by-construction).
+  const now = Date.now();
+  const staleMs = STALE_THRESHOLD_HOURS * 60 * 60_000;
   const tones: Record<string, "stale"> = {};
   if (sentimentMine > 0 && sentimentOldest?.escalatedAt) {
-    const ageMs = Date.now() - sentimentOldest.escalatedAt.getTime();
-    if (ageMs > SENTIMENT_STALE_THRESHOLD_HOURS * 60 * 60_000) {
+    if (now - sentimentOldest.escalatedAt.getTime() > staleMs) {
       tones[`/${tenantSlug}/sentiment`] = "stale";
+    }
+  }
+  if (adherenceMine > 0 && adherenceOldest?.escalatedAt) {
+    if (now - adherenceOldest.escalatedAt.getTime() > staleMs) {
+      tones[`/${tenantSlug}/adherence/escalations`] = "stale";
     }
   }
 

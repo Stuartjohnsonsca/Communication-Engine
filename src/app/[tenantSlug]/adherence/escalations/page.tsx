@@ -12,6 +12,8 @@ import {
   type MemberAdherenceMetrics,
 } from "@/lib/adherence/metrics";
 import { formatDuration, formatDurationOrDash } from "@/lib/format/duration";
+import { AutoRefresh } from "@/components/AutoRefresh";
+import { LiveOutstanding } from "@/components/LiveOutstanding";
 import AcknowledgeButton from "./AcknowledgeButton";
 
 type Filter = "OPEN" | "ALL" | "ACKNOWLEDGED";
@@ -142,8 +144,19 @@ export default async function AdherenceEscalationsPage({
     }
   }
 
+  // Item 94 — single "render now" timestamp threaded into every
+  // LiveOutstanding instance so the initial server-rendered age (used
+  // for hydration) is consistent across the page. The client takes
+  // over on first effect tick. Mirror of item 82 on /sentiment.
+  const renderedAt = new Date();
+
   return (
     <div className="space-y-4">
+      {/* Item 94 — visibility-gated 60s router.refresh(). Mounted at
+          the top so it's installed before the operator can interact.
+          Reused from the shared component promoted at item 87; same
+          behaviour as item 82 on /sentiment. */}
+      <AutoRefresh />
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Adherence escalations</h1>
         <div className="flex items-baseline gap-3">
@@ -226,6 +239,22 @@ export default async function AdherenceEscalationsPage({
                       FCG v{r.fcgVersionUsed}
                       {r.ucgVersionUsed != null && ` · UCG v${r.ucgVersionUsed}`}
                     </span>
+                    {/* Item 94 — live "Xm outstanding" tick for
+                        unacked rows with an `escalatedAt`. Updates
+                        every 10s on the client; red past 4h, matching
+                        the sidebar badge tone + sentiment-side parity
+                        (item 82). Hidden on acknowledged rows — once
+                        acked, the per-row time-since carries no
+                        operational signal. */}
+                    {!isAck && r.escalatedAt && (
+                      <LiveOutstanding
+                        escalatedAt={r.escalatedAt.toISOString()}
+                        initialAgeMs={Math.max(
+                          0,
+                          renderedAt.getTime() - r.escalatedAt.getTime(),
+                        )}
+                      />
+                    )}
                   </div>
                   <div className="text-xs text-ink/50">
                     {(r.escalatedAt ?? r.createdAt).toISOString().slice(0, 16).replace("T", " ")}

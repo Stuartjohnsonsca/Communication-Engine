@@ -13,7 +13,7 @@ import {
 } from "@/lib/sentiment/metrics";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import AcknowledgeButton from "./AcknowledgeButton";
-import { LiveOutstanding } from "./LiveOutstanding";
+import { LiveOutstanding } from "@/components/LiveOutstanding";
 
 type Filter = "ALL" | "ESCALATED" | "EXTREME_NEG" | "EXTREME_POS" | "NEUTRAL";
 const FILTERS: Filter[] = ["ESCALATED", "EXTREME_NEG", "EXTREME_POS", "NEUTRAL", "ALL"];
