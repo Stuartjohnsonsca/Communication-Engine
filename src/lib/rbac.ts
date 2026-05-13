@@ -95,6 +95,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // outcome metrics are non-commercial.
   "drafts:read-rollup":  ["FIRM_ADMIN", "FCT_MEMBER"],
 
+  // Item 83 — sentiment responses export. The "every signal in the
+  // window with full ack metadata" CSV that pairs with the in-page
+  // response-time card. Same governance-not-commercial posture as
+  // `drafts:read-rollup`: FCT_MEMBER reads sentiment for governance
+  // oversight (item 79's pillar — they need the same evidence record
+  // as FIRM_ADMIN to back the response-time numbers up). No per-User
+  // cost data in the export — response-time only.
+  "sentiment:export":    ["FIRM_ADMIN", "FCT_MEMBER"],
+
   // Roadmap (PRD §16). The product roadmap is published to every Client per
   // §15.3 switching/lock-in posture, so any signed-in role can read. Mutating
   // status / exit criteria is operator-only and additionally gated to the

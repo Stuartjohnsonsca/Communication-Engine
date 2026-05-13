@@ -435,6 +435,16 @@ enum AuditEventType {
   /// `{ windowDays, format, counts: { sentAfter, openOverdue } }`.
   /// Same RBAC gate (`drafts:read-rollup`).
   FCG_MISSES_EXPORTED
+  /// Post-PRD hardening item 83 — operator exported the full list of
+  /// sentiment responses (acknowledged + open-overdue escalations) in
+  /// the window as CSV. Sister export to `FCG_MISSES_EXPORTED` (item
+  /// 76) on the sentiment side: rolls every per-signal row needed for
+  /// a monthly compliance review, uncapped by the /sentiment page's
+  /// own `take: 200` cap. Payload:
+  /// `{ windowDays, format, counts: { acknowledged, openOverdue } }`.
+  /// RBAC gate `sentiment:export` — governance not commercial, so
+  /// FIRM_ADMIN + FCT_MEMBER, same posture as `drafts:read-rollup`.
+  SENTIMENT_RESPONSES_EXPORTED
 }
 
 enum BillingPeriodStatus {

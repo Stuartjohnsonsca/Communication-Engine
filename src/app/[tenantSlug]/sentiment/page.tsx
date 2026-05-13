@@ -59,6 +59,12 @@ export default async function SentimentPage({
 
   // FCT/Admin see firm-wide; everyone else sees only signals routed to them.
   const firmWide = hasPermission(ctx.membership.role, "members:read");
+  // Item 83 — uncapped per-signal CSV export is firm-wide governance
+  // evidence. Same gate as `firmWide` today (FIRM_ADMIN + FCT_MEMBER)
+  // but a separate permission so a future policy change can split them
+  // without touching the page logic that's also reading `firmWide` for
+  // list scope.
+  const canExport = hasPermission(ctx.membership.role, "sentiment:export");
 
   const baseWhere = {
     tenantId: ctx.tenant.id,
@@ -184,7 +190,15 @@ export default async function SentimentPage({
         Negatives that clear the confidence bar are escalated to the assigned User and to the FCT.
       </p>
 
-      <SentimentResponseTimeCard metrics={metrics} prior={priorMetrics} />
+      <SentimentResponseTimeCard
+        metrics={metrics}
+        prior={priorMetrics}
+        exportHref={
+          canExport && metrics.escalated > 0
+            ? `/api/admin/sentiment/export?tenant=${tenantSlug}&window=${metrics.windowDays}`
+            : null
+        }
+      />
 
       {firmWide && byMember && byMember.length > 0 && (
         <MemberResponseTimeTable rows={byMember} labels={memberLabels} />
@@ -347,9 +361,18 @@ export default async function SentimentPage({
 function SentimentResponseTimeCard({
   metrics,
   prior,
+  exportHref,
 }: {
   metrics: SentimentMetrics;
   prior: SentimentMetrics;
+  /**
+   * Item 83 — when non-null, the operator can download the full
+   * per-signal CSV for this window. Gated upstream by
+   * `sentiment:export` AND by the same `escalated > 0` check that
+   * suppresses the whole card (a sentiment-quiet tenant has nothing
+   * to export).
+   */
+  exportHref: string | null;
 }) {
   if (metrics.escalated === 0) return null;
 
@@ -366,9 +389,20 @@ function SentimentResponseTimeCard({
     <div className="card space-y-2">
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-base font-medium">Response time</h2>
-        <span className="text-xs text-ink/50">
-          last {metrics.windowDays} days
-        </span>
+        <div className="flex items-baseline gap-3">
+          {exportHref && (
+            <a
+              href={exportHref}
+              className="text-xs underline decoration-dotted text-ink/60 hover:text-ink"
+              title="Download every escalated signal in this window with full ack metadata. Acknowledged + open-overdue, uncapped."
+            >
+              export CSV
+            </a>
+          )}
+          <span className="text-xs text-ink/50">
+            last {metrics.windowDays} days
+          </span>
+        </div>
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-4">
         <div>
