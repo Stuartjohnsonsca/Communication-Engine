@@ -4,6 +4,7 @@ import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import {
+  computePriorPeriodSentimentMetrics,
   computeSentimentMetrics,
   formatTtaDuration,
   type SentimentMetrics,
@@ -67,7 +68,7 @@ export default async function SentimentPage({
         ? { escalatedAt: { not: null } }
         : { classification: filter };
 
-  const [signals, counts, escalatedCount, metrics] = await Promise.all([
+  const [signals, counts, escalatedCount, metrics, priorMetrics] = await Promise.all([
     superDb.sentimentSignal.findMany({
       where: { ...baseWhere, ...filterWhere },
       orderBy: [{ escalatedAt: "desc" }, { createdAt: "desc" }],
@@ -106,6 +107,17 @@ export default async function SentimentPage({
         ? {}
         : { assignedToMembershipId: ctx.membership.id }),
     }),
+    // Item 79 — prior 30d snapshot for the trend pills. Same scope as
+    // `metrics` so current/prior speak the same view. Empty prior →
+    // pills render nothing (don't fake a delta against missing data,
+    // same null-prior invariant as items 72/73/75).
+    computePriorPeriodSentimentMetrics({
+      tenantId: ctx.tenant.id,
+      windowDays: 30,
+      ...(firmWide
+        ? {}
+        : { assignedToMembershipId: ctx.membership.id }),
+    }),
   ]);
 
   const countMap: Record<string, number> = {};
@@ -133,7 +145,7 @@ export default async function SentimentPage({
         Negatives that clear the confidence bar are escalated to the assigned User and to the FCT.
       </p>
 
-      <SentimentResponseTimeCard metrics={metrics} />
+      <SentimentResponseTimeCard metrics={metrics} prior={priorMetrics} />
 
       <div className="flex flex-wrap gap-1 text-xs">
         {FILTERS.map((f) => {
@@ -267,8 +279,23 @@ export default async function SentimentPage({
  * the page. Pairs with item 77's 4h stale-nudge: oldest-unacked
  * crossing 4h is the same boundary that fires the nudge, so the card
  * gives the operator visibility on what's about to alert.
+ *
+ * Item 79 — `prior` carries the same metrics shape for the
+ * immediately-prior same-length window. The tiles for `Acknowledged`
+ * and `Median TTA` render a trend pill underneath the value when
+ * comparison data is available. P90 and Oldest-unacked deliberately
+ * DON'T get pills: P90 is too noisy at low N to convey direction, and
+ * oldest-unacked is a point-in-time gauge (prior-window unacked rolls
+ * into current-window unacked unless it was acked, so a "trend" reads
+ * confusingly).
  */
-function SentimentResponseTimeCard({ metrics }: { metrics: SentimentMetrics }) {
+function SentimentResponseTimeCard({
+  metrics,
+  prior,
+}: {
+  metrics: SentimentMetrics;
+  prior: SentimentMetrics;
+}) {
   if (metrics.escalated === 0) return null;
 
   const ratePct =
@@ -299,6 +326,12 @@ function SentimentResponseTimeCard({ metrics }: { metrics: SentimentMetrics }) {
               ({metrics.acknowledged}/{metrics.escalated})
             </span>
           </dd>
+          <AckRateTrendPill
+            current={metrics.acknowledgedRate}
+            prior={prior.acknowledgedRate}
+            priorEscalated={prior.escalated}
+            windowDays={metrics.windowDays}
+          />
         </div>
         <div>
           <dt
@@ -308,6 +341,11 @@ function SentimentResponseTimeCard({ metrics }: { metrics: SentimentMetrics }) {
             Median TTA
           </dt>
           <dd className="font-medium">{formatTtaDuration(metrics.medianAckMs)}</dd>
+          <MedianTtaTrendPill
+            current={metrics.medianAckMs}
+            prior={prior.medianAckMs}
+            windowDays={metrics.windowDays}
+          />
         </div>
         <div>
           <dt
@@ -331,5 +369,120 @@ function SentimentResponseTimeCard({ metrics }: { metrics: SentimentMetrics }) {
         </div>
       </dl>
     </div>
+  );
+}
+
+/**
+ * Post-PRD item 79 — acknowledged-rate trend pill. Mirrors items
+ * 72/73's adherence pill: percentage-point delta, 1pp flat threshold,
+ * green up / red down / grey flat. Up = good (acked more), so same
+ * arrow/color mapping as the adherence pill.
+ *
+ * Null on either side, or zero prior escalations, renders nothing —
+ * matches the null-prior invariant (no fake delta against missing
+ * data). A tenant with prior escalations === 0 has no comparable rate;
+ * the pill simply doesn't appear.
+ */
+function AckRateTrendPill({
+  current,
+  prior,
+  priorEscalated,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  priorEscalated: number;
+  windowDays: number;
+}) {
+  if (current === null || prior === null || priorEscalated === 0) {
+    return null;
+  }
+  const FLAT_THRESHOLD = 0.01;
+  const delta = current - prior;
+  const deltaPp = Math.round(delta * 100);
+  const priorPct = Math.round(prior * 100);
+  const title = `vs prior ${windowDays}d: ${priorPct}% acked (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta > FLAT_THRESHOLD) {
+    arrow = "↑";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta < -FLAT_THRESHOLD) {
+    arrow = "↓";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {deltaPp >= 0 ? "+" : ""}
+        {deltaPp}pp vs prior {windowDays}d
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Post-PRD item 79 — median-TTA trend pill. The colour inversion is
+ * deliberate: for latency metrics, lower is better. Faster (delta < 0)
+ * shows ↓ green; slower (delta > 0) shows ↑ red. The arrow points in
+ * the direction the number went, but the colour signals
+ * better-or-worse — the same accessibility pattern the rest of the
+ * codebase uses on rate pills, just with the good direction inverted.
+ *
+ * Flat threshold is relative: |delta| < max(60s, 10% of prior). A
+ * fixed 1m absolute threshold would over-flag wobble at high values
+ * (a 4h median with 2m delta isn't a real change), and a pure relative
+ * threshold would over-flag noise at low values (a 30s median with a
+ * 4s delta is well within sampling jitter). The combined floor handles
+ * both ends.
+ *
+ * Renders nothing when either side is null — typically because no
+ * signals were acked in one of the windows, so there's no median to
+ * compare. Same null-prior invariant as items 72/73/75.
+ */
+function MedianTtaTrendPill({
+  current,
+  prior,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  windowDays: number;
+}) {
+  if (current === null || prior === null) return null;
+  const ABS_FLOOR_MS = 60_000;
+  const REL_THRESHOLD = 0.1;
+  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
+  const delta = current - prior;
+  const priorLabel = formatTtaDuration(prior);
+  const deltaLabel = formatTtaDuration(Math.abs(delta));
+  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta < -flatBand) {
+    arrow = "↓";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta > flatBand) {
+    arrow = "↑";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {directionWord}
+        {deltaLabel} vs prior {windowDays}d
+      </span>
+    </span>
   );
 }

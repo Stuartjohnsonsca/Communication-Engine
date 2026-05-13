@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { superDb } from "@/lib/db";
 import {
+  computePriorPeriodSentimentMetrics,
   computeSentimentMetrics,
   formatTtaDuration,
 } from "@/lib/sentiment/metrics";
@@ -226,6 +227,206 @@ describe("computeSentimentMetrics — window + scope", () => {
     // age — A's signal is 2h old, B's is 5h.
     expect(a.oldestUnackedMs).toBeLessThan(3 * HOUR);
     expect(b.oldestUnackedMs).toBeGreaterThan(4 * HOUR);
+  });
+});
+
+describe("computePriorPeriodSentimentMetrics — item 79 trend pill source", () => {
+  it("returns the immediately-prior same-length window only", async () => {
+    const tenant = await createTestTenant();
+    const now = new Date();
+    // Current window (30d): one escalation 5d ago.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 5 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 5 * 24 * HOUR + 1 * HOUR),
+    });
+    // Prior window (30d–60d ago): two escalations.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 2 * HOUR),
+    });
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 50 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 50 * 24 * HOUR + 4 * HOUR),
+    });
+    // Older than prior: 90d ago. Must not contribute.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 90 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 90 * 24 * HOUR + 1 * HOUR),
+    });
+
+    const current = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    const prior = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(current.escalated).toBe(1);
+    expect(prior.escalated).toBe(2);
+    // Prior median of [2h, 4h] = 3h (linear interp between two values).
+    expect(prior.medianAckMs).toBe(3 * HOUR);
+    expect(prior.acknowledgedRate).toBe(1);
+  });
+
+  it("current and prior windows never overlap (boundary check)", async () => {
+    const tenant = await createTestTenant();
+    const now = new Date();
+    // Predicate is `[since, until)`. For a 30d call:
+    //   current = `[now - 30d, now)`     → includes a row at `now-30d`
+    //   prior   = `[now - 60d, now-30d)` → excludes a row at `now-30d`
+    // A signal escalated EXACTLY 30 days ago belongs to current only.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 30 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 29 * 24 * HOUR),
+    });
+    // 29d ago — clearly current.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 29 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 28 * 24 * HOUR),
+    });
+    // 31d ago — clearly prior.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 31 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 30 * 24 * HOUR),
+    });
+
+    const current = await computeSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    const prior = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(current.escalated).toBe(2); // boundary + 29d row
+    expect(prior.escalated).toBe(1); // 31d row only
+  });
+
+  it("does not credit an acknowledgement that landed in the current window to the prior window", async () => {
+    const tenant = await createTestTenant();
+    const now = new Date();
+    // Escalated in prior window (45d ago), but acked in current window
+    // (10d ago — well after prior window closed at -30d). The prior
+    // pill must NOT count this as acknowledged — pinning `asOf =
+    // until` of prior excludes the late ack.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 10 * 24 * HOUR),
+    });
+    const prior = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prior.escalated).toBe(1);
+    expect(prior.acknowledged).toBe(0);
+    expect(prior.acknowledgedRate).toBe(0);
+    // No acks in window → null median, not 0.
+    expect(prior.medianAckMs).toBeNull();
+    // The signal was unacked when the prior window closed (asOf =
+    // -30d), and the escalation was at -45d, so outstanding at close
+    // = 15d.
+    expect(prior.oldestUnackedMs).toBeGreaterThan(14 * 24 * HOUR);
+    expect(prior.oldestUnackedMs).toBeLessThan(16 * 24 * HOUR);
+  });
+
+  it("returns empty metrics when prior window has no escalations", async () => {
+    const tenant = await createTestTenant();
+    const now = new Date();
+    // One in-current, none in prior — trend pill caller will render
+    // nothing because `priorEscalated === 0`.
+    await makeSignal({
+      tenantId: tenant.id,
+      escalatedAt: new Date(now.getTime() - 1 * HOUR),
+    });
+    const prior = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prior.escalated).toBe(0);
+    expect(prior.acknowledgedRate).toBeNull();
+    expect(prior.medianAckMs).toBeNull();
+    expect(prior.oldestUnackedMs).toBeNull();
+  });
+
+  it("scope filter applies to prior window the same way as current", async () => {
+    const tenant = await createTestTenant();
+    const mine = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("scope-prior-mine"),
+    });
+    const other = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("scope-prior-other"),
+    });
+    const now = new Date();
+    // Mine in prior window, acked.
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: mine.membership.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 1 * HOUR),
+    });
+    // Other in prior window, also acked — must NOT leak into mine.
+    await makeSignal({
+      tenantId: tenant.id,
+      assignedToMembershipId: other.membership.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 30 * HOUR),
+    });
+
+    const mineScoped = await computePriorPeriodSentimentMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      assignedToMembershipId: mine.membership.id,
+      now,
+    });
+    expect(mineScoped.escalated).toBe(1);
+    expect(mineScoped.medianAckMs).toBe(1 * HOUR);
+  });
+
+  it("tenant isolation: prior window does not cross tenants", async () => {
+    const tenantA = await createTestTenant();
+    const tenantB = await createTestTenant();
+    const now = new Date();
+    await makeSignal({
+      tenantId: tenantA.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 45 * 24 * HOUR + 2 * HOUR),
+    });
+    await makeSignal({
+      tenantId: tenantB.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 45 * 24 * HOUR + 8 * HOUR),
+    });
+    const a = await computePriorPeriodSentimentMetrics({
+      tenantId: tenantA.id,
+      windowDays: 30,
+      now,
+    });
+    const b = await computePriorPeriodSentimentMetrics({
+      tenantId: tenantB.id,
+      windowDays: 30,
+      now,
+    });
+    expect(a.escalated).toBe(1);
+    expect(a.medianAckMs).toBe(2 * HOUR);
+    expect(b.escalated).toBe(1);
+    expect(b.medianAckMs).toBe(8 * HOUR);
   });
 });
 

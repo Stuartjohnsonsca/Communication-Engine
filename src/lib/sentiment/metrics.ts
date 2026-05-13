@@ -74,9 +74,43 @@ export async function computeSentimentMetrics(input: {
   const windowDays = input.windowDays ?? 30;
   const now = input.now ?? new Date();
   const since = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  return computeSentimentMetricsForRange({
+    tenantId: input.tenantId,
+    assignedToMembershipId: input.assignedToMembershipId,
+    since,
+    until: now,
+    asOf: now,
+  });
+}
 
-  // Narrow query — only escalated signals in window contribute. SQL
-  // predicates apply both the scope filter and the "is escalated"
+/**
+ * Post-PRD item 79 — internal helper that takes an explicit `[since,
+ * until)` range, so the `computePriorPeriodSentimentMetrics` helper can
+ * reuse the same query + classification logic without duplicating the
+ * percentile loop.
+ *
+ * `asOf` is the clock used for `oldestUnackedMs` — when computing the
+ * CURRENT window, callers pass `now` so the gauge reflects real
+ * outstanding age. When computing the PRIOR window for a trend pill,
+ * callers pass the END of the prior window (`until`) so the result
+ * answers "how long had this signal been outstanding when this prior
+ * window closed?" — without that, an unacked signal from 14 days ago
+ * would always read as "14d outstanding" instead of however old it was
+ * when its window ended.
+ */
+async function computeSentimentMetricsForRange(input: {
+  tenantId: string;
+  since: Date;
+  until: Date;
+  asOf: Date;
+  assignedToMembershipId?: string;
+}): Promise<SentimentMetrics> {
+  const windowDays = Math.round(
+    (input.until.getTime() - input.since.getTime()) / (24 * 60 * 60 * 1000),
+  );
+
+  // Narrow query — only escalated signals whose `escalatedAt` falls in
+  // [since, until) contribute. SQL predicates apply scope + escalation
   // gate so we don't fetch non-escalated rows only to drop them.
   const rows = await superDb.sentimentSignal.findMany({
     where: {
@@ -84,7 +118,7 @@ export async function computeSentimentMetrics(input: {
       ...(input.assignedToMembershipId
         ? { assignedToMembershipId: input.assignedToMembershipId }
         : {}),
-      escalatedAt: { not: null, gte: since },
+      escalatedAt: { not: null, gte: input.since, lt: input.until },
     },
     select: {
       escalatedAt: true,
@@ -99,18 +133,25 @@ export async function computeSentimentMetrics(input: {
   let acknowledged = 0;
   const ackDurations: number[] = [];
   let oldestUnackedMs: number | null = null;
+  const asOfMs = input.asOf.getTime();
 
   for (const r of rows) {
     if (!r.escalatedAt) continue;
     escalated += 1;
-    if (r.acknowledgedAt) {
+    // For the prior-window pill we only credit an acknowledgement that
+    // landed BEFORE the window closed — otherwise a signal escalated on
+    // day 14 and acked on day 7 (current window) would inflate the
+    // prior-window ack rate.
+    const ackedInRange =
+      r.acknowledgedAt !== null && r.acknowledgedAt.getTime() < asOfMs;
+    if (ackedInRange) {
       acknowledged += 1;
-      const dt = r.acknowledgedAt.getTime() - r.escalatedAt.getTime();
+      const dt = r.acknowledgedAt!.getTime() - r.escalatedAt.getTime();
       // Negative durations would only happen with a clock skew or a
       // manually-poked row; floor at 0 so percentile math stays sane.
       ackDurations.push(Math.max(0, dt));
     } else {
-      const outstanding = now.getTime() - r.escalatedAt.getTime();
+      const outstanding = asOfMs - r.escalatedAt.getTime();
       if (outstandingPositive(outstanding)) {
         if (oldestUnackedMs === null || outstanding > oldestUnackedMs) {
           oldestUnackedMs = outstanding;
@@ -128,6 +169,50 @@ export async function computeSentimentMetrics(input: {
     p90AckMs: percentile(ackDurations, PERCENTILES.p90),
     oldestUnackedMs,
   };
+}
+
+/**
+ * Post-PRD item 79 — sentiment response-time trend pill prior-period
+ * snapshot. Returns the same `SentimentMetrics` shape for the
+ * immediately-prior same-length window, so the /sentiment card can
+ * render direction pills next to the headline tiles.
+ *
+ * For a 30d call, prior = `[now - 60d, now - 30d)`. Current and prior
+ * never overlap (the `until` of prior equals the `since` of current).
+ *
+ * **`asOf` is pinned to the END of the prior window**, not `now` —
+ * otherwise:
+ *   - `oldestUnackedMs` would always equal the full age of any unacked
+ *     prior-window signal (it's been sitting from then until now, which
+ *     is by definition longer than the window itself).
+ *   - An acknowledgement that landed inside the current window would
+ *     count toward the prior window's ack rate, falsely inflating it.
+ *
+ * Pinning `asOf = until` answers the meaningful question: "at the point
+ * this window closed, how were we doing?"
+ *
+ * Same null-when-no-data invariant as `computeSentimentMetrics`. When
+ * prior is empty, the trend pill renders nothing (don't fake a delta
+ * against missing data — matches items 72/73/75).
+ */
+export async function computePriorPeriodSentimentMetrics(input: {
+  tenantId: string;
+  windowDays?: SentimentMetricsWindow;
+  assignedToMembershipId?: string;
+  now?: Date;
+}): Promise<SentimentMetrics> {
+  const windowDays = input.windowDays ?? 30;
+  const now = input.now ?? new Date();
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  const until = new Date(now.getTime() - windowMs);
+  const since = new Date(until.getTime() - windowMs);
+  return computeSentimentMetricsForRange({
+    tenantId: input.tenantId,
+    assignedToMembershipId: input.assignedToMembershipId,
+    since,
+    until,
+    asOf: until,
+  });
 }
 
 function outstandingPositive(ms: number): boolean {
