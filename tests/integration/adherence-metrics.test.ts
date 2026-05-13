@@ -700,7 +700,7 @@ describe("computeAdherenceMetrics — item 92 per-Member breakdown", () => {
     expect(bootstrapMedianCi95(tooFew, seed)).toBeNull();
   });
 
-  it("self-view (membershipId set) ignores withByMember — does not need a one-row table", async () => {
+  it("self-view (membershipId set) accepts withByMember — does not need a one-row table", async () => {
     // Mirror of item 80's "self-view returns one row" invariant, but
     // expressed differently: the adherence page sets withByMember ONLY
     // on the firm-wide path. Verify the lib accepts `withByMember +
@@ -744,5 +744,130 @@ describe("computeAdherenceMetrics — item 92 per-Member breakdown", () => {
     // invariant — item 92 mirrors item 80's per-Member-can't-drift rule).
     expect(m.byMember![0]!.escalated).toBe(m.escalated);
     expect(m.byMember![0]!.acknowledged).toBe(m.acknowledged);
+  });
+});
+
+describe("computeAdherenceMetrics — item 93 first-person self-view contract", () => {
+  // /account uses `membershipId` + `withByMember: true` so the Member
+  // sees their own bootstrap CI bracket on the adherence card. The lib
+  // invariant — exactly one byMember row matching the headline — is
+  // what the page reads via `byMember[0]` to pluck the CI. Drift here
+  // breaks the self-view card. Mirrors item 81's sentiment-side tests.
+  it("scoped self-view with multiple acks returns one row matching headline + non-null CI", async () => {
+    const tenant = await createTestTenant();
+    const { membership: me } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-self-view-ci"),
+    });
+    const { membership: other } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-self-view-ci-other"),
+    });
+    const now = new Date();
+    // 4 of mine — above BOOTSTRAP_MIN_N so CI is computed.
+    for (let i = 0; i < 4; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: me.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+        acknowledgedById: me.id,
+      });
+    }
+    // 3 of someone else's — must not leak into my self-view.
+    for (let i = 0; i < 3; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: other.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 90 * 60_000),
+        acknowledgedById: other.id,
+      });
+    }
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      membershipId: me.id,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.membershipId).toBe(me.id);
+    // Single-classifier invariant: byMember[0]'s numbers === headline.
+    expect(m.byMember![0]!.escalated).toBe(m.escalated);
+    expect(m.byMember![0]!.acknowledged).toBe(m.acknowledged);
+    expect(m.byMember![0]!.medianAckMs).toBe(m.medianAckMs);
+    // 4 acks >= BOOTSTRAP_MIN_N → CI computed; bracket contains the
+    // median (load-bearing — page reads byMember[0].medianAckCi95).
+    expect(m.byMember![0]!.medianAckCi95).not.toBeNull();
+    expect(m.byMember![0]!.medianAckCi95!.loMs).toBeLessThanOrEqual(
+      m.medianAckMs!,
+    );
+    expect(m.byMember![0]!.medianAckCi95!.hiMs).toBeGreaterThanOrEqual(
+      m.medianAckMs!,
+    );
+  });
+
+  it("scoped self-view with no escalations returns byMember: [] (not undefined)", async () => {
+    // Item 93's page hides the card when escalated === 0, but the lib
+    // contract is "withByMember=true → defined array, possibly empty."
+    // Verify the empty-array shape so a future caller can rely on it
+    // without a separate undefined-check branch.
+    const tenant = await createTestTenant();
+    const { membership: me } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-self-view-empty"),
+    });
+    const now = new Date();
+    // Above-threshold, non-escalated control row — must not contribute.
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: me.id,
+      overall: 0.92,
+      escalatedAt: null,
+    });
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      membershipId: me.id,
+      withByMember: true,
+      now,
+    });
+    expect(m.escalated).toBe(0);
+    expect(m.byMember).toBeDefined();
+    expect(m.byMember).toHaveLength(0);
+  });
+
+  it("scoped self-view with <BOOTSTRAP_MIN_N acks returns valid row but null CI", async () => {
+    // Member has 2 acked escalations — below BOOTSTRAP_MIN_N. The page
+    // hides the bracket and just shows the median, without the
+    // bootstrap interval — bootstrap floor is preserved (n<3 = CI
+    // would be degenerate). Mirrors item 81's sentiment-side case.
+    const tenant = await createTestTenant();
+    const { membership: me } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-self-view-low-acks"),
+    });
+    const now = new Date();
+    for (let i = 0; i < 2; i++) {
+      await makeAdherence({
+        tenantId: tenant.id,
+        membershipId: me.id,
+        escalatedAt: new Date(now.getTime() - (1 + i) * HOUR),
+        acknowledgedAt: new Date(now.getTime() - (1 + i) * HOUR + 30 * 60_000),
+        acknowledgedById: me.id,
+      });
+    }
+    const m = await computeAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      membershipId: me.id,
+      withByMember: true,
+      now,
+    });
+    expect(m.byMember).toHaveLength(1);
+    expect(m.byMember![0]!.acknowledged).toBeLessThan(BOOTSTRAP_MIN_N);
+    expect(m.byMember![0]!.medianAckMs).not.toBeNull();
+    expect(m.byMember![0]!.medianAckCi95).toBeNull();
   });
 });

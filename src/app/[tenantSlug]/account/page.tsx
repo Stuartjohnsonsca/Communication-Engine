@@ -15,6 +15,12 @@ import {
   formatTtaDuration,
   type SentimentMetrics,
 } from "@/lib/sentiment/metrics";
+import {
+  computeAdherenceMetrics,
+  computePriorPeriodAdherenceMetrics,
+  type AdherenceMetrics,
+} from "@/lib/adherence/metrics";
+import { formatDuration, formatDurationOrDash } from "@/lib/format/duration";
 import { revokeAccess, reauthoriseAccess, getMemberLifecycleState } from "@/lib/lifecycle";
 import {
   SUPPORTED_LOCALES,
@@ -71,6 +77,8 @@ export default async function AccountPage({
     priorAdherence,
     sentimentMetrics,
     priorSentimentMetrics,
+    adherenceMetrics,
+    priorAdherenceMetrics,
   ] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
@@ -114,6 +122,36 @@ export default async function AccountPage({
     computePriorPeriodSentimentMetrics({
       tenantId: ctx.tenant.id,
       assignedToMembershipId: ctx.membership.id,
+      windowDays: 30,
+    }),
+    // Item 93 — first-person adherence response-time. Counterpart to
+    // item 92's per-Member table on /adherence/escalations: that view
+    // tells the FCT/Admin "Jane is slow to acknowledge her own
+    // below-threshold sends," this surface tells Jane herself.
+    //
+    // Self-view scope predicate filters to this Member as SENDER (note
+    // `membershipId`, not `assignedToMembershipId` as on the sentiment
+    // side — adherence escalates the sender of the bad send, not an
+    // assignee). `withByMember: true` routes through item 92's path so
+    // the bootstrap 95% CI lands in `byMember[0]` for the card to
+    // render. Reusing the same lib path as the firm-wide view keeps
+    // the classifier identical — a Member's "my median" can never
+    // disagree with the row representing them on /adherence/escalations.
+    //
+    // Distinct from the FCG-window adherence card above (item 69/73 —
+    // "did you respond within the FCG window"). That measures the
+    // engine's central promise to clients; THIS measures how fast you
+    // acknowledge governance flags raised against your sends. Two
+    // different questions, two different cards.
+    computeAdherenceMetrics({
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
+      windowDays: 30,
+      withByMember: true,
+    }),
+    computePriorPeriodAdherenceMetrics({
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
       windowDays: 30,
     }),
   ]);
@@ -432,6 +470,12 @@ export default async function AccountPage({
         tenantSlug={tenantSlug}
         metrics={sentimentMetrics}
         prior={priorSentimentMetrics}
+      />
+
+      <MyAdherenceResponseTimeCard
+        tenantSlug={tenantSlug}
+        metrics={adherenceMetrics}
+        prior={priorAdherenceMetrics}
       />
 
       <form action={setMyLocaleAction} className="card space-y-3">
@@ -982,6 +1026,208 @@ function MyMedianTtaTrendPill({
   const delta = current - prior;
   const priorLabel = formatTtaDuration(prior);
   const deltaLabel = formatTtaDuration(Math.abs(delta));
+  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta < -flatBand) {
+    arrow = "↓";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta > flatBand) {
+    arrow = "↑";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {directionWord}
+        {deltaLabel} vs prior {windowDays}d
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Post-PRD hardening item 93 — first-person adherence response-time card.
+ *
+ * Counterpart to item 92's per-Member breakdown on /adherence/escalations:
+ * the firm view tells the FCT/Admin "Jane is slow to acknowledge her
+ * own below-threshold sends," this surface tells Jane herself.
+ * Behavioural change without requiring the FIRM_ADMIN to nag.
+ *
+ * **Distinct from the FCG-window adherence card on this page**
+ * (`MyAdherenceCard`, items 69/73). That card answers "did you reply
+ * within the FCG promise window" — the engine's central commitment
+ * to clients. THIS card answers "of the sends where you scored below
+ * the {ADHERENCE_ESCALATION_THRESHOLD}% compliance gate, how fast did
+ * you acknowledge the escalation?" Two different questions, two
+ * different cards on the same page.
+ *
+ * **Renders nothing when the Member has zero in-window escalations** —
+ * matches item 90's firm-wide card invariant. A Member who's never
+ * been escalated on doesn't see a confused "—" card cluttering their
+ * account page.
+ *
+ * **Bootstrap CI bracket sourced from `byMember[0]`** — same lib path
+ * as item 92's firm-wide table, same classifier, same bootstrap
+ * iteration count. The Member's "my median" can never disagree with
+ * the row representing them on /adherence/escalations. When the
+ * Member has fewer than `BOOTSTRAP_MIN_N` acks the CI is null and the
+ * bracket is hidden; the median still renders.
+ *
+ * **Median TTA trend pill kept; ack-rate pill omitted** — mirrors item
+ * 81's reasoning: at single-Member volumes a pp delta on a 3-out-of-5
+ * vs 2-out-of-3 comparison is noise, but latency changes ARE
+ * meaningful even at low N.
+ */
+function MyAdherenceResponseTimeCard({
+  tenantSlug,
+  metrics,
+  prior,
+}: {
+  tenantSlug: string;
+  metrics: AdherenceMetrics;
+  prior: AdherenceMetrics;
+}) {
+  if (metrics.escalated === 0) return null;
+  const ratePct =
+    metrics.acknowledgedRate === null
+      ? "—"
+      : `${Math.round(metrics.acknowledgedRate * 100)}%`;
+  const unackedTone =
+    metrics.oldestUnackedMs !== null &&
+    metrics.oldestUnackedMs > 4 * 60 * 60_000
+      ? "text-red-900 font-medium"
+      : "text-ink/80";
+  // The lib invariant for `withByMember: true` with a single-Member
+  // scope is exactly one row in `byMember`; pluck the CI off it.
+  const myCi = metrics.byMember?.[0]?.medianAckCi95 ?? null;
+  return (
+    <div className="card space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 className="text-base font-medium">
+            My adherence-escalation response time
+          </h2>
+          <MyAdherenceMedianTtaTrendPill
+            current={metrics.medianAckMs}
+            prior={prior.medianAckMs}
+            windowDays={metrics.windowDays}
+          />
+        </div>
+        <span className="text-xs text-ink/50">
+          last {metrics.windowDays} days
+        </span>
+      </div>
+      <p className="text-sm text-ink/70">
+        How quickly you&rsquo;ve been acknowledging compliance flags on
+        your own below-threshold sends. See the firm-wide view and full
+        list on{" "}
+        <Link
+          className="underline decoration-dotted"
+          href={`/${tenantSlug}/adherence/escalations`}
+        >
+          /adherence/escalations
+        </Link>
+        .
+      </p>
+      <dl className="grid gap-3 text-sm sm:grid-cols-4">
+        <div>
+          <dt className="text-xs uppercase tracking-wider text-ink/50">
+            Acknowledged
+          </dt>
+          <dd className="font-medium">
+            {ratePct}
+            <span className="ml-1 text-[11px] font-normal text-ink/50">
+              ({metrics.acknowledged}/{metrics.escalated})
+            </span>
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Median time from escalation to your acknowledgement, over acked escalations only."
+          >
+            Median TTA
+          </dt>
+          <dd className="font-medium">
+            {formatDurationOrDash(metrics.medianAckMs)}
+            {metrics.medianAckMs !== null && myCi && (
+              <span
+                className="ml-1 text-[11px] font-normal text-ink/50"
+                title={`Bootstrap 95% CI on your median across ${metrics.acknowledged} acked escalations. Wide brackets = not enough data to draw conclusions yet.`}
+              >
+                [{formatDurationOrDash(myCi.loMs)},{" "}
+                {formatDurationOrDash(myCi.hiMs)}]
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="P90 — most of your acks are below this. A small median with a large P90 means most are fast but some sit."
+          >
+            P90 TTA
+          </dt>
+          <dd className="font-medium">
+            {formatDurationOrDash(metrics.p90AckMs)}
+          </dd>
+        </div>
+        <div>
+          <dt
+            className="text-xs uppercase tracking-wider text-ink/50"
+            title="Oldest escalation on your sends still waiting for your ack. Red past 4h."
+          >
+            Oldest unacked
+          </dt>
+          <dd className={unackedTone}>
+            {formatDurationOrDash(metrics.oldestUnackedMs)}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Post-PRD item 93 — self-view median-TTA trend pill on the adherence
+ * card. Sibling of item 81's `MyMedianTtaTrendPill` (sentiment) and
+ * item 91's `AdherenceMedianTtaTrendPill` (firm-wide). Same
+ * arithmetic, same `max(60s, 10% of prior)` flat-band, same inverted
+ * colour mapping (lower latency = green) — only the data source
+ * differs (self vs firm-wide vs sentiment).
+ *
+ * Three median-TTA pill sites now exist on /account + /sentiment +
+ * /adherence/escalations + (firm) /adherence/escalations. The
+ * codebase's duplicate-at-two, extract-at-three rule (items 68 / 70
+ * / 73 / 75 / 88 / 92) is now triggered for the median-TTA pill
+ * shape — a future refactor item could consolidate them into a single
+ * `<MedianTtaTrendPill compact={boolean} />`. Holding off here to
+ * keep item 93 focused on the new surface; extraction is the right
+ * next pass when no other product work is pending.
+ */
+function MyAdherenceMedianTtaTrendPill({
+  current,
+  prior,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  windowDays: number;
+}) {
+  if (current === null || prior === null) return null;
+  const ABS_FLOOR_MS = 60_000;
+  const REL_THRESHOLD = 0.1;
+  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
+  const delta = current - prior;
+  const priorLabel = formatDuration(prior);
+  const deltaLabel = formatDuration(Math.abs(delta));
   const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
   const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
 
