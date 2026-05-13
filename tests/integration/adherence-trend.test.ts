@@ -213,6 +213,142 @@ describe("computeFcgAdherenceForRange — exclusions", () => {
   });
 });
 
+describe("computeFcgAdherenceForRange — per-Member breakdown (item 75)", () => {
+  it("buckets each Membership separately while preserving the firm-wide aggregate", async () => {
+    const tenant = await createTestTenant();
+    const a = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("perm-a"),
+    });
+    const b = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("perm-b"),
+    });
+    const now = new Date();
+
+    // A: 2 within (100%)
+    for (let i = 0; i < 2; i += 1) {
+      const created = new Date(now.getTime() - 5 * DAY);
+      const deadline = new Date(now.getTime() - 4 * DAY);
+      await seedDeadlinedSend({
+        tenantId: tenant.id,
+        membershipId: a.membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      });
+    }
+    // B: 1 within, 3 after (25%)
+    {
+      const created = new Date(now.getTime() - 5 * DAY);
+      const deadline = new Date(now.getTime() - 4 * DAY);
+      await seedDeadlinedSend({
+        tenantId: tenant.id,
+        membershipId: b.membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() - 60_000),
+      });
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const created = new Date(now.getTime() - 5 * DAY);
+      const deadline = new Date(now.getTime() - 4 * DAY);
+      await seedDeadlinedSend({
+        tenantId: tenant.id,
+        membershipId: b.membership.id,
+        createdAt: created,
+        deadline,
+        sentMarkedAt: new Date(deadline.getTime() + 60_000),
+      });
+    }
+
+    const r = await computeFcgAdherenceForRange({
+      tenantId: tenant.id,
+      since: new Date(now.getTime() - 7 * DAY),
+      until: now,
+    });
+    // Firm-wide: 3 within, 3 after → 50%
+    expect(r.sentWithDeadline).toBe(6);
+    expect(r.sentWithinWindow).toBe(3);
+    expect(r.sentAfterWindow).toBe(3);
+    expect(r.withinWindowRate).toBe(0.5);
+    // Per-Member
+    expect(r.perMember[a.membership.id]?.sentWithDeadline).toBe(2);
+    expect(r.perMember[a.membership.id]?.withinWindowRate).toBe(1);
+    expect(r.perMember[b.membership.id]?.sentWithDeadline).toBe(4);
+    expect(r.perMember[b.membership.id]?.withinWindowRate).toBe(0.25);
+  });
+
+  it("omits Members with zero deadlined sends from the perMember map", async () => {
+    const tenant = await createTestTenant();
+    const a = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("perm-empty"),
+    });
+    const now = new Date();
+    // Member A has only no-deadline sends in the range — excluded.
+    {
+      const created = new Date(now.getTime() - 3 * DAY);
+      await seedDeadlinedSend({
+        tenantId: tenant.id,
+        membershipId: a.membership.id,
+        createdAt: created,
+        deadline: new Date(now.getTime() - 2 * DAY),
+        sentMarkedAt: new Date(now.getTime() - 2.1 * DAY),
+        fcgWindowDeadline: null,
+      });
+    }
+
+    const r = await computeFcgAdherenceForRange({
+      tenantId: tenant.id,
+      since: new Date(now.getTime() - 7 * DAY),
+      until: now,
+    });
+    expect(r.sentWithDeadline).toBe(0);
+    // Member is absent from the map — caller treats absence as "no
+    // comparison data" and renders nothing rather than 0/0.
+    expect(r.perMember[a.membership.id]).toBeUndefined();
+  });
+
+  it("per-Member breakdown shares the firm-wide exclusions (bypassed-synth)", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("perm-bypass"),
+    });
+    const now = new Date();
+    const created = new Date(now.getTime() - 3 * DAY);
+    const deadline = new Date(now.getTime() - 2 * DAY);
+
+    // Bypassed-synth late send — must not contribute to either surface.
+    await seedDeadlinedSend({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      createdAt: created,
+      deadline,
+      sentMarkedAt: new Date(deadline.getTime() + 60_000),
+      synthesisedFromOutboundIngest: true,
+    });
+    // One real within-window send.
+    await seedDeadlinedSend({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      createdAt: created,
+      deadline,
+      sentMarkedAt: new Date(deadline.getTime() - 60_000),
+    });
+
+    const r = await computeFcgAdherenceForRange({
+      tenantId: tenant.id,
+      since: new Date(now.getTime() - 7 * DAY),
+      until: now,
+    });
+    expect(r.sentWithDeadline).toBe(1);
+    expect(r.perMember[membership.id]?.sentWithDeadline).toBe(1);
+    expect(r.perMember[membership.id]?.withinWindowRate).toBe(1);
+  });
+});
+
 describe("computePriorPeriodFcgRate — tenant isolation", () => {
   it("tenant A's prior-period drafts don't leak into tenant B", async () => {
     const tenantA = await createTestTenant();

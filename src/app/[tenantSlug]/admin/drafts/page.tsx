@@ -344,12 +344,31 @@ export default async function DraftsRollupPage({
                     <td className="py-2 pr-3">{num(m.open)}</td>
                     <td className="py-2 pr-3 font-medium">{pct(rate)}</td>
                     <td className="py-2 pr-3 font-medium">
-                      {pct(m.fcgWindow.withinWindowRate)}
-                      {m.fcgWindow.sentWithDeadline > 0 && (
-                        <span className="ml-1 text-[11px] font-normal text-ink/50">
-                          ({num(m.fcgWindow.sentWithinWindow)}/{num(m.fcgWindow.sentWithDeadline)})
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-baseline gap-1">
+                        <span>{pct(m.fcgWindow.withinWindowRate)}</span>
+                        {m.fcgWindow.sentWithDeadline > 0 && (
+                          <span className="text-[11px] font-normal text-ink/50">
+                            ({num(m.fcgWindow.sentWithinWindow)}/{num(m.fcgWindow.sentWithDeadline)})
+                          </span>
+                        )}
+                        {(() => {
+                          // Item 75 — per-Member trend pill. Compact variant
+                          // (just arrow + delta in pp; no "vs prior Nd" text)
+                          // so the column doesn't blow up. Hidden when the
+                          // member has no prior data, matching the firm-wide
+                          // pill's null-prior invariant.
+                          const prior = priorPeriod.perMember[m.membershipId];
+                          if (!prior) return null;
+                          return (
+                            <CompactAdherenceTrendPill
+                              current={m.fcgWindow.withinWindowRate}
+                              prior={prior.withinWindowRate}
+                              priorSentWithDeadline={prior.sentWithDeadline}
+                              windowDays={windowDays}
+                            />
+                          );
+                        })()}
+                      </div>
                     </td>
                     <td className="py-2 pr-3">
                       {m.fcgWindow.openOverdue > 0 ? (
@@ -549,6 +568,60 @@ function formatLateBy(ms: number): string {
   if (hours < 48) return `${hours}h`;
   const days = Math.round(ms / (24 * 60 * 60_000));
   return `${days}d`;
+}
+
+/**
+ * Post-PRD item 75 — compact per-Member variant of the trend pill.
+ *
+ * Same maths as `AdherenceTrendPill` (item 72), same null-handling,
+ * same 1pp flat-threshold — only the rendered text differs. Drops
+ * "vs prior Nd" because the table column already carries the
+ * context, leaving just an arrow and pp delta to keep the row tight.
+ * The tooltip preserves the full prior% + signed delta so hovering
+ * still gives the operator the same detail as the heading pill.
+ */
+function CompactAdherenceTrendPill({
+  current,
+  prior,
+  priorSentWithDeadline,
+  windowDays,
+}: {
+  current: number | null;
+  prior: number | null;
+  priorSentWithDeadline: number;
+  windowDays: number;
+}) {
+  if (current === null || prior === null || priorSentWithDeadline === 0) {
+    return null;
+  }
+  const FLAT_THRESHOLD = 0.01;
+  const delta = current - prior;
+  const deltaPp = Math.round(delta * 100);
+  const priorPct = Math.round(prior * 100);
+  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
+
+  let arrow = "→";
+  let cls = "border-ink/20 bg-ink/5 text-ink/70";
+  if (delta > FLAT_THRESHOLD) {
+    arrow = "↑";
+    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
+  } else if (delta < -FLAT_THRESHOLD) {
+    arrow = "↓";
+    cls = "border-red-300 bg-red-50 text-red-900";
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0 text-[10px] font-medium ${cls}`}
+      title={title}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>
+        {deltaPp >= 0 ? "+" : ""}
+        {deltaPp}pp
+      </span>
+    </span>
+  );
 }
 
 /**

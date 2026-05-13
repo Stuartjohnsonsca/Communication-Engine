@@ -208,11 +208,31 @@ export type FcgMissRow = {
  * shape (status as of that timestamp) and isn't load-bearing for the
  * trend pill, which is rate-vs-rate only.
  */
-export type FcgAdherenceForRange = {
+/// The per-membership shape inside `FcgAdherenceForRange.perMember`.
+/// Same aggregate fields as the firm-wide level — the table on
+/// /admin/drafts can render both with one component. Doesn't recurse
+/// (no perMember inside perMember).
+export type FcgMemberAdherenceForRange = {
   sentWithDeadline: number;
   sentWithinWindow: number;
   sentAfterWindow: number;
   withinWindowRate: number | null;
+};
+
+export type FcgAdherenceForRange = FcgMemberAdherenceForRange & {
+  /**
+   * Post-PRD item 75 — per-Member breakdown over the same range,
+   * keyed by `membershipId`. Built in the same scan as the firm-wide
+   * aggregate so the two surfaces use one classifier (mirrors item
+   * 67's invariant: per-Member counters can't drift from firm-wide).
+   *
+   * Members with zero deadlined sends in the range are NOT present
+   * in the map (not `{ sentWithDeadline: 0, withinWindowRate: null }`
+   * entries). A caller looking up a missing member should treat
+   * "absent" as "no comparison data" — the trend pill renders
+   * nothing in that case, matching item 72's null-prior invariant.
+   */
+  perMember: Record<string, FcgMemberAdherenceForRange>;
 };
 
 export async function computeFcgAdherenceForRange(input: {
@@ -229,6 +249,7 @@ export async function computeFcgAdherenceForRange(input: {
       status: "SENT",
     },
     select: {
+      membershipId: true,
       sentMarkedAt: true,
       fcgWindowDeadline: true,
     },
@@ -237,16 +258,35 @@ export async function computeFcgAdherenceForRange(input: {
 
   let sentWithinWindow = 0;
   let sentAfterWindow = 0;
+  // Item 75 — per-Member buckets accumulated in the same pass. Single
+  // classifier ("was sent <= deadline?") drives both the firm-wide
+  // counters and the per-Member ones.
+  const perMemberBuckets = new Map<string, { within: number; after: number }>();
   for (const r of rows) {
     if (!r.fcgWindowDeadline || !r.sentMarkedAt) continue;
-    if (r.sentMarkedAt.getTime() <= r.fcgWindowDeadline.getTime()) {
-      sentWithinWindow += 1;
-    } else {
-      sentAfterWindow += 1;
+    const onTime = r.sentMarkedAt.getTime() <= r.fcgWindowDeadline.getTime();
+    if (onTime) sentWithinWindow += 1;
+    else sentAfterWindow += 1;
+    if (r.membershipId) {
+      const b = perMemberBuckets.get(r.membershipId) ?? { within: 0, after: 0 };
+      if (onTime) b.within += 1;
+      else b.after += 1;
+      perMemberBuckets.set(r.membershipId, b);
     }
   }
   const sentWithDeadline = sentWithinWindow + sentAfterWindow;
+  const perMember: Record<string, FcgMemberAdherenceForRange> = {};
+  for (const [id, b] of perMemberBuckets) {
+    const total = b.within + b.after;
+    perMember[id] = {
+      sentWithDeadline: total,
+      sentWithinWindow: b.within,
+      sentAfterWindow: b.after,
+      withinWindowRate: total > 0 ? b.within / total : null,
+    };
+  }
   return {
+    perMember,
     sentWithDeadline,
     sentWithinWindow,
     sentAfterWindow,
