@@ -9,6 +9,7 @@ import {
   upsertTenantOAuthApp,
   deleteTenantOAuthApp,
 } from "@/lib/channels/oauth-apps";
+import { TestCredentialsButton } from "./TestCredentialsButton";
 
 /**
  * Post-PRD hardening item 101 — bring-your-own OAuth app per tenant
@@ -302,6 +303,13 @@ export default async function OAuthAppsPage({
                   )}
                 </div>
               </form>
+
+              {existing && (
+                <TestCredentialsButton
+                  tenantSlug={tenantSlug}
+                  channelKind={kind}
+                />
+              )}
 
               {existing && (
                 <form action={deleteAction} className="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
