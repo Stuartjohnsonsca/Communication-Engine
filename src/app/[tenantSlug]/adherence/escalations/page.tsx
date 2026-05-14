@@ -11,9 +11,10 @@ import {
   type AdherenceMetrics,
   type MemberAdherenceMetrics,
 } from "@/lib/adherence/metrics";
-import { formatDuration, formatDurationOrDash } from "@/lib/format/duration";
+import { formatDurationOrDash } from "@/lib/format/duration";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveOutstanding } from "@/components/LiveOutstanding";
+import { MedianTtaTrendPill } from "@/components/MedianTtaTrendPill";
 import AcknowledgeButton from "./AcknowledgeButton";
 
 type Filter = "OPEN" | "ALL" | "ACKNOWLEDGED";
@@ -335,8 +336,19 @@ export default async function AdherenceEscalationsPage({
  * the immediately-prior same-length window. P90 + Oldest unacked
  * deliberately don't get pills (P90 is noisy at typical N, Oldest
  * unacked is a point-in-time gauge — same exclusions as item 79).
- * Per-Member breakdown deliberately omitted; that'd be a separate item
- * mirroring item 80.
+ * Per-Member breakdown shipped at item 92 (`MemberAdherenceResponseTimeTable`
+ * below) but does not yet carry per-row trend pills (a future item
+ * analogous to item 88 on the sentiment side, now unblocked by item 96's
+ * shared `<MedianTtaTrendPill compact />`).
+ *
+ * Item 96 — `MedianTtaTrendPill` is now the shared
+ * `@/components/MedianTtaTrendPill` (consolidating five previously-
+ * duplicated pill implementations). `AdherenceAckRateTrendPill` below
+ * stays local — that's a RATE pill (non-inverted colour) and lives in
+ * a separate duplication family alongside `AckRateTrendPill`,
+ * `AdherenceTrendPill`, and `MyAdherenceTrendPill` — its consolidation
+ * is a future item once the duplicate-at-two, extract-at-three
+ * threshold is crossed there too.
  */
 function AdherenceResponseTimeCard({
   metrics,
@@ -392,10 +404,11 @@ function AdherenceResponseTimeCard({
           <dd className="font-medium">
             {formatDurationOrDash(metrics.medianAckMs)}
           </dd>
-          <AdherenceMedianTtaTrendPill
+          <MedianTtaTrendPill
             current={metrics.medianAckMs}
             prior={prior.medianAckMs}
             windowDays={metrics.windowDays}
+            className="mt-1"
           />
         </div>
         <div>
@@ -469,59 +482,6 @@ function AdherenceAckRateTrendPill({
       <span>
         {deltaPp >= 0 ? "+" : ""}
         {deltaPp}pp vs prior {windowDays}d
-      </span>
-    </span>
-  );
-}
-
-/**
- * Post-PRD item 91 — median-TTA trend pill on the adherence card.
- * Sibling of item 79's sentiment-side `MedianTtaTrendPill`: inverted
- * colour rule (lower latency is BETTER, so faster=↓green, slower=↑red),
- * `max(60s, 10% of prior)` flat band so neither absolute jitter at high
- * values nor sampling noise at low values trips the colour change.
- *
- * Renders nothing when either side is null — typically because zero
- * escalations were acked in one of the windows, so there's no median to
- * compare. Same null-prior invariant as items 72/73/75/79/88.
- */
-function AdherenceMedianTtaTrendPill({
-  current,
-  prior,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  windowDays: number;
-}) {
-  if (current === null || prior === null) return null;
-  const ABS_FLOOR_MS = 60_000;
-  const REL_THRESHOLD = 0.1;
-  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
-  const delta = current - prior;
-  const priorLabel = formatDuration(prior);
-  const deltaLabel = formatDuration(Math.abs(delta));
-  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta < -flatBand) {
-    arrow = "↓";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta > flatBand) {
-    arrow = "↑";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {directionWord}
-        {deltaLabel} vs prior {windowDays}d
       </span>
     </span>
   );

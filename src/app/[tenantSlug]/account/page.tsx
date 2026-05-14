@@ -20,7 +20,8 @@ import {
   computePriorPeriodAdherenceMetrics,
   type AdherenceMetrics,
 } from "@/lib/adherence/metrics";
-import { formatDuration, formatDurationOrDash } from "@/lib/format/duration";
+import { formatDurationOrDash } from "@/lib/format/duration";
+import { MedianTtaTrendPill } from "@/components/MedianTtaTrendPill";
 import { revokeAccess, reauthoriseAccess, getMemberLifecycleState } from "@/lib/lifecycle";
 import {
   SUPPORTED_LOCALES,
@@ -935,7 +936,7 @@ function MySentimentResponseTimeCard({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-2">
           <h2 className="text-base font-medium">My sentiment response time</h2>
-          <MyMedianTtaTrendPill
+          <MedianTtaTrendPill
             current={metrics.medianAckMs}
             prior={prior.medianAckMs}
             windowDays={metrics.windowDays}
@@ -1005,54 +1006,6 @@ function MySentimentResponseTimeCard({
 }
 
 /**
- * Post-PRD item 81 — self-view counterpart to item 79's
- * `MedianTtaTrendPill`. Same arithmetic, same flat-band rule
- * (`max(60s, 10% of prior)`), same inverted colour mapping — only the
- * data source differs (self vs firm-wide).
- */
-function MyMedianTtaTrendPill({
-  current,
-  prior,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  windowDays: number;
-}) {
-  if (current === null || prior === null) return null;
-  const ABS_FLOOR_MS = 60_000;
-  const REL_THRESHOLD = 0.1;
-  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
-  const delta = current - prior;
-  const priorLabel = formatTtaDuration(prior);
-  const deltaLabel = formatTtaDuration(Math.abs(delta));
-  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta < -flatBand) {
-    arrow = "↓";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta > flatBand) {
-    arrow = "↑";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {directionWord}
-        {deltaLabel} vs prior {windowDays}d
-      </span>
-    </span>
-  );
-}
-
-/**
  * Post-PRD hardening item 93 — first-person adherence response-time card.
  *
  * Counterpart to item 92's per-Member breakdown on /adherence/escalations:
@@ -1114,7 +1067,7 @@ function MyAdherenceResponseTimeCard({
           <h2 className="text-base font-medium">
             My adherence-escalation response time
           </h2>
-          <MyAdherenceMedianTtaTrendPill
+          <MedianTtaTrendPill
             current={metrics.medianAckMs}
             prior={prior.medianAckMs}
             windowDays={metrics.windowDays}
@@ -1192,65 +1145,6 @@ function MyAdherenceResponseTimeCard({
         </div>
       </dl>
     </div>
-  );
-}
-
-/**
- * Post-PRD item 93 — self-view median-TTA trend pill on the adherence
- * card. Sibling of item 81's `MyMedianTtaTrendPill` (sentiment) and
- * item 91's `AdherenceMedianTtaTrendPill` (firm-wide). Same
- * arithmetic, same `max(60s, 10% of prior)` flat-band, same inverted
- * colour mapping (lower latency = green) — only the data source
- * differs (self vs firm-wide vs sentiment).
- *
- * Three median-TTA pill sites now exist on /account + /sentiment +
- * /adherence/escalations + (firm) /adherence/escalations. The
- * codebase's duplicate-at-two, extract-at-three rule (items 68 / 70
- * / 73 / 75 / 88 / 92) is now triggered for the median-TTA pill
- * shape — a future refactor item could consolidate them into a single
- * `<MedianTtaTrendPill compact={boolean} />`. Holding off here to
- * keep item 93 focused on the new surface; extraction is the right
- * next pass when no other product work is pending.
- */
-function MyAdherenceMedianTtaTrendPill({
-  current,
-  prior,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  windowDays: number;
-}) {
-  if (current === null || prior === null) return null;
-  const ABS_FLOOR_MS = 60_000;
-  const REL_THRESHOLD = 0.1;
-  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
-  const delta = current - prior;
-  const priorLabel = formatDuration(prior);
-  const deltaLabel = formatDuration(Math.abs(delta));
-  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta < -flatBand) {
-    arrow = "↓";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta > flatBand) {
-    arrow = "↑";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {directionWord}
-        {deltaLabel} vs prior {windowDays}d
-      </span>
-    </span>
   );
 }
 

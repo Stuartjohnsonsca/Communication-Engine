@@ -12,6 +12,7 @@ import {
   type SentimentMetrics,
 } from "@/lib/sentiment/metrics";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { MedianTtaTrendPill } from "@/components/MedianTtaTrendPill";
 import AcknowledgeButton from "./AcknowledgeButton";
 import { LiveOutstanding } from "@/components/LiveOutstanding";
 
@@ -174,8 +175,8 @@ export default async function SentimentPage({
   // the per-row trend pill can look up its own prior median in O(1).
   // Members in the current window who weren't in the prior window
   // (their `byMember` row is undefined) will render no pill — the
-  // CompactMedianTtaTrendPill component enforces this null-prior rule
-  // (same invariant as items 72/73/75).
+  // shared MedianTtaTrendPill component (item 96) enforces this null-
+  // prior rule (same invariant as items 72/73/75).
   const priorByMemberMap: Record<string, MemberSentimentMetrics> = {};
   if (firmWide && priorMetrics.byMember) {
     for (const m of priorMetrics.byMember) {
@@ -458,6 +459,7 @@ function SentimentResponseTimeCard({
             current={metrics.medianAckMs}
             prior={prior.medianAckMs}
             windowDays={metrics.windowDays}
+            className="mt-1"
           />
         </div>
         <div>
@@ -534,128 +536,6 @@ function AckRateTrendPill({
       <span>
         {deltaPp >= 0 ? "+" : ""}
         {deltaPp}pp vs prior {windowDays}d
-      </span>
-    </span>
-  );
-}
-
-/**
- * Post-PRD item 79 — median-TTA trend pill. The colour inversion is
- * deliberate: for latency metrics, lower is better. Faster (delta < 0)
- * shows ↓ green; slower (delta > 0) shows ↑ red. The arrow points in
- * the direction the number went, but the colour signals
- * better-or-worse — the same accessibility pattern the rest of the
- * codebase uses on rate pills, just with the good direction inverted.
- *
- * Flat threshold is relative: |delta| < max(60s, 10% of prior). A
- * fixed 1m absolute threshold would over-flag wobble at high values
- * (a 4h median with 2m delta isn't a real change), and a pure relative
- * threshold would over-flag noise at low values (a 30s median with a
- * 4s delta is well within sampling jitter). The combined floor handles
- * both ends.
- *
- * Renders nothing when either side is null — typically because no
- * signals were acked in one of the windows, so there's no median to
- * compare. Same null-prior invariant as items 72/73/75.
- */
-function MedianTtaTrendPill({
-  current,
-  prior,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  windowDays: number;
-}) {
-  if (current === null || prior === null) return null;
-  const ABS_FLOOR_MS = 60_000;
-  const REL_THRESHOLD = 0.1;
-  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
-  const delta = current - prior;
-  const priorLabel = formatTtaDuration(prior);
-  const deltaLabel = formatTtaDuration(Math.abs(delta));
-  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta < -flatBand) {
-    arrow = "↓";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta > flatBand) {
-    arrow = "↑";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {directionWord}
-        {deltaLabel} vs prior {windowDays}d
-      </span>
-    </span>
-  );
-}
-
-/**
- * Post-PRD item 88 — compact median-TTA trend pill for the per-Member
- * response-time table.
- *
- * Sibling of `MedianTtaTrendPill`, NOT a refactor: same colour-inversion
- * rule (faster = ↓ green, slower = ↑ red), same `max(60s, 10% of prior)`
- * flat band, same null-prior suppression. The only behavioural delta is
- * the rendered text — the table column heading "Median TTA" already
- * carries the metric context, so the pill body drops the `"vs prior Nd"`
- * suffix to fit inline next to a median value without wrapping. The
- * tooltip still carries the full `"vs prior Nd median: <label> (±delta)"`
- * for hover-readable detail.
- *
- * Two pills (`MedianTtaTrendPill` headline + this compact variant) is
- * the same "two-sites = duplicate; three = extract" rule the codebase
- * uses elsewhere (items 68/70/73/75). A third pill site (e.g. a future
- * /account top-table) would be the natural extraction trigger into a
- * shared component with a `compact: boolean` prop.
- */
-function CompactMedianTtaTrendPill({
-  current,
-  prior,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  windowDays: number;
-}) {
-  if (current === null || prior === null) return null;
-  const ABS_FLOOR_MS = 60_000;
-  const REL_THRESHOLD = 0.1;
-  const flatBand = Math.max(ABS_FLOOR_MS, Math.round(prior * REL_THRESHOLD));
-  const delta = current - prior;
-  const priorLabel = formatTtaDuration(prior);
-  const deltaLabel = formatTtaDuration(Math.abs(delta));
-  const directionWord = delta > 0 ? "+" : delta < 0 ? "−" : "±";
-  const title = `vs prior ${windowDays}d median: ${priorLabel} (${directionWord}${deltaLabel})`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta < -flatBand) {
-    arrow = "↓";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta > flatBand) {
-    arrow = "↑";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`ml-2 inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0 text-[10px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {directionWord}
-        {deltaLabel}
       </span>
     </span>
   );
@@ -775,10 +655,12 @@ function MemberResponseTimeTable({
                         this Member's own prior-window median. Renders
                         nothing when current OR prior is null (Member
                         had no acks in one of the two windows). */}
-                    <CompactMedianTtaTrendPill
+                    <MedianTtaTrendPill
                       current={r.medianAckMs}
                       prior={priorByMember[r.membershipId]?.medianAckMs ?? null}
                       windowDays={windowDays}
+                      compact
+                      className="ml-2"
                     />
                   </td>
                   <td className="py-1 pr-3 tabular-nums">
