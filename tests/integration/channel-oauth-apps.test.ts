@@ -277,20 +277,21 @@ describe("channel-oauth-apps — validation + audit-payload safety", () => {
     ).rejects.toThrow(/does not support OAuth/i);
   });
 
-  it("rejects non-OAuth channel kind (e.g. TEAMS in current registry)", async () => {
+  it("rejects non-OAuth channel kind (e.g. IMANAGE / ZOOM in current registry)", async () => {
+    // After item 103 wired TEAMS + SHAREPOINT, the canonical "no OAuth"
+    // examples are IMANAGE, ZOOM, WHATSAPP_BUSINESS — kinds that have
+    // `realOAuthAvailable: NEVER` and no `oauthAuthorizeUrl`.
     const tenant = await createTestTenant();
     const admin = await createTestUserAndMembership(tenant.id, {
       role: "FIRM_ADMIN",
       email: uniqueEmail("oauth-noauth-kind"),
     });
-    // Verify TEAMS is indeed not in the OAuth-capable list (otherwise
-    // this test silently no-ops).
     const oauthKinds = oauthCapableChannelKinds().map((k) => k.kind);
-    expect(oauthKinds).not.toContain("TEAMS");
+    expect(oauthKinds).not.toContain("IMANAGE");
     await expect(
       upsertTenantOAuthApp({
         tenantId: tenant.id,
-        channelKind: "TEAMS",
+        channelKind: "IMANAGE",
         clientId: "x",
         clientSecret: "y",
         actorMembershipId: admin.membership.id,
@@ -508,5 +509,120 @@ describe("channel-oauth-apps — item 102 — M365 + additional config", () => {
     expect(m365!.additionalConfigSchema[0].key).toBe("aadTenantId");
     const google = kinds.find((k) => k.kind === "GOOGLE");
     expect(google!.additionalConfigSchema).toHaveLength(0);
+  });
+});
+
+describe("channel-oauth-apps — item 103 — TEAMS + SHAREPOINT", () => {
+  it("oauthCapableChannelKinds includes TEAMS, SHAREPOINT, M365, GOOGLE, SLACK", () => {
+    const kinds = oauthCapableChannelKinds().map((k) => k.kind).sort();
+    expect(kinds).toContain("TEAMS");
+    expect(kinds).toContain("SHAREPOINT");
+    expect(kinds).toContain("M365");
+    expect(kinds).toContain("GOOGLE");
+    expect(kinds).toContain("SLACK");
+  });
+
+  it("TEAMS embeds the per-tenant AAD authority in both URLs", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("TEAMS");
+    const aadTenantId = "aaaaaaaa-1111-2222-3333-444444444444";
+    expect(m.oauthAuthorizeUrl!({ aadTenantId })).toBe(
+      `https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/authorize`,
+    );
+    expect(m.oauthTokenUrl!({ aadTenantId })).toBe(
+      `https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/token`,
+    );
+  });
+
+  it("SHAREPOINT embeds the per-tenant AAD authority in both URLs", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("SHAREPOINT");
+    const aadTenantId = "bbbbbbbb-1111-2222-3333-444444444444";
+    expect(m.oauthAuthorizeUrl!({ aadTenantId })).toBe(
+      `https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/authorize`,
+    );
+    expect(m.oauthTokenUrl!({ aadTenantId })).toBe(
+      `https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/token`,
+    );
+  });
+
+  it("TEAMS scopes include offline_access (refresh tokens) + Teams-specific reads", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("TEAMS");
+    expect(m.scopeDefault).toContain("offline_access");
+    expect(m.scopeDefault).toContain("ChannelMessage.Read.All");
+    expect(m.scopeDefault).toContain("Chat.Read");
+  });
+
+  it("SHAREPOINT scopes include offline_access (refresh tokens) + SharePoint-specific reads", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("SHAREPOINT");
+    expect(m.scopeDefault).toContain("offline_access");
+    expect(m.scopeDefault).toContain("Sites.Read.All");
+    expect(m.scopeDefault).toContain("Files.Read.All");
+  });
+
+  it("TEAMS round-trip: per-tenant clientId/secret/aadTenantId persist independently of M365", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-teams-rt"),
+    });
+    const aadTenantId = "cccccccc-1111-2222-3333-444444444444";
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "TEAMS",
+      clientId: "teams-app-id",
+      clientSecret: "teams-secret",
+      additionalConfig: { aadTenantId },
+      actorMembershipId: admin.membership.id,
+    });
+    // M365 also configured for the same tenant — must not collide.
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "M365",
+      clientId: "m365-app-id",
+      clientSecret: "m365-secret",
+      additionalConfig: { aadTenantId: "different-aad-tenant" },
+      actorMembershipId: admin.membership.id,
+    });
+    const teams = await getTenantOAuthApp(tenant.id, "TEAMS");
+    const m365 = await getTenantOAuthApp(tenant.id, "M365");
+    expect(teams!.clientId).toBe("teams-app-id");
+    expect(teams!.clientSecret).toBe("teams-secret");
+    expect(teams!.additionalConfig.aadTenantId).toBe(aadTenantId);
+    expect(m365!.clientId).toBe("m365-app-id");
+    expect(m365!.additionalConfig.aadTenantId).toBe("different-aad-tenant");
+  });
+
+  it("SHAREPOINT additionalConfig accepts aadTenantId via the same schema as M365 / TEAMS", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-sp-rt"),
+    });
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "SHAREPOINT",
+      clientId: "sp-app-id",
+      clientSecret: "sp-secret",
+      additionalConfig: { aadTenantId: "dddddddd-1111-2222-3333-444444444444" },
+      actorMembershipId: admin.membership.id,
+    });
+    const sp = await getTenantOAuthApp(tenant.id, "SHAREPOINT");
+    expect(sp!.additionalConfig.aadTenantId).toBe(
+      "dddddddd-1111-2222-3333-444444444444",
+    );
+    // Unknown extras for SHAREPOINT are still dropped.
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "SHAREPOINT",
+      clientId: "sp-app-id",
+      clientSecret: "sp-secret",
+      additionalConfig: { aadTenantId: "x", junk: "ignored" },
+      actorMembershipId: admin.membership.id,
+    });
+    const sp2 = await getTenantOAuthApp(tenant.id, "SHAREPOINT");
+    expect(sp2!.additionalConfig).toEqual({ aadTenantId: "x" });
   });
 });

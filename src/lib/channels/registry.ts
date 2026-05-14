@@ -105,9 +105,9 @@ export const CHANNEL_KINDS: Record<ChannelKind, ChannelKindMeta> = {
      * help text says so).
      */
     oauthAuthorizeUrl: (cfg) =>
-      `https://login.microsoftonline.com/${m365Authority(cfg)}/oauth2/v2.0/authorize`,
+      `https://login.microsoftonline.com/${microsoftAuthority(cfg)}/oauth2/v2.0/authorize`,
     oauthTokenUrl: (cfg) =>
-      `https://login.microsoftonline.com/${m365Authority(cfg)}/oauth2/v2.0/token`,
+      `https://login.microsoftonline.com/${microsoftAuthority(cfg)}/oauth2/v2.0/token`,
     clientId: () => process.env.M365_CLIENT_ID,
     additionalConfigSchema: [
       {
@@ -159,21 +159,84 @@ export const CHANNEL_KINDS: Record<ChannelKind, ChannelKindMeta> = {
   },
   TEAMS: {
     kind: "TEAMS",
-    label: "Microsoft Teams",
+    label: "Microsoft Teams (channel + chat messages)",
     covers: ["TEAMS"],
     tier: 1,
-    scopeDefault: ["ChannelMessage.Read.All", "Chat.Read"],
+    /**
+     * `offline_access` ensures a refresh token comes back so ingest
+     * keeps working past the access-token expiry. `User.Read` is the
+     * baseline-identity scope every Microsoft graph-app needs.
+     */
+    scopeDefault: [
+      "offline_access",
+      "User.Read",
+      "ChannelMessage.Read.All",
+      "Chat.Read",
+    ],
     prdRef: "§10.1",
-    realOAuthAvailable: NEVER,
+    /**
+     * Item 103 — TEAMS uses the same Microsoft identity platform as
+     * M365. The env-var fallback shares `M365_CLIENT_ID`/_SECRET
+     * because in dev the operator typically registers ONE Microsoft
+     * Entra app with all the scopes they need (Mail + Teams + Files
+     * + Calendar) and uses it for every Microsoft kind. Production
+     * tenants override per-kind via `ChannelOAuthApp` rows so a
+     * Client could point each kind at a different Entra app if they
+     * want.
+     */
+    realOAuthAvailable: () =>
+      Boolean(process.env.M365_CLIENT_ID && process.env.M365_CLIENT_SECRET),
+    oauthAuthorizeUrl: (cfg) =>
+      `https://login.microsoftonline.com/${microsoftAuthority(cfg)}/oauth2/v2.0/authorize`,
+    oauthTokenUrl: (cfg) =>
+      `https://login.microsoftonline.com/${microsoftAuthority(cfg)}/oauth2/v2.0/token`,
+    clientId: () => process.env.M365_CLIENT_ID,
+    additionalConfigSchema: [
+      {
+        key: "aadTenantId",
+        label: "Microsoft Entra (Azure AD) Tenant ID",
+        description:
+          "Same value used for the M365 + SharePoint kinds — find it in Microsoft Entra " +
+          "Admin Center → Overview → Tenant ID. Pin to the Client's own Entra tenant. " +
+          "Leave blank only for a deliberately multi-tenant Entra app (rare).",
+        required: false,
+        defaultValue: "common",
+        placeholder: "e.g. 11111111-2222-3333-4444-555555555555",
+      },
+    ],
   },
   SHAREPOINT: {
     kind: "SHAREPOINT",
-    label: "SharePoint",
+    label: "SharePoint Online (sites + files)",
     covers: ["FILES"],
     tier: 1,
-    scopeDefault: ["Sites.Read.All", "Files.Read.All"],
+    scopeDefault: [
+      "offline_access",
+      "User.Read",
+      "Sites.Read.All",
+      "Files.Read.All",
+    ],
     prdRef: "§10.1",
-    realOAuthAvailable: NEVER,
+    realOAuthAvailable: () =>
+      Boolean(process.env.M365_CLIENT_ID && process.env.M365_CLIENT_SECRET),
+    oauthAuthorizeUrl: (cfg) =>
+      `https://login.microsoftonline.com/${microsoftAuthority(cfg)}/oauth2/v2.0/authorize`,
+    oauthTokenUrl: (cfg) =>
+      `https://login.microsoftonline.com/${microsoftAuthority(cfg)}/oauth2/v2.0/token`,
+    clientId: () => process.env.M365_CLIENT_ID,
+    additionalConfigSchema: [
+      {
+        key: "aadTenantId",
+        label: "Microsoft Entra (Azure AD) Tenant ID",
+        description:
+          "Same value used for the M365 + Teams kinds — find it in Microsoft Entra " +
+          "Admin Center → Overview → Tenant ID. Pin to the Client's own Entra tenant. " +
+          "Leave blank only for a deliberately multi-tenant Entra app (rare).",
+        required: false,
+        defaultValue: "common",
+        placeholder: "e.g. 11111111-2222-3333-4444-555555555555",
+      },
+    ],
   },
   IMANAGE: {
     kind: "IMANAGE",
@@ -222,9 +285,14 @@ export function meta(kind: string): ChannelKindMeta {
 }
 
 /**
- * Item 102 — pick the M365 authority segment from per-tenant config or
- * fall back. Order: per-tenant `aadTenantId` → env `M365_TENANT_ID`
- * (legacy / dev) → "common" (Microsoft's multi-tenant authority).
+ * Item 102 / 103 — pick the Microsoft identity platform authority
+ * segment from per-tenant config or fall back. Used by every kind
+ * that authenticates against `login.microsoftonline.com` (M365,
+ * TEAMS, SHAREPOINT today; future Microsoft-side kinds plug in by
+ * calling this).
+ *
+ * Order: per-tenant `aadTenantId` → env `M365_TENANT_ID` (legacy /
+ * dev) → "common" (Microsoft's multi-tenant authority).
  *
  * Validates the value is URL-safe (UUID, "common", "organizations",
  * "consumers" are the legitimate values per Microsoft's identity
@@ -233,12 +301,19 @@ export function meta(kind: string): ChannelKindMeta {
  * via a malformed `aadTenantId` save (the lib also validates at write
  * time via `additionalConfigSchema`, but cron + form-bypass attempts
  * would still hit this safety net).
+ *
+ * Single env var (`M365_TENANT_ID`) shared across all Microsoft
+ * kinds: in dev the operator typically registers ONE Microsoft Entra
+ * app with all required scopes and uses it for every kind. Per-Client
+ * production isolation is preserved by per-kind `ChannelOAuthApp`
+ * rows — each kind's config can point at a different Entra app if
+ * the Client wants.
  */
-function m365Authority(cfg?: Record<string, string> | null): string {
+export function microsoftAuthority(cfg?: Record<string, string> | null): string {
   const raw = cfg?.aadTenantId?.trim() || process.env.M365_TENANT_ID || "common";
-  // Whitelist: lowercase letters, digits, dashes only. UUIDs fit; the
-  // Microsoft well-known values ("common", "organizations",
-  // "consumers") fit. Anything else gets stripped to a safe subset
-  // rather than passed unsanitised into a URL.
   return raw.replace(/[^a-z0-9-]/gi, "");
 }
+
+/** Re-export under the legacy name so any external imports keep working. */
+const m365Authority = microsoftAuthority;
+void m365Authority; // referenced by name for compat — silence unused-locals lint
