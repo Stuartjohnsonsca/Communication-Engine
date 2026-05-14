@@ -2,6 +2,7 @@ import type { ChannelAdapter } from "./types";
 import { mockAdapter } from "./mock";
 import { m365Adapter } from "./m365";
 import { googleAdapter } from "./google";
+import { slackAdapter } from "./slack";
 import { meta, type ChannelKind } from "../registry";
 
 export type { ChannelAdapter, IngestRow, AdapterContext, Tokens } from "./types";
@@ -34,6 +35,8 @@ export function adapterFor(kind: string): ChannelAdapter {
       return m365Adapter;
     case "GOOGLE":
       return googleAdapter;
+    case "SLACK":
+      return slackAdapter;
     case "TEAMS":
     case "SHAREPOINT":
       // Item 105 — these kinds have OAuth wiring (item 103) but
@@ -51,10 +54,9 @@ export function adapterFor(kind: string): ChannelAdapter {
       // production-ready. Real adapters land as future items.
       return mockAdapter;
     default:
-      // SLACK has OAuth wired but no adapter yet (next item ships
-      // the real one). Tier 2 kinds (IMANAGE / ZOOM /
-      // WHATSAPP_BUSINESS) have `realOAuthAvailable: NEVER` so
-      // connect can't even start.
+      // Tier 2 kinds (IMANAGE / ZOOM / WHATSAPP_BUSINESS) have
+      // `realOAuthAvailable: NEVER` so connect can't even start;
+      // routing to mockAdapter here is just defensive.
       return mockAdapter;
   }
 }

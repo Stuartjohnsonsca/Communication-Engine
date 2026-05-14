@@ -34,6 +34,7 @@ import { adapterFor } from "@/lib/channels/adapters";
 import { mockAdapter } from "@/lib/channels/adapters/mock";
 import { googleAdapter } from "@/lib/channels/adapters/google";
 import { m365Adapter } from "@/lib/channels/adapters/m365";
+import { slackAdapter } from "@/lib/channels/adapters/slack";
 import {
   oauthCapableChannelKinds,
   isAdapterImplemented,
@@ -65,8 +66,8 @@ describe("adapter resolution — adapterFor switches by kind only (item 105)", (
     expect(adapterFor("SHAREPOINT")).toBe(mockAdapter);
   });
 
-  it("SLACK → mockAdapter (adapter pending — next item)", () => {
-    expect(adapterFor("SLACK")).toBe(mockAdapter);
+  it("SLACK → slackAdapter (item 106)", () => {
+    expect(adapterFor("SLACK")).toBe(slackAdapter);
   });
 
   it("Tier 2 kinds (no OAuth, no adapter) fall back to mockAdapter", () => {
@@ -149,18 +150,42 @@ describe("UI surfacing — adapterImplemented flag", () => {
     const byKind = Object.fromEntries(kinds.map((k) => [k.kind, k]));
     expect(byKind.GOOGLE.adapterImplemented).toBe(true);
     expect(byKind.M365.adapterImplemented).toBe(true);
+    expect(byKind.SLACK.adapterImplemented).toBe(true); // item 106
     expect(byKind.TEAMS.adapterImplemented).toBe(false);
     expect(byKind.SHAREPOINT.adapterImplemented).toBe(false);
-    expect(byKind.SLACK.adapterImplemented).toBe(false);
   });
 
   it("KINDS_WITH_REAL_ADAPTER + isAdapterImplemented agree", () => {
     expect(isAdapterImplemented("GOOGLE")).toBe(true);
     expect(isAdapterImplemented("M365")).toBe(true);
+    expect(isAdapterImplemented("SLACK")).toBe(true); // item 106
     expect(isAdapterImplemented("TEAMS")).toBe(false);
     expect(isAdapterImplemented("SHAREPOINT")).toBe(false);
-    expect(isAdapterImplemented("SLACK")).toBe(false);
     expect(KINDS_WITH_REAL_ADAPTER.has("GOOGLE")).toBe(true);
+    expect(KINDS_WITH_REAL_ADAPTER.has("SLACK")).toBe(true);
     expect(KINDS_WITH_REAL_ADAPTER.has("TEAMS")).toBe(false);
+  });
+});
+
+describe("slackAdapter — mock fallback shape", () => {
+  it("falls back to mockAdapter when tokens.mock === true", async () => {
+    const rows = await slackAdapter.ingest({
+      tenantId: "tenant-mock",
+      channelId: "channel-mock",
+      tokens: {
+        mock: true,
+        access_token: "mock-SLACK-channel-mock",
+      },
+    });
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  it("falls back when tokens.access_token is absent", async () => {
+    const rows = await slackAdapter.ingest({
+      tenantId: "tenant-empty",
+      channelId: "channel-empty",
+      tokens: {},
+    });
+    expect(Array.isArray(rows)).toBe(true);
   });
 });

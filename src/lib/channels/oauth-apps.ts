@@ -371,6 +371,7 @@ export function oauthCapableChannelKinds(): Array<{
 export const KINDS_WITH_REAL_ADAPTER: ReadonlySet<ChannelKind> = new Set([
   "GOOGLE",
   "M365",
+  "SLACK",
 ]);
 
 export function isAdapterImplemented(kind: ChannelKind): boolean {
