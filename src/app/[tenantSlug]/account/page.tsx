@@ -22,6 +22,7 @@ import {
 } from "@/lib/adherence/metrics";
 import { formatDurationOrDash } from "@/lib/format/duration";
 import { MedianTtaTrendPill } from "@/components/MedianTtaTrendPill";
+import { RateTrendPill } from "@/components/RateTrendPill";
 import { revokeAccess, reauthoriseAccess, getMemberLifecycleState } from "@/lib/lifecycle";
 import {
   SUPPORTED_LOCALES,
@@ -770,10 +771,10 @@ function MyAdherenceCard({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-2">
           <h2 className="text-base font-medium">My FCG-window adherence</h2>
-          <MyAdherenceTrendPill
+          <RateTrendPill
             current={adherence.withinWindowRate}
             prior={priorAdherence.withinWindowRate}
-            priorSentWithDeadline={priorAdherence.sentWithDeadline}
+            priorDenominator={priorAdherence.sentWithDeadline}
             windowDays={adherence.windowDays}
           />
         </div>
@@ -825,63 +826,6 @@ function MyAdherenceCard({
         </dl>
       )}
     </div>
-  );
-}
-
-/**
- * Post-PRD item 73 — first-person counterpart to the /admin/drafts
- * trend pill (item 72). Same math, same flat-threshold, same null-
- * handling — the only difference is the data source (per-Membership
- * vs firm-wide).
- *
- * Renders nothing when either side is null or the prior window had
- * zero deadlined sends. A Member's first deadlined send shouldn't
- * trigger a "+100pp vs prior 30d" pill against an empty prior window.
- *
- * `FLAT_THRESHOLD = 0.01` (1pp) collapses noise — bobbing 1pp month-
- * over-month shouldn't read as "improving" or "degrading."
- */
-function MyAdherenceTrendPill({
-  current,
-  prior,
-  priorSentWithDeadline,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  priorSentWithDeadline: number;
-  windowDays: number;
-}) {
-  if (current === null || prior === null || priorSentWithDeadline === 0) {
-    return null;
-  }
-  const FLAT_THRESHOLD = 0.01;
-  const delta = current - prior;
-  const deltaPp = Math.round(delta * 100);
-  const priorPct = Math.round(prior * 100);
-  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta > FLAT_THRESHOLD) {
-    arrow = "↑";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta < -FLAT_THRESHOLD) {
-    arrow = "↓";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {deltaPp >= 0 ? "+" : ""}
-        {deltaPp}pp vs prior {windowDays}d
-      </span>
-    </span>
   );
 }
 

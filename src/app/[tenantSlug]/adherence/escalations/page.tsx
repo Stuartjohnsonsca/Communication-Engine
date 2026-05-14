@@ -15,6 +15,7 @@ import { formatDurationOrDash } from "@/lib/format/duration";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveOutstanding } from "@/components/LiveOutstanding";
 import { MedianTtaTrendPill } from "@/components/MedianTtaTrendPill";
+import { RateTrendPill } from "@/components/RateTrendPill";
 import AcknowledgeButton from "./AcknowledgeButton";
 
 type Filter = "OPEN" | "ALL" | "ACKNOWLEDGED";
@@ -362,19 +363,16 @@ export default async function AdherenceEscalationsPage({
  * the immediately-prior same-length window. P90 + Oldest unacked
  * deliberately don't get pills (P90 is noisy at typical N, Oldest
  * unacked is a point-in-time gauge — same exclusions as item 79).
- * Per-Member breakdown shipped at item 92 (`MemberAdherenceResponseTimeTable`
- * below) but does not yet carry per-row trend pills (a future item
- * analogous to item 88 on the sentiment side, now unblocked by item 96's
- * shared `<MedianTtaTrendPill compact />`).
+ * Per-Member breakdown shipped at item 92; per-Member median-TTA trend
+ * pill shipped at item 97 (using item 96's shared
+ * `<MedianTtaTrendPill compact />`).
  *
- * Item 96 — `MedianTtaTrendPill` is now the shared
- * `@/components/MedianTtaTrendPill` (consolidating five previously-
- * duplicated pill implementations). `AdherenceAckRateTrendPill` below
- * stays local — that's a RATE pill (non-inverted colour) and lives in
- * a separate duplication family alongside `AckRateTrendPill`,
- * `AdherenceTrendPill`, and `MyAdherenceTrendPill` — its consolidation
- * is a future item once the duplicate-at-two, extract-at-three
- * threshold is crossed there too.
+ * Items 96 + 98 — both pill families are now shared components:
+ *   - `MedianTtaTrendPill` at `@/components/MedianTtaTrendPill`
+ *     (item 96, latency family, inverted colour rule)
+ *   - `RateTrendPill` at `@/components/RateTrendPill` (item 98, rate
+ *     family, non-inverted colour rule). The ack-rate pill on this
+ *     card was one of the four originals consolidated by item 98.
  */
 function AdherenceResponseTimeCard({
   metrics,
@@ -413,11 +411,12 @@ function AdherenceResponseTimeCard({
               ({metrics.acknowledged}/{metrics.escalated})
             </span>
           </dd>
-          <AdherenceAckRateTrendPill
+          <RateTrendPill
             current={metrics.acknowledgedRate}
             prior={prior.acknowledgedRate}
-            priorEscalated={prior.escalated}
+            priorDenominator={prior.escalated}
             windowDays={metrics.windowDays}
+            className="mt-1"
           />
         </div>
         <div>
@@ -461,55 +460,6 @@ function AdherenceResponseTimeCard({
         </div>
       </dl>
     </div>
-  );
-}
-
-/**
- * Post-PRD item 91 — acknowledged-rate trend pill on the adherence card.
- * Sibling of item 79's sentiment-side `AckRateTrendPill`: percentage-
- * point delta vs prior same-length window, 1pp flat band, ↑green = good
- * (acked more), ↓red = bad. Renders nothing when current or prior is
- * null, or when prior had zero escalations — don't fake a delta against
- * missing data. Same null-prior invariant as items 72/73/75/79/88.
- */
-function AdherenceAckRateTrendPill({
-  current,
-  prior,
-  priorEscalated,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  priorEscalated: number;
-  windowDays: number;
-}) {
-  if (current === null || prior === null || priorEscalated === 0) return null;
-  const FLAT_THRESHOLD = 0.01;
-  const delta = current - prior;
-  const deltaPp = Math.round(delta * 100);
-  const priorPct = Math.round(prior * 100);
-  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta > FLAT_THRESHOLD) {
-    arrow = "↑";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta < -FLAT_THRESHOLD) {
-    arrow = "↓";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {deltaPp >= 0 ? "+" : ""}
-        {deltaPp}pp vs prior {windowDays}d
-      </span>
-    </span>
   );
 }
 

@@ -13,6 +13,7 @@ import {
 } from "@/lib/sentiment/metrics";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { MedianTtaTrendPill } from "@/components/MedianTtaTrendPill";
+import { RateTrendPill } from "@/components/RateTrendPill";
 import AcknowledgeButton from "./AcknowledgeButton";
 import { LiveOutstanding } from "@/components/LiveOutstanding";
 
@@ -440,11 +441,13 @@ function SentimentResponseTimeCard({
               ({metrics.acknowledged}/{metrics.escalated})
             </span>
           </dd>
-          <AckRateTrendPill
+          <RateTrendPill
             current={metrics.acknowledgedRate}
             prior={prior.acknowledgedRate}
-            priorEscalated={prior.escalated}
+            priorDenominator={prior.escalated}
             windowDays={metrics.windowDays}
+            priorLabelSuffix="acked"
+            className="mt-1"
           />
         </div>
         <div>
@@ -484,60 +487,6 @@ function SentimentResponseTimeCard({
         </div>
       </dl>
     </div>
-  );
-}
-
-/**
- * Post-PRD item 79 — acknowledged-rate trend pill. Mirrors items
- * 72/73's adherence pill: percentage-point delta, 1pp flat threshold,
- * green up / red down / grey flat. Up = good (acked more), so same
- * arrow/color mapping as the adherence pill.
- *
- * Null on either side, or zero prior escalations, renders nothing —
- * matches the null-prior invariant (no fake delta against missing
- * data). A tenant with prior escalations === 0 has no comparable rate;
- * the pill simply doesn't appear.
- */
-function AckRateTrendPill({
-  current,
-  prior,
-  priorEscalated,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  priorEscalated: number;
-  windowDays: number;
-}) {
-  if (current === null || prior === null || priorEscalated === 0) {
-    return null;
-  }
-  const FLAT_THRESHOLD = 0.01;
-  const delta = current - prior;
-  const deltaPp = Math.round(delta * 100);
-  const priorPct = Math.round(prior * 100);
-  const title = `vs prior ${windowDays}d: ${priorPct}% acked (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta > FLAT_THRESHOLD) {
-    arrow = "↑";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta < -FLAT_THRESHOLD) {
-    arrow = "↓";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-  return (
-    <span
-      className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {deltaPp >= 0 ? "+" : ""}
-        {deltaPp}pp vs prior {windowDays}d
-      </span>
-    </span>
   );
 }
 

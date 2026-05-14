@@ -12,6 +12,7 @@ import {
   type FcgMissRow,
   type SourceBucket,
 } from "@/lib/drafts/rollup";
+import { RateTrendPill } from "@/components/RateTrendPill";
 
 /**
  * Post-PRD hardening item 56 — draft outcome rollup.
@@ -185,10 +186,10 @@ export default async function DraftsRollupPage({
       <section className="card space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-base font-medium">FCG-window adherence</h2>
-          <AdherenceTrendPill
+          <RateTrendPill
             current={rollup.fcgWindow.withinWindowRate}
             prior={priorPeriod.withinWindowRate}
-            priorSentWithDeadline={priorPeriod.sentWithDeadline}
+            priorDenominator={priorPeriod.sentWithDeadline}
             windowDays={windowDays}
           />
         </div>
@@ -362,11 +363,12 @@ export default async function DraftsRollupPage({
                           const prior = priorPeriod.perMember[m.membershipId];
                           if (!prior) return null;
                           return (
-                            <CompactAdherenceTrendPill
+                            <RateTrendPill
                               current={m.fcgWindow.withinWindowRate}
                               prior={prior.withinWindowRate}
-                              priorSentWithDeadline={prior.sentWithDeadline}
+                              priorDenominator={prior.sentWithDeadline}
                               windowDays={windowDays}
+                              compact
                             />
                           );
                         })()}
@@ -573,114 +575,3 @@ function formatIsoMinute(d: Date): string {
   return d.toISOString().slice(0, 16).replace("T", " ");
 }
 
-/**
- * Post-PRD item 75 — compact per-Member variant of the trend pill.
- *
- * Same maths as `AdherenceTrendPill` (item 72), same null-handling,
- * same 1pp flat-threshold — only the rendered text differs. Drops
- * "vs prior Nd" because the table column already carries the
- * context, leaving just an arrow and pp delta to keep the row tight.
- * The tooltip preserves the full prior% + signed delta so hovering
- * still gives the operator the same detail as the heading pill.
- */
-function CompactAdherenceTrendPill({
-  current,
-  prior,
-  priorSentWithDeadline,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  priorSentWithDeadline: number;
-  windowDays: number;
-}) {
-  if (current === null || prior === null || priorSentWithDeadline === 0) {
-    return null;
-  }
-  const FLAT_THRESHOLD = 0.01;
-  const delta = current - prior;
-  const deltaPp = Math.round(delta * 100);
-  const priorPct = Math.round(prior * 100);
-  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta > FLAT_THRESHOLD) {
-    arrow = "↑";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta < -FLAT_THRESHOLD) {
-    arrow = "↓";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-
-  return (
-    <span
-      className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0 text-[10px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {deltaPp >= 0 ? "+" : ""}
-        {deltaPp}pp
-      </span>
-    </span>
-  );
-}
-
-/**
- * Post-PRD item 72 — week-over-week (or selected-window-over-prior-
- * same-length-window) adherence trend pill. Rendered next to the
- * FCG-window adherence section heading so the snapshot rate is
- * always read in context of direction.
- *
- * Renders nothing when either side is null — the prior window had no
- * deadlined sends, or the current window does. The /admin/drafts
- * snapshot already shows "—" in that case; an empty pill is correct
- * (we're not faking a 0pp delta against missing data).
- *
- * `FLAT_THRESHOLD = 0.01` (1pp) collapses noise — bobbing 1pp
- * week-over-week shouldn't read as "improving" or "degrading."
- */
-function AdherenceTrendPill({
-  current,
-  prior,
-  priorSentWithDeadline,
-  windowDays,
-}: {
-  current: number | null;
-  prior: number | null;
-  priorSentWithDeadline: number;
-  windowDays: number;
-}) {
-  if (current === null || prior === null || priorSentWithDeadline === 0) {
-    return null;
-  }
-  const FLAT_THRESHOLD = 0.01;
-  const delta = current - prior;
-  const deltaPp = Math.round(delta * 100);
-  const priorPct = Math.round(prior * 100);
-  const title = `vs prior ${windowDays}d: ${priorPct}% (${deltaPp >= 0 ? "+" : ""}${deltaPp}pp)`;
-
-  let arrow = "→";
-  let cls = "border-ink/20 bg-ink/5 text-ink/70";
-  if (delta > FLAT_THRESHOLD) {
-    arrow = "↑";
-    cls = "border-emerald-300 bg-emerald-50 text-emerald-900";
-  } else if (delta < -FLAT_THRESHOLD) {
-    arrow = "↓";
-    cls = "border-red-300 bg-red-50 text-red-900";
-  }
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}
-      title={title}
-    >
-      <span aria-hidden="true">{arrow}</span>
-      <span>
-        {deltaPp >= 0 ? "+" : ""}
-        {deltaPp}pp vs prior {windowDays}d
-      </span>
-    </span>
-  );
-}

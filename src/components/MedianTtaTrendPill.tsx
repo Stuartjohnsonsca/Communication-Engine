@@ -21,12 +21,10 @@ import { formatDuration } from "@/lib/format/duration";
  * **Latency, not rate.** The pill colour rule is INVERTED relative to
  * a rate pill: faster (delta < 0) shows ↓ green, slower (delta > 0)
  * shows ↑ red. The arrow points in the direction the number went; the
- * colour signals better-or-worse. Rate pills (`AckRateTrendPill`,
- * `AdherenceTrendPill`, `MyAdherenceTrendPill`,
- * `AdherenceAckRateTrendPill`) use the un-inverted mapping and are
- * NOT consolidated here — they're at 4 sites today and the same
- * threshold rule applies, so a future item is the natural extraction
- * trigger for that family.
+ * colour signals better-or-worse. The rate-pill family (consolidated
+ * into `@/components/RateTrendPill` at item 98) uses the un-inverted
+ * mapping — higher rate = better — so green/red point the opposite
+ * direction.
  *
  * **Flat-band is `max(60s, 10% of prior)`** — load-bearing:
  *   - A fixed 1m absolute threshold would over-flag wobble at high
