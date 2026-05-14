@@ -871,3 +871,180 @@ describe("computeAdherenceMetrics — item 93 first-person self-view contract", 
     expect(m.byMember![0]!.medianAckCi95).toBeNull();
   });
 });
+
+describe("computePriorPeriodAdherenceMetrics — item 97 byMember contract", () => {
+  // /adherence/escalations renders a per-Member compact median-TTA
+  // trend pill (item 97 — analog of item 88 on /sentiment). The page
+  // builds a `priorByMemberMap` keyed by membershipId and looks up
+  // each current row's prior median. These tests pin the lib contract
+  // the page depends on:
+  //   - `withByMember` is honoured on the PRIOR-period helper too
+  //     (the flag exists on the public signature; before item 97 no
+  //     caller exercised it).
+  //   - byMember rows are scoped to the prior window — a Member with
+  //     only current-window data does NOT appear in prior byMember
+  //     (drives the null-prior pill suppression on the page).
+  //   - Tenant isolation holds for the per-Member breakdown too.
+  it("withByMember omitted → prior byMember is undefined", async () => {
+    const tenant = await createTestTenant();
+    const { membership } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-bm-omit"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: membership.id,
+      escalatedAt: new Date(now.getTime() - 45 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 45 * 24 * HOUR + 2 * HOUR),
+      acknowledgedById: membership.id,
+    });
+    const prev = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      now,
+    });
+    expect(prev.byMember).toBeUndefined();
+  });
+
+  it("withByMember=true → prior byMember populated from prior-window data only", async () => {
+    const tenant = await createTestTenant();
+    const { membership: m1 } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-bm-m1"),
+    });
+    const { membership: m2 } = await createTestUserAndMembership(tenant.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-bm-m2"),
+    });
+    const now = new Date();
+    // m1: one prior-window escalation, acked inside the prior window
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: m1.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 3 * HOUR),
+      acknowledgedById: m1.id,
+    });
+    // m2: one prior-window escalation, acked inside the prior window
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: m2.id,
+      escalatedAt: new Date(now.getTime() - 35 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 35 * 24 * HOUR + 7 * HOUR),
+      acknowledgedById: m2.id,
+    });
+    const prev = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(prev.byMember).toBeDefined();
+    expect(prev.byMember).toHaveLength(2);
+    const r1 = prev.byMember!.find((r) => r.membershipId === m1.id)!;
+    const r2 = prev.byMember!.find((r) => r.membershipId === m2.id)!;
+    expect(r1.medianAckMs).toBe(3 * HOUR);
+    expect(r2.medianAckMs).toBe(7 * HOUR);
+    // Sum-of-byMember = firm-wide invariant (adherence has non-null
+    // membershipId on every row — item 92 docstring).
+    const sumEsc = prev.byMember!.reduce((acc, r) => acc + r.escalated, 0);
+    expect(sumEsc).toBe(prev.escalated);
+  });
+
+  it("Member with only current-window data is absent from prior byMember (drives null-prior pill suppression)", async () => {
+    // The page's pill should render NOTHING for this Member — the
+    // priorByMemberMap lookup returns undefined and the shared
+    // MedianTtaTrendPill's null-prior rule suppresses the pill. Pin
+    // the lib-level absence here so the page's lookup behaviour is
+    // anchored end-to-end.
+    const tenant = await createTestTenant();
+    const { membership: currentOnly } = await createTestUserAndMembership(
+      tenant.id,
+      { role: "USER", email: uniqueEmail("adh-prior-bm-currentonly") },
+    );
+    const { membership: bothWindows } = await createTestUserAndMembership(
+      tenant.id,
+      { role: "USER", email: uniqueEmail("adh-prior-bm-both") },
+    );
+    const now = new Date();
+    // currentOnly: only a current-window escalation. Must NOT appear
+    // in prior byMember.
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: currentOnly.id,
+      escalatedAt: new Date(now.getTime() - 5 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 5 * 24 * HOUR + 1 * HOUR),
+      acknowledgedById: currentOnly.id,
+    });
+    // bothWindows: prior-window escalation. MUST appear.
+    await makeAdherence({
+      tenantId: tenant.id,
+      membershipId: bothWindows.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 2 * HOUR),
+      acknowledgedById: bothWindows.id,
+    });
+    const prev = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenant.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(prev.byMember).toBeDefined();
+    expect(prev.byMember).toHaveLength(1);
+    expect(prev.byMember![0]!.membershipId).toBe(bothWindows.id);
+    // The page builds a Record<membershipId, ...> from this array; a
+    // missing key returns undefined → the pill renders nothing. That
+    // is the load-bearing behaviour this test pins.
+    const map: Record<string, true> = {};
+    for (const r of prev.byMember!) map[r.membershipId] = true;
+    expect(map[currentOnly.id]).toBeUndefined();
+  });
+
+  it("prior byMember is tenant-scoped", async () => {
+    const tenantA = await createTestTenant();
+    const tenantB = await createTestTenant();
+    const { membership: a } = await createTestUserAndMembership(tenantA.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-bm-iso-a"),
+    });
+    const { membership: b } = await createTestUserAndMembership(tenantB.id, {
+      role: "USER",
+      email: uniqueEmail("adh-prior-bm-iso-b"),
+    });
+    const now = new Date();
+    await makeAdherence({
+      tenantId: tenantA.id,
+      membershipId: a.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 1 * HOUR),
+      acknowledgedById: a.id,
+    });
+    await makeAdherence({
+      tenantId: tenantB.id,
+      membershipId: b.id,
+      escalatedAt: new Date(now.getTime() - 40 * 24 * HOUR),
+      acknowledgedAt: new Date(now.getTime() - 40 * 24 * HOUR + 4 * HOUR),
+      acknowledgedById: b.id,
+    });
+    const prevA = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenantA.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    const prevB = await computePriorPeriodAdherenceMetrics({
+      tenantId: tenantB.id,
+      windowDays: 30,
+      withByMember: true,
+      now,
+    });
+    expect(prevA.byMember).toHaveLength(1);
+    expect(prevA.byMember![0]!.membershipId).toBe(a.id);
+    expect(prevA.byMember![0]!.medianAckMs).toBe(1 * HOUR);
+    expect(prevB.byMember).toHaveLength(1);
+    expect(prevB.byMember![0]!.membershipId).toBe(b.id);
+    expect(prevB.byMember![0]!.medianAckMs).toBe(4 * HOUR);
+  });
+});

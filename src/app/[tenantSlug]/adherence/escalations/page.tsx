@@ -114,10 +114,20 @@ export default async function AdherenceEscalationsPage({
     // `metrics` so current/prior speak the same view. Empty prior →
     // pills render nothing (don't fake a delta against missing data,
     // same null-prior invariant as items 72/73/75/79/88).
+    //
+    // Item 97 — firm-wide path also asks for `withByMember` so each row
+    // of the per-Member table can render a compact median-TTA trend
+    // pill against the SAME Member's prior median (analog of item 88 on
+    // the sentiment side, now unblocked by item 96's shared
+    // `<MedianTtaTrendPill compact />`). Self-view doesn't need per-
+    // Member prior — its byMember is at most one row and would just
+    // duplicate the headline pill that item 91 already renders.
     computePriorPeriodAdherenceMetrics({
       tenantId: ctx.tenant.id,
       windowDays: 30,
-      ...(firmWide ? {} : { membershipId: ctx.membership.id }),
+      ...(firmWide
+        ? { withByMember: true }
+        : { membershipId: ctx.membership.id }),
     }),
   ]);
 
@@ -142,6 +152,20 @@ export default async function AdherenceEscalationsPage({
     });
     for (const mr of memberRows) {
       memberLabels[mr.id] = mr.user.name ?? mr.user.email ?? mr.id;
+    }
+  }
+
+  // Item 97 — index the prior-window byMember rows by membershipId so
+  // each per-row trend pill can look up its own prior median in O(1).
+  // Members in the current window who weren't in the prior window
+  // (their `byMember` row is undefined) will render no pill — the
+  // shared `<MedianTtaTrendPill compact />` (item 96) enforces the
+  // null-prior rule (same invariant as items 72/73/75/79/88). Mirror
+  // of `priorByMemberMap` on /sentiment (item 88).
+  const priorByMemberMap: Record<string, MemberAdherenceMetrics> = {};
+  if (firmWide && priorMetrics.byMember) {
+    for (const m of priorMetrics.byMember) {
+      priorByMemberMap[m.membershipId] = m;
     }
   }
 
@@ -193,6 +217,8 @@ export default async function AdherenceEscalationsPage({
         <MemberAdherenceResponseTimeTable
           rows={byMember}
           labels={memberLabels}
+          priorByMember={priorByMemberMap}
+          windowDays={metrics.windowDays}
         />
       )}
 
@@ -511,17 +537,29 @@ function AdherenceAckRateTrendPill({
  * tell the operator "you can't draw conclusions from this Member's
  * data yet" without needing a separate confidence-score column.
  *
- * No trend pill in the table today — that'd be a separate item
- * analogous to item 88 (sentiment per-Member trend pill). The
- * `computePriorPeriodAdherenceMetrics` helper already accepts
- * `withByMember` so a future pill can be wired without lib changes.
+ * Item 97 — each row now also renders a compact median-TTA trend pill
+ * against the SAME Member's prior-window median. Adherence-pillar
+ * analog of item 88. Uses the shared `<MedianTtaTrendPill compact />`
+ * (item 96) — no new component, no duplication. Null-prior suppression
+ * (Member absent from prior window) is enforced by the shared
+ * component, so this surface doesn't need to re-assert it.
  */
 function MemberAdherenceResponseTimeTable({
   rows,
   labels,
+  priorByMember,
+  windowDays,
 }: {
   rows: MemberAdherenceMetrics[];
   labels: Record<string, string>;
+  /** Item 97 — per-Member prior-window snapshot, keyed by membershipId.
+   * A row whose `membershipId` is absent from this map renders no trend
+   * pill (the Member had no prior-window data — don't fake a delta). */
+  priorByMember: Record<string, MemberAdherenceMetrics>;
+  /** Item 97 — passed through for the pill's tooltip (`"vs prior 30d"`).
+   * The compact pill in the table body itself drops the window suffix
+   * to save width; the tooltip keeps it for hover-readable context. */
+  windowDays: number;
 }) {
   const sorted = [...rows].sort((a, b) => {
     // Slowest median first; null medians sink to the bottom and
@@ -595,6 +633,18 @@ function MemberAdherenceResponseTimeTable({
                         {formatDurationOrDash(r.medianAckCi95.hiMs)}]
                       </span>
                     )}
+                    {/* Item 97 — compact median-TTA trend pill against
+                        this Member's own prior-window median. Renders
+                        nothing when current OR prior is null (Member
+                        had no acks in one of the two windows) — shared
+                        component (item 96) enforces the suppression. */}
+                    <MedianTtaTrendPill
+                      current={r.medianAckMs}
+                      prior={priorByMember[r.membershipId]?.medianAckMs ?? null}
+                      windowDays={windowDays}
+                      compact
+                      className="ml-2"
+                    />
                   </td>
                   <td className="py-1 pr-3 tabular-nums">
                     {formatDurationOrDash(r.p90AckMs)}
