@@ -123,6 +123,25 @@ export type NotificationKind =
   /// a chronically-slow tenant gets one alert per week, not one per
   /// cron tick. Sister to item 71's `firm_adherence_below_threshold`.
   | "firm_sentiment_ack_rate_below_threshold"
+  /// Post-PRD item 95 — mandatory governance escalation, adherence
+  /// analog of item 84's `firm_sentiment_ack_rate_below_threshold`.
+  /// The daily firm-adherence-ack-monitor cron found this tenant's
+  /// 7-day adherence-escalation acknowledgement rate below
+  /// `ACK_RATE_THRESHOLD` with at least `MIN_ESCALATED_FOR_ALERT`
+  /// escalated rows in the window (the volume floor exists so a
+  /// fresh tenant with 1-2 unacked compliance flags doesn't trip
+  /// the alert before it's been operational). Fans out to every
+  /// active FIRM_ADMIN. **Distinct from `firm_adherence_below_threshold`
+  /// (item 71)** which measures FCG-WINDOW compliance, not the
+  /// ack-rate on escalations once they fire — a tenant could be
+  /// fast at replying within window AND slow at acknowledging the
+  /// rare below-threshold escalations, tripping this without
+  /// tripping item 71 (or vice versa). Not opt-outable: an
+  /// unacknowledged compliance escalation IS the audit-trail gap
+  /// this engine exists to close; muting it defeats governance.
+  /// dedupeKey is the ISO week so a chronically-slow tenant gets
+  /// one alert per week, not one per cron tick.
+  | "firm_adherence_ack_rate_below_threshold"
   /// Post-PRD item 85 — mandatory operational alert. A webhook
   /// subscription has been auto-disabled after `autoDisableThreshold`
   /// consecutive dead-lettered deliveries (item 14). Without this

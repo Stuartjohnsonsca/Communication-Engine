@@ -1,0 +1,22 @@
+-- Post-PRD hardening item 95 — firm-wide adherence-escalation ack-rate
+-- alert. Adherence-pillar analog of item 84's
+-- `FIRM_SENTIMENT_ACK_RATE_BELOW_THRESHOLD`. A daily cron flags tenants
+-- whose 7d ack rate on below-threshold-send escalations is below
+-- `ACK_RATE_THRESHOLD` with a meaningful volume floor — sister to
+-- item 71's `FIRM_ADHERENCE_BELOW_THRESHOLD` (which measures FCG-window
+-- adherence, a different question). The two adherence-side firm
+-- alerts answer:
+--
+--   FIRM_ADHERENCE_BELOW_THRESHOLD (item 71):
+--     "Are you replying to clients within the FCG promise window?"
+--   FIRM_ADHERENCE_ACK_RATE_BELOW_THRESHOLD (item 95):
+--     "When a send DID breach compliance, are you acknowledging
+--      the escalation?"
+--
+-- Both can fire independently and a tenant could trip one without the
+-- other.
+--
+-- `IF NOT EXISTS` for fresh-deploy safety: a clean deploy picks the
+-- value up from the Prisma schema, an existing deploy needs the ALTER.
+
+ALTER TYPE "AuditEventType" ADD VALUE IF NOT EXISTS 'FIRM_ADHERENCE_ACK_RATE_BELOW_THRESHOLD';

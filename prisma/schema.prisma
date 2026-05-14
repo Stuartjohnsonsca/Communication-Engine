@@ -465,6 +465,20 @@ enum AuditEventType {
   /// RBAC gate `adherence:export` — governance not commercial, so
   /// FIRM_ADMIN + FCT_MEMBER, matching `sentiment:export`.
   ADHERENCE_ESCALATIONS_EXPORTED
+  /// Post-PRD hardening item 95 — a daily cron found the tenant's 7-day
+  /// adherence-escalation acknowledgement rate below
+  /// `ACK_RATE_THRESHOLD` while the volume floor
+  /// (`MIN_ESCALATED_FOR_ALERT`) was met. Adherence-pillar analog of
+  /// `FIRM_SENTIMENT_ACK_RATE_BELOW_THRESHOLD` (item 84). Distinct
+  /// from `FIRM_ADHERENCE_BELOW_THRESHOLD` (item 71) which measures
+  /// FCG-WINDOW compliance, not ack-rate on escalations — a tenant
+  /// can trip one without the other. Payload: `{ windowDays,
+  /// escalated, acknowledged, acknowledgedRate, medianAckMs,
+  /// oldestUnackedMs, threshold, minEscalated, isoWeek }`. One event
+  /// per (tenant, ISO week) — same dedupe slot as the notification —
+  /// so a chronically slow tenant doesn't fill the chain with daily
+  /// duplicates.
+  FIRM_ADHERENCE_ACK_RATE_BELOW_THRESHOLD
 }
 
 enum BillingPeriodStatus {
