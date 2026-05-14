@@ -265,6 +265,83 @@ export async function dispatchAdherenceEscalation(input: {
   return { recipients: recipients.length };
 }
 
+// ─── Adherence escalation stale (post-PRD backlog item 99) ────────────────
+
+export async function dispatchAdherenceEscalationStale(input: {
+  tenantId: string;
+  tenantSlug: string;
+  adherenceId: string;
+  draftId: string;
+  /// Sender of the below-threshold send — same field used by the original
+  /// `dispatchAdherenceEscalation` to seed the self-recipient. Sentiment's
+  /// equivalent uses `assignedToMembershipId` (assignee), but adherence
+  /// escalates the sender directly: same routing as the original mandatory
+  /// `adherence_escalation` so the second-chance nudge reaches the same
+  /// inbox without surprise.
+  membershipId: string;
+  hoursSinceEscalation: number;
+  overall: number;
+}): Promise<{ recipients: number }> {
+  // Same audience as the original escalation (sender + FCT + FIRM_ADMIN).
+  // Mirrors item 77's sibling-helper pattern: the original
+  // `adherence_escalation` fires at threshold trip; this is the
+  // second-chance nudge once `STALE_THRESHOLD_HOURS` have passed without
+  // acknowledgement.
+  const recipients: Recipient[] = [];
+  const exclude: string[] = [];
+  const self = await selfRecipient(input.tenantId, input.membershipId);
+  if (self) {
+    recipients.push(self);
+    exclude.push(self.membershipId);
+  }
+  recipients.push(...(await fctAndAdminRecipients(input.tenantId, exclude)));
+
+  const hours = Math.max(1, Math.round(input.hoursSinceEscalation));
+  const overallPct = Math.round(input.overall * 100);
+  const subject = `Unacknowledged adherence escalation · ${hours}h`;
+  const summary = `A below-threshold send (${overallPct}%) has been awaiting acknowledgement for ${hours}h.`;
+  const body = [
+    `An adherence escalation has been outstanding for ${hours} hours without acknowledgement.`,
+    "",
+    `Overall: ${overallPct}%`,
+    "",
+    `Open the escalation to acknowledge: /${input.tenantSlug}/adherence/escalations`,
+    `View the sent draft: /${input.tenantSlug}/drafts/${input.draftId}`,
+    "",
+    `Closing the loop documents the firm's response and clears the unacked governance flag.`,
+  ].join("\n");
+  const href = `/${input.tenantSlug}/adherence/escalations`;
+
+  for (const r of recipients) {
+    await dispatchNotification({
+      tenantId: input.tenantId,
+      membershipId: r.membershipId,
+      toEmail: r.toEmail,
+      kind: "adherence_escalation_stale",
+      // dedupeKey == adherenceId. Dispatch dedupe is keyed on
+      // (membershipId, kind, dedupeKey), so reusing the row id is safe
+      // across kinds — the original `adherence_escalation` row
+      // (kind=adherence_escalation, dedupeKey=adherenceId) and this
+      // nudge (kind=adherence_escalation_stale, dedupeKey=adherenceId)
+      // occupy distinct slots. One stale nudge per (membership,
+      // adherence row) ever.
+      dedupeKey: input.adherenceId,
+      subject,
+      summary,
+      text: body,
+      href,
+      payload: {
+        adherenceId: input.adherenceId,
+        draftId: input.draftId,
+        hoursSinceEscalation: hours,
+        overall: input.overall,
+        recipientReason: r.reason,
+      },
+    });
+  }
+  return { recipients: recipients.length };
+}
+
 // ─── Breach acknowledgement awaited (PRD §12.9) ───────────────────────────
 
 export async function dispatchBreachAckRequired(input: {

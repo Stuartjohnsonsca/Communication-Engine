@@ -110,6 +110,20 @@ export type NotificationKind =
   /// indefinitely. dedupeKey is the SentimentSignal id so each
   /// unacked escalation fires the nudge exactly once.
   | "sentiment_escalation_stale"
+  /// Post-PRD item 99 — mandatory governance nudge, adherence-pillar
+  /// analog of item 77's `sentiment_escalation_stale`. A
+  /// CommunicationAdherence row has been escalated for
+  /// `STALE_THRESHOLD_HOURS` (4h) without acknowledgement. Fans out
+  /// to the same audience the original `adherence_escalation`
+  /// reached (sender Membership + FCT_MEMBER + FIRM_ADMIN). Not
+  /// opt-outable: the FCG/UCG-violating send IS the audit-trail
+  /// gap this engine exists to close; muting the nudge would let
+  /// below-threshold sends sit unacknowledged indefinitely.
+  /// dedupeKey is the CommunicationAdherence id so each row fires
+  /// the nudge exactly once across (membership, kind) pairs — the
+  /// item-1 `adherence_escalation` row uses the same id under a
+  /// distinct kind, so the slots don't collide.
+  | "adherence_escalation_stale"
   /// Post-PRD item 84 — mandatory governance escalation. The daily
   /// firm-ack-monitor cron found this tenant's 7-day sentiment
   /// acknowledgement rate below `ACK_RATE_THRESHOLD` with at least

@@ -479,6 +479,23 @@ enum AuditEventType {
   /// so a chronically slow tenant doesn't fill the chain with daily
   /// duplicates.
   FIRM_ADHERENCE_ACK_RATE_BELOW_THRESHOLD
+  /// Post-PRD hardening item 99 — hourly cron found a
+  /// CommunicationAdherence row escalated `STALE_THRESHOLD_HOURS` ago
+  /// that nobody has acknowledged yet. Fires a second-chance
+  /// `adherence_escalation_stale` notification to the original
+  /// audience (sender Membership + FCT_MEMBER + FIRM_ADMIN).
+  /// Adherence-pillar analog of `SENTIMENT_ESCALATION_STALE_WARNED`
+  /// (item 77). One audit + one dispatch slot per row — the initial
+  /// escalation fired at threshold trip, this is the nudge.
+  /// Acknowledgement clears the unacked state so a future
+  /// re-escalation flow won't be re-warned in error. Payload:
+  /// `{ adherenceId, draftId, membershipId, escalatedAt,
+  /// hoursSinceEscalation, overall, thresholdHours }`. Distinct from
+  /// `ADHERENCE_ESCALATED` (the trip itself) and from
+  /// `FIRM_ADHERENCE_ACK_RATE_BELOW_THRESHOLD` (the firm-wide
+  /// rollup) — a chain reader can filter for "specific stale rows"
+  /// vs "rollup-flagged tenant" without ambiguity.
+  ADHERENCE_ESCALATION_STALE_WARNED
 }
 
 enum BillingPeriodStatus {

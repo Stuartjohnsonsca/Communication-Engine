@@ -107,6 +107,12 @@ export const REGISTERED_CRONS: RegisteredCron[] = [
     description:
       "Item 95 — daily firm-wide adherence-escalation ack-rate alert. Adherence-pillar analog of sentiment-firm-ack-monitor (item 84). Distinct from adherence-monitor (item 71) which measures FCG-WINDOW adherence: this measures ack-rate on already-fired below-threshold escalations. Computes each tenant's 7d adherence ack rate via computeAdherenceMetrics (same numbers as /adherence/escalations) and fires a mandatory firm_adherence_ack_rate_below_threshold notification to every FIRM_ADMIN when the rate is below ACK_RATE_THRESHOLD with at least MIN_ESCALATED_FOR_ALERT escalations. Deduped per ISO week, distinct dedupe namespace from item 71 so both can fire independently in the same week.",
   },
+  {
+    cronName: "adherence-stale",
+    expectedIntervalMinutes: 60,
+    description:
+      "Item 99 — hourly stale-adherence-escalation sweeper. Adherence-pillar analog of sentiment-stale (item 77). Re-notifies the original backlog-item-1 escalation audience (sender + FCT_MEMBER + FIRM_ADMIN) when a CommunicationAdherence row has been escalated for STALE_THRESHOLD_HOURS (4h) without acknowledgement. One nudge per row ever — audit chain is the dedupe gate. Bounds the second-chance signal to within an hour of the 4h stale mark and aligns with item 94's <NavBadges> stale-tone + <LiveOutstanding> red-text boundary so all four surfaces speak the same threshold.",
+  },
 ];
 
 export function registeredCron(cronName: string): RegisteredCron | undefined {
