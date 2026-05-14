@@ -155,25 +155,44 @@ export default async function OAuthAppsPage({
       )}
 
       <div className="space-y-5">
-        {kinds.map(({ kind, label, scopeDefault, authorizeUrl, additionalConfigSchema }) => {
+        {kinds.map(({ kind, label, scopeDefault, authorizeUrl, additionalConfigSchema, adapterImplemented }) => {
           const existing = configuredByKind.get(kind);
           return (
             <section
               key={kind}
               className="rounded border border-zinc-200 p-4 dark:border-zinc-800"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <h2 className="text-lg font-semibold">{label}</h2>
-                {existing ? (
-                  <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">
-                    Configured · client {existing.clientIdLast4}
-                  </span>
-                ) : (
-                  <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                    Not configured
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {!adapterImplemented && (
+                    <span
+                      title="OAuth handshake works but ingest currently returns mock data — real adapter implementation pending."
+                      className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/30 dark:text-amber-200"
+                    >
+                      Adapter pending
+                    </span>
+                  )}
+                  {existing ? (
+                    <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300">
+                      Configured · client {existing.clientIdLast4}
+                    </span>
+                  ) : (
+                    <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      Not configured
+                    </span>
+                  )}
+                </div>
               </div>
+              {!adapterImplemented && (
+                <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200">
+                  <strong>Heads up:</strong> the OAuth handshake works for {label}{" "}
+                  but the ingest adapter is not yet implemented &mdash; staff who
+                  connect this kind will see synthetic mock data in their
+                  IngestedMessage rows until the real adapter ships. You can
+                  stage credentials here ahead of that work.
+                </p>
+              )}
               <dl className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
                 <div>
                   <dt className="inline font-medium">Authorize URL:</dt>{" "}

@@ -23,7 +23,13 @@ import { mockAdapter } from "./mock";
  */
 export const googleAdapter: ChannelAdapter = {
   async ingest(ctx) {
-    if (!ctx.tokens.access_token) {
+    // Item 105 — fall back to mock when tokens are absent OR
+    // explicitly mock-shaped (operator chose `mode: "mock"` on
+    // connect). Detecting `mock: true` is necessary because the
+    // mock-connect path stores a synthetic `mock-<kind>-<id>`
+    // access_token, which would otherwise pass the access_token
+    // check and reach the real Gmail API (which would 401).
+    if (!ctx.tokens.access_token || ctx.tokens.mock === true) {
       return mockAdapter.ingest(ctx);
     }
     const since = ctx.since ?? new Date(Date.now() - 7 * 24 * 3600 * 1000);

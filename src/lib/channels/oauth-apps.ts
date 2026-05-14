@@ -338,6 +338,12 @@ export function oauthCapableChannelKinds(): Array<{
     defaultValue?: string;
     placeholder?: string;
   }>;
+  /// Item 105 — true when a real ingest adapter exists for this
+  /// kind. False = OAuth handshake works but ingest currently
+  /// returns synthetic mock data; the UI badges these as "adapter
+  /// pending" so an operator doesn't think they configured a
+  /// production-ready integration.
+  adapterImplemented: boolean;
 }> {
   return Object.values(CHANNEL_KINDS)
     .filter((m) => Boolean(m.oauthAuthorizeUrl))
@@ -347,7 +353,28 @@ export function oauthCapableChannelKinds(): Array<{
       scopeDefault: m.scopeDefault,
       authorizeUrl: m.oauthAuthorizeUrl!(),
       additionalConfigSchema: m.additionalConfigSchema ?? [],
+      adapterImplemented: KINDS_WITH_REAL_ADAPTER.has(m.kind),
     }));
+}
+
+/**
+ * Item 105 — kinds whose real ingest adapter exists. The OAuth UI
+ * still lists kinds without adapters (so per-tenant credentials can
+ * be staged ahead of adapter work) but renders an "adapter pending"
+ * badge so operators don't assume Configured = Production-Ready.
+ *
+ * Hardcoded set rather than a registry meta field because adapter
+ * implementation is independent of registry shape — the source of
+ * truth is `src/lib/channels/adapters/index.ts`'s `adapterFor`
+ * switch, and this set must agree with it.
+ */
+export const KINDS_WITH_REAL_ADAPTER: ReadonlySet<ChannelKind> = new Set([
+  "GOOGLE",
+  "M365",
+]);
+
+export function isAdapterImplemented(kind: ChannelKind): boolean {
+  return KINDS_WITH_REAL_ADAPTER.has(kind);
 }
 
 /**

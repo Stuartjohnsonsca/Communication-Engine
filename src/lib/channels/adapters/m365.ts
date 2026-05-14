@@ -12,7 +12,9 @@ import { mockAdapter } from "./mock";
  */
 export const m365Adapter: ChannelAdapter = {
   async ingest(ctx) {
-    if (!ctx.tokens.access_token) {
+    // Item 105 — fall back to mock when tokens are absent OR
+    // explicitly mock-shaped. See google.ts for the rationale.
+    if (!ctx.tokens.access_token || ctx.tokens.mock === true) {
       return mockAdapter.ingest(ctx);
     }
     const since = ctx.since ?? new Date(Date.now() - 7 * 24 * 3600 * 1000);
