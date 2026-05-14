@@ -49,7 +49,8 @@ DECLARE
     'SubProcessorObjection',
     'AutoDraftSweepRun',
     'LlmCall',
-    'TenantCronThreshold'
+    'TenantCronThreshold',
+    'ChannelOAuthApp'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

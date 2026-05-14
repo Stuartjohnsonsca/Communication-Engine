@@ -203,6 +203,16 @@ export default async function TenantLayout({
       label: t("nav.sensitivity"),
     });
   }
+  // Post-PRD hardening item 101 — bring-your-own OAuth provider apps.
+  // FIRM_ADMIN-only; same gate as the page handler. Surfaced before
+  // /admin/channels in the sidebar order so a fresh tenant configures
+  // their provider app first, then connects channels to it.
+  if (hasPermission(ctx.membership.role, "tenant:configure-channel-oauth-app")) {
+    nav.push({
+      href: `/${tenantSlug}/admin/channels/oauth-apps`,
+      label: t("nav.oauthApps"),
+    });
+  }
   // Post-PRD hardening item 16 — programmatic API keys. FIRM_ADMIN
   // creates / revokes; FCT can read (same posture as webhooks).
   if (hasPermission(ctx.membership.role, "apikeys:read")) {

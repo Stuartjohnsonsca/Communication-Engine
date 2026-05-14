@@ -496,6 +496,25 @@ enum AuditEventType {
   /// rollup) — a chain reader can filter for "specific stale rows"
   /// vs "rollup-flagged tenant" without ambiguity.
   ADHERENCE_ESCALATION_STALE_WARNED
+  /// Post-PRD hardening item 101 — FIRM_ADMIN configured (or
+  /// updated) the tenant's bring-your-own OAuth app for a channel
+  /// kind via /admin/channels/oauth-apps. Payload:
+  /// `{ channelKind, clientIdLast4, secretRotated: boolean }`.
+  /// **Never logs the client secret or the full client id.** The
+  /// last-4 fingerprint is enough for the operator to confirm
+  /// "yes that's the app I just configured" without leaking
+  /// material that could be used to forge a token request.
+  /// `secretRotated: true` indicates the secret column changed
+  /// (a fresh secret was provided); `false` means only the
+  /// clientId or other metadata changed.
+  CHANNEL_OAUTH_APP_CONFIGURED
+  /// Post-PRD hardening item 101 — FIRM_ADMIN reverted to platform
+  /// defaults for a channel kind by deleting the
+  /// ChannelOAuthApp row. The connect + callback routes will fall
+  /// back to env-var defaults (typically only set in development
+  /// deployments) and otherwise return a configuration error to
+  /// the User. Payload: `{ channelKind, hadCredentials: true }`.
+  CHANNEL_OAUTH_APP_DELETED
   /// Post-PRD hardening item 100 — FIRM_ADMIN saved per-tenant
   /// overrides for one or more cron thresholds via /admin/sensitivity.
   /// Payload: `{ changes: Array<{ key, prior: number|null, next: number|null }> }`
@@ -1026,6 +1045,7 @@ model Tenant {
   autoDraftSweepRuns        AutoDraftSweepRun[]
   llmCalls                  LlmCall[]
   cronThreshold             TenantCronThreshold?
+  channelOAuthApps          ChannelOAuthApp[]
 
   @@index([status])
 }
@@ -3453,4 +3473,58 @@ model TenantCronThreshold {
   updatedByMembershipId    String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Post-PRD hardening item 101 — bring-your-own OAuth app per tenant
+/// per channel kind.
+///
+/// Multi-tenant SaaS posture: each Client (tenant) registers their own
+/// Google Cloud / Microsoft / Slack OAuth application and pastes the
+/// resulting `client_id` + `client_secret` into /admin/channels/oauth-apps.
+/// The platform never owns those credentials — Acumon doesn't sit in
+/// the middle of every Client's Google login as a privileged third
+/// party. Among other things this means:
+///   - The Client's OAuth consent screen carries the Client's app
+///     name + branding, not Acumon's.
+///   - Token revocation by the Client revokes their OWN app, not a
+///     shared platform app.
+///   - Acumon's Google project verification status doesn't gate every
+///     Client at scale.
+///   - DPA / DPIA reviews can point at a tenant-controlled OAuth
+///     boundary as the data-egress gate.
+///
+/// One row per (tenantId, channelKind). NULL row → connect + callback
+/// fall back to env-var-defined platform defaults (development only;
+/// production tenants always have rows). The `client_secret` is
+/// encrypted at rest using the platform `ENCRYPTION_KEY` registry
+/// (`encryptJson` in `src/lib/channels/crypto.ts`) — same crypto path
+/// as `ChannelAuth.encryptedTokens` so a future key rotation
+/// (item 27) covers both transparently.
+///
+/// Tenant-scoped + RLS-protected (added to `tenant_tables` in
+/// `prisma/rls.sql`).
+model ChannelOAuthApp {
+  id                        String   @id @default(cuid())
+  tenantId                  String
+  /// Mirror of the registry's ChannelKind. Free-form string here so
+  /// adding a new kind doesn't require an enum migration; the
+  /// registry's allowlist (in `src/lib/channels/registry.ts`) is the
+  /// gate at write time. Compile-time guard: the UI form only shows
+  /// kinds that have OAuth wired (i.e. `oauthAuthorizeUrl` set).
+  channelKind               String
+  /// Plaintext OAuth client identifier — the value the provider
+  /// stamps on the consent screen. Not a secret per OAuth spec; safe
+  /// to display in admin UI fingerprint.
+  clientId                  String
+  /// AES-256-GCM-encrypted client secret JSON blob. Decrypt via
+  /// `decryptJson` (`src/lib/channels/crypto.ts`); the pre-decrypt
+  /// raw column never leaves the DB. NEVER serialised to API
+  /// responses or audit payloads.
+  clientSecretEncrypted     String
+  updatedAt                 DateTime @updatedAt
+  updatedByMembershipId     String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, channelKind])
 }

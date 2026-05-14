@@ -5,6 +5,7 @@ import { superDb } from "@/lib/db";
 import { requirePermission } from "@/lib/rbac";
 import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
+import { getTenantOAuthApp } from "@/lib/channels/oauth-apps";
 import { signOAuthState } from "@/lib/channels/oauth-state";
 import { writeAuditEvent } from "@/lib/audit";
 
@@ -31,20 +32,39 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const m = meta(channel.kind);
 
-  if (parsed.data.mode === "real" && m.realOAuthAvailable() && m.oauthAuthorizeUrl && m.clientId) {
-    // Real OAuth handshake — return the URL to redirect to. State is
-    // HMAC-signed (see oauth-state.ts) and carries the membershipId so
-    // the callback can attribute the connection back to the User who
-    // initiated it. Without that round-trip, ChannelAuth.membershipId
-    // is null on real OAuth, which makes synthesise-from-outbound skip
-    // every send with "no authenticated membership on channel".
+  if (parsed.data.mode === "real" && m.oauthAuthorizeUrl) {
+    // Item 101 — resolve per-tenant OAuth app first (multi-tenant
+    // SaaS posture), fall back to env-var defaults only for dev /
+    // single-tenant deploys. If neither is present return a clear
+    // configuration error rather than silently falling through to
+    // mock mode (a mock token in production would break ingest
+    // invisibly).
+    const tenantApp = await getTenantOAuthApp(channel.tenantId, channel.kind);
+    const platformClientId = m.clientId?.();
+    const effectiveClientId = tenantApp?.clientId ?? platformClientId ?? null;
+    if (!effectiveClientId) {
+      return NextResponse.json(
+        {
+          error:
+            `OAuth for ${channel.kind} is not configured for this tenant. ` +
+            `A FIRM_ADMIN must add the client_id + client_secret on /admin/channels/oauth-apps.`,
+        },
+        { status: 503 },
+      );
+    }
+    // State is HMAC-signed (see oauth-state.ts) and carries the
+    // membershipId so the callback can attribute the connection back
+    // to the User who initiated it. Without that round-trip,
+    // ChannelAuth.membershipId is null on real OAuth, which makes
+    // synthesise-from-outbound skip every send with "no
+    // authenticated membership on channel".
     const state = signOAuthState({
       channelId: channel.id,
       tenantSlug: parsed.data.tenantSlug,
       membershipId: ctx.membership.id,
     });
     const url = new URL(m.oauthAuthorizeUrl());
-    url.searchParams.set("client_id", m.clientId() ?? "");
+    url.searchParams.set("client_id", effectiveClientId);
     url.searchParams.set("redirect_uri", buildRedirectUri(req));
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", m.scopeDefault.join(" "));

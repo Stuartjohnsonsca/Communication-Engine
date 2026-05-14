@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { superDb } from "@/lib/db";
 import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
+import { getTenantOAuthApp } from "@/lib/channels/oauth-apps";
 import { verifyOAuthState } from "@/lib/channels/oauth-state";
 import { writeAuditEvent } from "@/lib/audit";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
@@ -53,15 +54,37 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "membership mismatch" }, { status: 403 });
   }
   const m = meta(channel.kind);
-  if (!m.oauthTokenUrl || !m.clientId || !m.realOAuthAvailable()) {
+  if (!m.oauthTokenUrl) {
     return NextResponse.json({ error: "channel kind has no OAuth in this deployment" }, { status: 400 });
+  }
+
+  // Item 101 — resolve per-tenant OAuth app first, then fall back to
+  // env-var defaults. Same precedence + error-on-missing posture as
+  // the connect route. The signed state pinned both `tenantSlug` and
+  // `channelId` so we know which tenant we're resolving for; an
+  // attacker who replayed a state from tenant A can't hit tenant B's
+  // credentials.
+  const tenantApp = await getTenantOAuthApp(channel.tenantId, channel.kind);
+  const platformClientId = m.clientId?.();
+  const platformSecret = clientSecret(channel.kind);
+  const effectiveClientId = tenantApp?.clientId ?? platformClientId ?? null;
+  const effectiveClientSecret = tenantApp?.clientSecret ?? platformSecret ?? null;
+  if (!effectiveClientId || !effectiveClientSecret) {
+    return NextResponse.json(
+      {
+        error:
+          `OAuth for ${channel.kind} is not configured for this tenant. ` +
+          `A FIRM_ADMIN must add the client_id + client_secret on /admin/channels/oauth-apps.`,
+      },
+      { status: 503 },
+    );
   }
 
   const params = new URLSearchParams({
     grant_type: "authorization_code",
     code,
-    client_id: m.clientId() ?? "",
-    client_secret: clientSecret(channel.kind) ?? "",
+    client_id: effectiveClientId,
+    client_secret: effectiveClientSecret,
     redirect_uri: `${url.origin}/api/channels/oauth-callback`,
   });
   const tokenRes = await fetch(m.oauthTokenUrl(), {
@@ -105,7 +128,16 @@ export async function GET(req: Request) {
     actorMembershipId: membershipId,
     subjectType: "Channel",
     subjectId: channel.id,
-    payload: { kind: channel.kind, mode: "oauth", hasRefreshToken: Boolean(tok.refresh_token) },
+    payload: {
+      kind: channel.kind,
+      mode: "oauth",
+      hasRefreshToken: Boolean(tok.refresh_token),
+      // Which OAuth app was used to authenticate — per-tenant
+      // (item 101) or platform-wide env-var fallback. Helps a
+      // chain reader correlate "Client X's connection broke" with
+      // "Client X rotated their app credentials yesterday."
+      oauthAppSource: tenantApp ? "tenant_app" : "platform_default",
+    },
   });
 
   return NextResponse.redirect(`${url.origin}/${tenantSlug}/admin/channels`);

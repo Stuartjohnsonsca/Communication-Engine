@@ -54,6 +54,7 @@ export const fr: Dictionary = {
     security: "Sécurité",
     webhooks: "Webhooks",
     sensitivity: "Sensibilité des alertes",
+    oauthApps: "Apps OAuth des fournisseurs",
     apiKeys: "Clés d'API",
     systemHealth: "Santé système",
     usage: "Usage LLM",

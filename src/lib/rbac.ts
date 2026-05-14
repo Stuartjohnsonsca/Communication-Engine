@@ -341,6 +341,15 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // prior + next captured per-knob.
   "tenant:configure-cron-thresholds": ["FIRM_ADMIN"],
 
+  // Post-PRD hardening item 101 — bring-your-own OAuth app per
+  // channel kind. The client_secret is encrypted at rest with the
+  // platform ENCRYPTION_KEY but a leaked credential lets an attacker
+  // forge token requests for the Client's Google/Microsoft tenant —
+  // this is exactly the kind of integration boundary that DPA
+  // reviewers want gated to the most senior in-tenant role.
+  // FIRM_ADMIN-only.
+  "tenant:configure-channel-oauth-app": ["FIRM_ADMIN"],
+
   // Post-PRD hardening item 19 — admin-initiated TOTP reset for
   // locked-out members. Only FIRM_ADMIN can clear another User's
   // 2FA enrollment. The action is step-up gated and audited; the
