@@ -56,6 +56,7 @@ export const enGB: Dictionary = {
     signoff: "Sign-off questions",
     security: "Security",
     webhooks: "Webhooks",
+    sensitivity: "Alert sensitivity",
     apiKeys: "API keys",
     systemHealth: "System health",
     usage: "LLM usage",
@@ -257,6 +258,7 @@ export type Dictionary = {
     signoff: string;
     security: string;
     webhooks: string;
+    sensitivity: string;
     apiKeys: string;
     systemHealth: string;
     usage: string;

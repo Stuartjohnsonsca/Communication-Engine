@@ -141,6 +141,14 @@ export async function evaluateTenantFirmAckRate(input: {
   const now = input.now ?? new Date();
   const isoWeek = isoWeekKey(now);
 
+  // Item 100 — per-tenant override resolver. Constants in this file
+  // remain the platform defaults; tenants with a row override one or
+  // both knobs.
+  const { resolveCronThresholds } = await import("@/lib/cron-thresholds/resolve");
+  const thresholds = await resolveCronThresholds(input.tenantId);
+  const ackRateThreshold = thresholds.ackRateThreshold;
+  const minEscalatedForAlert = thresholds.minEscalatedForAlert;
+
   // Reuse `computeSentimentMetrics` so this can't drift from the
   // /sentiment page's response-time card (items 78/79). Same window,
   // same classifier, same null-when-no-data invariant. No `withByMember`
@@ -161,11 +169,11 @@ export async function evaluateTenantFirmAckRate(input: {
   }
 
   // Volume floor — small denominators don't get to fire the alert.
-  if (escalated < MIN_ESCALATED_FOR_ALERT) {
+  if (escalated < minEscalatedForAlert) {
     return { result: "skipped_low_volume", escalated };
   }
 
-  if (acknowledgedRate >= ACK_RATE_THRESHOLD) {
+  if (acknowledgedRate >= ackRateThreshold) {
     return { result: "above_threshold", escalated, acknowledgedRate };
   }
 
@@ -211,7 +219,7 @@ export async function evaluateTenantFirmAckRate(input: {
   }
 
   const pct = Math.round(acknowledgedRate * 100);
-  const threshPct = Math.round(ACK_RATE_THRESHOLD * 100);
+  const threshPct = Math.round(ackRateThreshold * 100);
   const subject = `[${tenant.name}] Sentiment ack rate below ${threshPct}% (${pct}% over ${WINDOW_DAYS}d)`;
   const medianLabel = formatTtaDuration(medianAckMs);
   const oldestLabel = formatTtaDuration(oldestUnackedMs);
@@ -234,8 +242,8 @@ export async function evaluateTenantFirmAckRate(input: {
     acknowledgedRate,
     medianAckMs,
     oldestUnackedMs,
-    threshold: ACK_RATE_THRESHOLD,
-    minEscalated: MIN_ESCALATED_FOR_ALERT,
+    threshold: ackRateThreshold,
+    minEscalated: minEscalatedForAlert,
     isoWeek,
   };
 

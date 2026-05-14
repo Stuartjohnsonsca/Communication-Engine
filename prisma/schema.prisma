@@ -496,6 +496,15 @@ enum AuditEventType {
   /// rollup) — a chain reader can filter for "specific stale rows"
   /// vs "rollup-flagged tenant" without ambiguity.
   ADHERENCE_ESCALATION_STALE_WARNED
+  /// Post-PRD hardening item 100 — FIRM_ADMIN saved per-tenant
+  /// overrides for one or more cron thresholds via /admin/sensitivity.
+  /// Payload: `{ changes: Array<{ key, prior: number|null, next: number|null }> }`
+  /// — only the keys that actually transitioned are included so the
+  /// chain doesn't pollute with no-op saves. `null` on either side
+  /// means "platform default in force" — readable as "we used to
+  /// override and now we don't" (next=null) or "first override"
+  /// (prior=null). The actor is `actorMembershipId` on the audit row.
+  TENANT_CRON_THRESHOLDS_CHANGED
 }
 
 enum BillingPeriodStatus {
@@ -1016,6 +1025,7 @@ model Tenant {
   subProcessorObjections    SubProcessorObjection[]
   autoDraftSweepRuns        AutoDraftSweepRun[]
   llmCalls                  LlmCall[]
+  cronThreshold             TenantCronThreshold?
 
   @@index([status])
 }
@@ -3381,4 +3391,66 @@ model MembershipNotificationPreference {
 
   @@unique([membershipId, kind])
   @@index([tenantId, membershipId])
+}
+
+/// Post-PRD hardening item 100 — per-tenant overrides for cron alert
+/// thresholds + volume floors.
+///
+/// One row per tenant (tenantId UNIQUE). A NULL column means "use the
+/// platform default exported from the cron's lib module"; the resolver
+/// in `src/lib/cron-thresholds/resolve.ts` merges row-with-default and
+/// is the single point of truth every relevant cron reads.
+///
+/// Why one table not five: Stuart asked for "all thresholds, optional
+/// rows in one table" — a single /admin/sensitivity page can render
+/// every knob next to its default, the migration is one table not
+/// five, and the cron-side resolver call is one query not five.
+/// Future knobs (e.g. `windowDays` for the rollup, per-pillar
+/// stale-hours splits) are nullable additions to this row, not new
+/// tables. Most tenants will have NO row at all (use every default);
+/// the resolver short-circuits to the default object in that case.
+///
+/// All five knobs are platform-tunable today (constants in
+/// `src/lib/drafts/adherence-monitor.ts`,
+/// `src/lib/sentiment/firm-ack-monitor.ts`,
+/// `src/lib/adherence/firm-ack-monitor.ts`,
+/// `src/lib/sentiment/stale-sweep.ts`,
+/// `src/lib/adherence/stale-sweep.ts`). The override widens that to
+/// per-tenant. Distinct from `Tenant.sessionTimeoutMinutes` (per-tenant
+/// override on session lifecycle) only in shape — same governance
+/// posture: FIRM_ADMIN-only, audited on change, displayed inline with
+/// the platform default so an operator sees both numbers.
+model TenantCronThreshold {
+  id                       String   @id @default(cuid())
+  tenantId                 String   @unique
+  /// Item 71's `ADHERENCE_THRESHOLD` (default 0.80). Fraction in
+  /// 0..1; below this the firm trips `firm_adherence_below_threshold`.
+  adherenceThreshold       Float?
+  /// Items 84/95's `ACK_RATE_THRESHOLD` (default 0.75). Fraction in
+  /// 0..1; below this the firm trips
+  /// `firm_sentiment_ack_rate_below_threshold` and/or
+  /// `firm_adherence_ack_rate_below_threshold`. Single knob across
+  /// both pillars on purpose — operator mental model is "75% ack
+  /// rate = the line" symmetric across pillars per item 95's note.
+  ackRateThreshold         Float?
+  /// Items 77/99's `STALE_THRESHOLD_HOURS` (default 4). Single knob
+  /// across both pillars + item 94's badge stale-tone +
+  /// `<LiveOutstanding>` red-text boundary; per item 99's invariant
+  /// "operator mental model is '4h = bad' everywhere on both
+  /// pillars; reading any of those surfaces should match what this
+  /// cron will trip on. A future per-tenant override would change
+  /// all three together." This row is that future override.
+  staleThresholdHours      Int?
+  /// Item 71's `MIN_DEADLINED_SENDS` (default 10). Volume floor for
+  /// the FCG-window adherence cron — tenants below the floor skip
+  /// the alert entirely (so a 2-of-3 fluke doesn't trip the alarm).
+  minDeadlinedSends        Int?
+  /// Items 84/95's `MIN_ESCALATED_FOR_ALERT` (default 5). Volume
+  /// floor for the firm-wide ack-rate crons (sentiment + adherence
+  /// pillars share this knob — see item 95).
+  minEscalatedForAlert     Int?
+  updatedAt                DateTime @updatedAt
+  updatedByMembershipId    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }

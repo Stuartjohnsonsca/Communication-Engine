@@ -53,6 +53,7 @@ export const fr: Dictionary = {
     signoff: "Questions de validation",
     security: "Sécurité",
     webhooks: "Webhooks",
+    sensitivity: "Sensibilité des alertes",
     apiKeys: "Clés d'API",
     systemHealth: "Santé système",
     usage: "Usage LLM",

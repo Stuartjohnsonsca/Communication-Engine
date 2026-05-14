@@ -195,6 +195,14 @@ export default async function TenantLayout({
   if (hasPermission(ctx.membership.role, "webhooks:read")) {
     nav.push({ href: `/${tenantSlug}/admin/webhooks`, label: t("nav.webhooks") });
   }
+  // Post-PRD hardening item 100 — per-tenant cron threshold overrides.
+  // FIRM_ADMIN-only; same gate as the page handler.
+  if (hasPermission(ctx.membership.role, "tenant:configure-cron-thresholds")) {
+    nav.push({
+      href: `/${tenantSlug}/admin/sensitivity`,
+      label: t("nav.sensitivity"),
+    });
+  }
   // Post-PRD hardening item 16 — programmatic API keys. FIRM_ADMIN
   // creates / revokes; FCT can read (same posture as webhooks).
   if (hasPermission(ctx.membership.role, "apikeys:read")) {

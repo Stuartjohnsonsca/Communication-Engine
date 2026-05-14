@@ -333,6 +333,14 @@ export const PERMISSIONS: Record<string, Role[]> = {
   // already FIRM_ADMIN-only.
   "tenant:configure-ip-allowlist": ["FIRM_ADMIN"],
 
+  // Post-PRD hardening item 100 — per-tenant overrides on cron alert
+  // thresholds (FCG-window adherence, ack-rate, stale-hours, volume
+  // floors). Operationally invasive: tightening can spam the inbox,
+  // loosening can mask a real governance gap. FIRM_ADMIN-only,
+  // audited on every change via TENANT_CRON_THRESHOLDS_CHANGED with
+  // prior + next captured per-knob.
+  "tenant:configure-cron-thresholds": ["FIRM_ADMIN"],
+
   // Post-PRD hardening item 19 — admin-initiated TOTP reset for
   // locked-out members. Only FIRM_ADMIN can clear another User's
   // 2FA enrollment. The action is step-up gated and audited; the

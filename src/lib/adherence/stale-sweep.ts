@@ -72,21 +72,52 @@ export async function runAdherenceStaleSweep(opts?: {
   tenantId?: string;
 }): Promise<AdherenceStaleSweepResult> {
   const now = opts?.now ?? new Date();
-  const cutoff = new Date(now.getTime() - STALE_THRESHOLD_HOURS * 60 * 60 * 1000);
+
+  // Item 100 — per-tenant override on `staleThresholdHours`. Same
+  // two-pass shape as item 100's update to the sentiment-stale
+  // sweep: SQL filter at BOUNDS.min (strictest possible cutoff) so
+  // we can't miss a tenant who tightened, then per-tenant filter on
+  // the resolved threshold so a loosened tenant doesn't over-fire.
+  const { resolveCronThresholds, BOUNDS } = await import(
+    "@/lib/cron-thresholds/resolve"
+  );
+  const lowerBoundHours = BOUNDS.staleThresholdHours.min;
+  const candidateCutoff = new Date(
+    now.getTime() - lowerBoundHours * 60 * 60 * 1000,
+  );
 
   // Candidate query: escalated, not acknowledged, escalated before the
-  // stale cutoff. SQL predicates do all the filtering — we don't fetch
-  // acknowledged-or-fresh rows only to skip them in-app.
-  const candidates = await superDb.communicationAdherence.findMany({
+  // strictest possible cutoff.
+  const allCandidates = await superDb.communicationAdherence.findMany({
     where: {
       ...(opts?.tenantId ? { tenantId: opts.tenantId } : {}),
-      escalatedAt: { not: null, lt: cutoff },
+      escalatedAt: { not: null, lt: candidateCutoff },
       acknowledgedAt: null,
     },
     include: {
       tenant: { select: { slug: true } },
     },
   });
+
+  // Per-tenant resolve + filter. Cache the resolved thresholds so a
+  // tenant with N candidate rows isn't queried N times.
+  const tenantThresholdCache = new Map<string, number>();
+  async function getTenantStaleThresholdHours(tenantId: string): Promise<number> {
+    const cached = tenantThresholdCache.get(tenantId);
+    if (cached !== undefined) return cached;
+    const t = await resolveCronThresholds(tenantId);
+    tenantThresholdCache.set(tenantId, t.staleThresholdHours);
+    return t.staleThresholdHours;
+  }
+  const candidates: typeof allCandidates = [];
+  for (const c of allCandidates) {
+    if (!c.escalatedAt) continue;
+    const tenantHours = await getTenantStaleThresholdHours(c.tenantId);
+    const ageMs = now.getTime() - c.escalatedAt.getTime();
+    if (ageMs >= tenantHours * 60 * 60 * 1000) {
+      candidates.push(c);
+    }
+  }
 
   const result: AdherenceStaleSweepResult = {
     scanned: candidates.length,
@@ -144,7 +175,9 @@ export async function runAdherenceStaleSweep(opts?: {
           escalatedAt: row.escalatedAt.toISOString(),
           hoursSinceEscalation: Math.round(hoursSinceEscalation * 10) / 10,
           overall: row.overall,
-          thresholdHours: STALE_THRESHOLD_HOURS,
+          // Per-tenant resolved value (item 100). Cache populated above is
+          // per-tenant so this is one more lookup, no DB hit.
+          thresholdHours: await getTenantStaleThresholdHours(row.tenantId),
         },
       });
 

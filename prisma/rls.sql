@@ -48,7 +48,8 @@ DECLARE
     'AuditChainVerification',
     'SubProcessorObjection',
     'AutoDraftSweepRun',
-    'LlmCall'
+    'LlmCall',
+    'TenantCronThreshold'
   ];
 BEGIN
   FOREACH t IN ARRAY tenant_tables LOOP

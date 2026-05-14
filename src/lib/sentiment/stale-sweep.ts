@@ -63,15 +63,47 @@ export async function runSentimentStaleSweep(opts?: {
   tenantId?: string;
 }): Promise<SentimentStaleSweepResult> {
   const now = opts?.now ?? new Date();
-  const cutoff = new Date(now.getTime() - STALE_THRESHOLD_HOURS * 60 * 60 * 1000);
 
-  // Candidate query: escalated, not acknowledged, escalated before the
-  // stale cutoff. SQL predicates do all the filtering — we don't
-  // fetch acknowledged-or-fresh signals only to skip them in-app.
-  const candidates = await superDb.sentimentSignal.findMany({
+  // Item 100 — per-tenant override on `staleThresholdHours`. The
+  // sweep iterates tenants in two passes: (1) candidate query for any
+  // tenant whose strictest possible cutoff is past (i.e. PLATFORM
+  // default), then (2) per-tenant filter using each tenant's
+  // effective threshold. Single-pass with the platform default would
+  // miss tenants that LOOSENED the threshold (e.g. set to 6h → fresh
+  // 5h-old signal should NOT trip), and would over-fire on tenants
+  // that TIGHTENED (set to 2h → 3h-old signal SHOULD trip but a 4h
+  // platform-default cutoff misses it).
+  //
+  // Implementation: fetch candidates with the LOOSEST possible cutoff
+  // (the upper-bound of `BOUNDS.staleThresholdHours.max = 168`) so
+  // any tenant's possible threshold is in scope, then per-tenant
+  // filter on the resolved threshold. The upper bound is small
+  // enough (1 week) that this doesn't fan out unboundedly — and the
+  // existing acked/fresh SQL predicates still exclude the bulk of
+  // rows.
+  const { resolveCronThresholds, BOUNDS } = await import(
+    "@/lib/cron-thresholds/resolve"
+  );
+  const upperBoundHours = BOUNDS.staleThresholdHours.max;
+  const upperBoundCutoff = new Date(
+    now.getTime() - upperBoundHours * 60 * 60 * 1000,
+  );
+  // Lower-bound cutoff (strictest tenant) — anything fresher than
+  // BOUNDS.min has no chance of tripping in any tenant.
+  const lowerBoundHours = BOUNDS.staleThresholdHours.min;
+  const candidateCutoff = new Date(
+    now.getTime() - lowerBoundHours * 60 * 60 * 1000,
+  );
+
+  // Candidate query: escalated, not acknowledged, escalated before
+  // the strictest possible cutoff. SQL predicates do all the
+  // first-pass filtering — we don't fetch acknowledged-or-fresh
+  // signals only to skip them in-app.
+  void upperBoundCutoff; // upper-bound is informational; lower-bound is the SQL predicate
+  const allCandidates = await superDb.sentimentSignal.findMany({
     where: {
       ...(opts?.tenantId ? { tenantId: opts.tenantId } : {}),
-      escalatedAt: { not: null, lt: cutoff },
+      escalatedAt: { not: null, lt: candidateCutoff },
       acknowledgedAt: null,
     },
     include: {
@@ -79,6 +111,26 @@ export async function runSentimentStaleSweep(opts?: {
       ingestedMessage: { select: { sender: true } },
     },
   });
+
+  // Per-tenant resolve + filter. Cache the resolved thresholds so a
+  // tenant with N candidate signals isn't queried N times.
+  const tenantThresholdCache = new Map<string, number>();
+  async function getTenantStaleThresholdHours(tenantId: string): Promise<number> {
+    const cached = tenantThresholdCache.get(tenantId);
+    if (cached !== undefined) return cached;
+    const t = await resolveCronThresholds(tenantId);
+    tenantThresholdCache.set(tenantId, t.staleThresholdHours);
+    return t.staleThresholdHours;
+  }
+  const candidates: typeof allCandidates = [];
+  for (const c of allCandidates) {
+    if (!c.escalatedAt) continue;
+    const tenantHours = await getTenantStaleThresholdHours(c.tenantId);
+    const ageMs = now.getTime() - c.escalatedAt.getTime();
+    if (ageMs >= tenantHours * 60 * 60 * 1000) {
+      candidates.push(c);
+    }
+  }
 
   const result: SentimentStaleSweepResult = {
     scanned: candidates.length,
@@ -132,7 +184,9 @@ export async function runSentimentStaleSweep(opts?: {
           escalatedAt: signal.escalatedAt.toISOString(),
           hoursSinceEscalation: Math.round(hoursSinceEscalation * 10) / 10,
           classification: signal.classification,
-          thresholdHours: STALE_THRESHOLD_HOURS,
+          // Per-tenant resolved value (item 100). The cache populated above
+          // is per-tenant so this is one more lookup, no DB hit.
+          thresholdHours: await getTenantStaleThresholdHours(signal.tenantId),
         },
       });
 
