@@ -3521,6 +3521,21 @@ model ChannelOAuthApp {
   /// raw column never leaves the DB. NEVER serialised to API
   /// responses or audit payloads.
   clientSecretEncrypted     String
+  /// Item 102 — provider-specific extras keyed by string. Examples:
+  ///   - M365: `{ aadTenantId: "<the Client's Entra tenant id>" }`.
+  ///     Without this the authorize/token URLs default to
+  ///     `login.microsoftonline.com/common/...` which is wrong for
+  ///     a per-Client production deploy: `common` accepts any
+  ///     Microsoft tenant, defeating the per-Client isolation an
+  ///     enterprise app review wants. Each Client's IT admin
+  ///     pastes their AAD tenant ID alongside the client_id +
+  ///     secret on /admin/channels/oauth-apps.
+  ///   - Future kinds (Yahoo, Zoho, etc.) declare their own keys
+  ///     via the registry's `additionalConfigSchema`.
+  /// **Public-by-design**: this column is plaintext JSON. Anything
+  /// genuinely secret belongs in `clientSecretEncrypted`. The Entra
+  /// tenant ID is a public identifier (it's in the OAuth URL).
+  additionalConfigJson      Json?
   updatedAt                 DateTime @updatedAt
   updatedByMembershipId     String?
 

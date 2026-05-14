@@ -346,3 +346,167 @@ describe("channel-oauth-apps — validation + audit-payload safety", () => {
     expect(JSON.stringify(list)).not.toContain("google-secret");
   });
 });
+
+describe("channel-oauth-apps — item 102 — M365 + additional config", () => {
+  it("M365 round-trip: aadTenantId persists and is returned by the resolver", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-m365-rt"),
+    });
+    const aadTenantId = "11111111-2222-3333-4444-555555555555";
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "M365",
+      clientId: "m365-app-id",
+      clientSecret: "m365-secret",
+      additionalConfig: { aadTenantId },
+      actorMembershipId: admin.membership.id,
+    });
+    const resolved = await getTenantOAuthApp(tenant.id, "M365");
+    expect(resolved).not.toBeNull();
+    expect(resolved!.clientId).toBe("m365-app-id");
+    expect(resolved!.clientSecret).toBe("m365-secret");
+    expect(resolved!.additionalConfig.aadTenantId).toBe(aadTenantId);
+  });
+
+  it("M365 OAuth URLs embed the per-tenant AAD authority", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("M365");
+    const aadTenantId = "abcdef12-3456-7890-abcd-ef1234567890";
+    const auth = m.oauthAuthorizeUrl!({ aadTenantId });
+    const tok = m.oauthTokenUrl!({ aadTenantId });
+    expect(auth).toBe(
+      `https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/authorize`,
+    );
+    expect(tok).toBe(
+      `https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/token`,
+    );
+  });
+
+  it("M365 falls back to 'common' when no aadTenantId is configured", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("M365");
+    delete process.env.M365_TENANT_ID; // ensure no env override
+    const auth = m.oauthAuthorizeUrl!(null);
+    expect(auth).toBe(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    );
+  });
+
+  it("M365 sanitises malformed aadTenantId (URL-injection defence)", async () => {
+    const { meta } = await import("@/lib/channels/registry");
+    const m = meta("M365");
+    // Slashes, query strings, scheme bytes — all stripped by the
+    // alphanumeric-and-dash whitelist.
+    const malicious = "evil/path?leak=1#frag";
+    const auth = m.oauthAuthorizeUrl!({ aadTenantId: malicious });
+    // The result must NOT contain the slash / query / fragment.
+    expect(auth).not.toContain("/path");
+    expect(auth).not.toContain("?leak");
+    expect(auth).not.toContain("#frag");
+    // The remaining content is just the safe subset.
+    expect(auth).toMatch(
+      /^https:\/\/login\.microsoftonline\.com\/[a-zA-Z0-9-]+\/oauth2\/v2\.0\/authorize$/,
+    );
+  });
+
+  it("upsert drops unknown additionalConfig keys silently (defence in depth)", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-unknown-key"),
+    });
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "M365",
+      clientId: "id",
+      clientSecret: "sec",
+      additionalConfig: {
+        aadTenantId: "valid-tenant-id",
+        rogueKey: "should be dropped",
+        anotherRogue: "also dropped",
+      },
+      actorMembershipId: admin.membership.id,
+    });
+    const resolved = await getTenantOAuthApp(tenant.id, "M365");
+    expect(resolved!.additionalConfig).toEqual({
+      aadTenantId: "valid-tenant-id",
+    });
+    expect(resolved!.additionalConfig.rogueKey).toBeUndefined();
+  });
+
+  it("upsert rejects oversized additionalConfig values (DoS defence)", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-oversize"),
+    });
+    await expect(
+      upsertTenantOAuthApp({
+        tenantId: tenant.id,
+        channelKind: "M365",
+        clientId: "id",
+        clientSecret: "sec",
+        additionalConfig: { aadTenantId: "x".repeat(257) },
+        actorMembershipId: admin.membership.id,
+      }),
+    ).rejects.toThrow(/256/);
+  });
+
+  it("Google upsert without additionalConfig still works (no schema, no required fields)", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-google-no-extras"),
+    });
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "GOOGLE",
+      clientId: "id",
+      clientSecret: "sec",
+      // No additionalConfig — Google has no extras schema.
+      actorMembershipId: admin.membership.id,
+    });
+    const resolved = await getTenantOAuthApp(tenant.id, "GOOGLE");
+    expect(resolved!.additionalConfig).toEqual({});
+  });
+
+  it("audit payload records additional-config keys + verbatim values (M365 aadTenantId is public-by-design)", async () => {
+    const tenant = await createTestTenant();
+    const admin = await createTestUserAndMembership(tenant.id, {
+      role: "FIRM_ADMIN",
+      email: uniqueEmail("oauth-audit-extras"),
+    });
+    const aadTenantId = "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb";
+    await upsertTenantOAuthApp({
+      tenantId: tenant.id,
+      channelKind: "M365",
+      clientId: "id",
+      clientSecret: "secret-must-not-leak-via-audit",
+      additionalConfig: { aadTenantId },
+      actorMembershipId: admin.membership.id,
+    });
+    const audit = await superDb.auditEvent.findFirst({
+      where: { tenantId: tenant.id, eventType: "CHANNEL_OAUTH_APP_CONFIGURED" },
+    });
+    const payload = audit!.payload as {
+      additionalConfigKeys?: string[];
+      additionalConfigFingerprints?: Record<string, string>;
+    };
+    expect(payload.additionalConfigKeys).toEqual(["aadTenantId"]);
+    expect(payload.additionalConfigFingerprints?.aadTenantId).toBe(aadTenantId);
+    // The secret must STILL never appear in the audit row.
+    expect(JSON.stringify(audit)).not.toContain("secret-must-not-leak-via-audit");
+  });
+
+  it("oauthCapableChannelKinds surfaces additionalConfigSchema for the UI", async () => {
+    const kinds = oauthCapableChannelKinds();
+    const m365 = kinds.find((k) => k.kind === "M365");
+    expect(m365).toBeDefined();
+    expect(m365!.additionalConfigSchema).toHaveLength(1);
+    expect(m365!.additionalConfigSchema[0].key).toBe("aadTenantId");
+    const google = kinds.find((k) => k.kind === "GOOGLE");
+    expect(google!.additionalConfigSchema).toHaveLength(0);
+  });
+});

@@ -63,7 +63,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       tenantSlug: parsed.data.tenantSlug,
       membershipId: ctx.membership.id,
     });
-    const url = new URL(m.oauthAuthorizeUrl());
+    // Item 102 — pass per-tenant additionalConfig into the URL
+    // builder. M365 uses it for the AAD tenant ID; Google + Slack
+    // ignore it. Empty {} when no row.
+    const url = new URL(m.oauthAuthorizeUrl(tenantApp?.additionalConfig ?? null));
     url.searchParams.set("client_id", effectiveClientId);
     url.searchParams.set("redirect_uri", buildRedirectUri(req));
     url.searchParams.set("response_type", "code");

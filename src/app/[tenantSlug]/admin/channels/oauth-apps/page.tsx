@@ -60,12 +60,22 @@ export default async function OAuthAppsPage({
     const channelKind = String(formData.get("channelKind") ?? "");
     const clientId = String(formData.get("clientId") ?? "");
     const clientSecret = String(formData.get("clientSecret") ?? "");
+    // Item 102 — collect additionalConfig fields. Each form input is
+    // named `extra:<key>`; the lib drops unknown keys defensively, so
+    // a stale form posting an extra it shouldn't is harmless.
+    const extras: Record<string, string> = {};
+    for (const [name, value] of formData.entries()) {
+      if (name.startsWith("extra:") && typeof value === "string") {
+        extras[name.slice("extra:".length)] = value;
+      }
+    }
     try {
       await upsertTenantOAuthApp({
         tenantId: inner.tenant.id,
         channelKind,
         clientId,
         clientSecret,
+        additionalConfig: extras,
         actorMembershipId: inner.membership.id,
       });
     } catch (e) {
@@ -145,7 +155,7 @@ export default async function OAuthAppsPage({
       )}
 
       <div className="space-y-5">
-        {kinds.map(({ kind, label, scopeDefault, authorizeUrl }) => {
+        {kinds.map(({ kind, label, scopeDefault, authorizeUrl, additionalConfigSchema }) => {
           const existing = configuredByKind.get(kind);
           return (
             <section
@@ -228,6 +238,35 @@ export default async function OAuthAppsPage({
                     secret&rdquo; on a partial save.
                   </p>
                 </div>
+                {additionalConfigSchema.map((field) => (
+                  <div key={field.key}>
+                    <label
+                      className="block text-sm font-medium"
+                      htmlFor={`${kind}-extra-${field.key}`}
+                    >
+                      {field.label}
+                      {field.required && (
+                        <span className="ml-1 text-red-600 dark:text-red-400">*</span>
+                      )}
+                    </label>
+                    <input
+                      id={`${kind}-extra-${field.key}`}
+                      name={`extra:${field.key}`}
+                      type="text"
+                      required={field.required}
+                      autoComplete="off"
+                      defaultValue={existing?.additionalConfig?.[field.key] ?? ""}
+                      placeholder={
+                        field.placeholder ??
+                        (field.defaultValue
+                          ? `Default: ${field.defaultValue}`
+                          : "")
+                      }
+                      className="mt-1 block w-full rounded border border-zinc-300 px-2 py-1 font-mono text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                    />
+                    <p className="mt-1 text-xs text-zinc-500">{field.description}</p>
+                  </div>
+                ))}
                 <div className="flex items-center gap-3">
                   <button
                     type="submit"

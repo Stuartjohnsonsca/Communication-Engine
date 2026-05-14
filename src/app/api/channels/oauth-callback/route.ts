@@ -87,7 +87,10 @@ export async function GET(req: Request) {
     client_secret: effectiveClientSecret,
     redirect_uri: `${url.origin}/api/channels/oauth-callback`,
   });
-  const tokenRes = await fetch(m.oauthTokenUrl(), {
+  // Item 102 — same per-tenant additionalConfig threading as the
+  // connect route. Critical for M365: the token endpoint URL also
+  // includes the AAD authority segment.
+  const tokenRes = await fetch(m.oauthTokenUrl(tenantApp?.additionalConfig ?? null), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: params,

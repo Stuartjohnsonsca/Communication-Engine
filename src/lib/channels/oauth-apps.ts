@@ -48,6 +48,13 @@ import { ValidationError } from "@/lib/api-errors";
 export type TenantOAuthAppCredentials = {
   clientId: string;
   clientSecret: string;
+  /**
+   * Item 102 — provider-specific extras keyed by string (`aadTenantId`
+   * for M365, etc.). Always returned as `Record<string, string>` (or
+   * empty object if no row was saved with extras). Callers pass this
+   * straight into `oauthAuthorizeUrl(cfg)` / `oauthTokenUrl(cfg)`.
+   */
+  additionalConfig: Record<string, string>;
 };
 
 /**
@@ -71,7 +78,22 @@ export async function getTenantOAuthApp(
   return {
     clientId: row.clientId,
     clientSecret: secret.clientSecret,
+    additionalConfig: normaliseAdditionalConfig(row.additionalConfigJson),
   };
+}
+
+/**
+ * Coerce the JSONB column to `Record<string, string>` defensively.
+ * Older rows (pre-item-102) have NULL → empty map. Non-string values
+ * are dropped — callers expect string substitution into URLs.
+ */
+function normaliseAdditionalConfig(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "string" && v.length > 0) out[k] = v;
+  }
+  return out;
 }
 
 /**
@@ -84,6 +106,10 @@ export async function listTenantOAuthApps(tenantId: string): Promise<
   Array<{
     channelKind: string;
     clientIdLast4: string;
+    /// Item 102 — same plaintext map the resolver returns; UI uses
+    /// it to pre-fill the additional-config inputs on edit. NEVER
+    /// contains the secret.
+    additionalConfig: Record<string, string>;
     updatedAt: Date;
     updatedByMembershipId: string | null;
   }>
@@ -95,6 +121,7 @@ export async function listTenantOAuthApps(tenantId: string): Promise<
   return rows.map((r) => ({
     channelKind: r.channelKind,
     clientIdLast4: lastFour(r.clientId),
+    additionalConfig: normaliseAdditionalConfig(r.additionalConfigJson),
     updatedAt: r.updatedAt,
     updatedByMembershipId: r.updatedByMembershipId,
   }));
@@ -129,6 +156,13 @@ export async function upsertTenantOAuthApp(input: {
   channelKind: string;
   clientId: string;
   clientSecret: string;
+  /**
+   * Item 102 — provider-specific extras keyed by string. Validated
+   * against the kind's `additionalConfigSchema`: required-and-empty
+   * throws; unknown keys are dropped silently (defence-in-depth).
+   * Per-key length capped at 256 chars to bound the JSONB column.
+   */
+  additionalConfig?: Record<string, string>;
   actorMembershipId: string;
 }): Promise<void> {
   const meta = CHANNEL_KINDS[input.channelKind as ChannelKind];
@@ -149,6 +183,8 @@ export async function upsertTenantOAuthApp(input: {
       "invalid_client_secret",
     );
   }
+
+  const cleanedConfig = validateAdditionalConfig(meta, input.additionalConfig);
 
   const prior = await superDb.channelOAuthApp.findUnique({
     where: {
@@ -173,11 +209,13 @@ export async function upsertTenantOAuthApp(input: {
       channelKind: input.channelKind,
       clientId: trimmedClientId,
       clientSecretEncrypted: encryptedSecret,
+      additionalConfigJson: cleanedConfig,
       updatedByMembershipId: input.actorMembershipId,
     },
     update: {
       clientId: trimmedClientId,
       clientSecretEncrypted: encryptedSecret,
+      additionalConfigJson: cleanedConfig,
       updatedByMembershipId: input.actorMembershipId,
     },
   });
@@ -212,6 +250,18 @@ export async function upsertTenantOAuthApp(input: {
       clientIdLast4: lastFour(trimmedClientId),
       secretRotated,
       isCreate: prior === null,
+      // Item 102 — record which extras were configured + (for keys
+      // declared as URL-substituted in the registry) a fingerprint
+      // of the value. NEVER the raw value of any genuinely-secret
+      // field; today the only declared extra (M365 aadTenantId) IS
+      // public-by-design (it's in the OAuth URL) so we record it
+      // verbatim. If a future kind declares a sensitive extra,
+      // fingerprint it instead — see below.
+      additionalConfigKeys: Object.keys(cleanedConfig).sort(),
+      additionalConfigFingerprints: fingerprintAdditionalConfig(
+        meta,
+        cleanedConfig,
+      ),
     },
   });
 }
@@ -267,12 +317,27 @@ export async function deleteTenantOAuthApp(input: {
  * render rows for: every registry kind whose meta has
  * `oauthAuthorizeUrl` set. Wraps the registry walk so the UI doesn't
  * couple to internal registry shape.
+ *
+ * Item 102 — surfaces the kind's `additionalConfigSchema` so the
+ * form can render provider-specific extra inputs (M365 → Entra
+ * tenant ID, future kinds plug in here).
  */
 export function oauthCapableChannelKinds(): Array<{
   kind: ChannelKind;
   label: string;
   scopeDefault: string[];
+  /// Sample authorize URL with NO per-tenant config injected — for
+  /// the "Authorize URL:" hint shown in the UI. The actual handshake
+  /// resolves per-tenant.
   authorizeUrl: string;
+  additionalConfigSchema: ReadonlyArray<{
+    key: string;
+    label: string;
+    description: string;
+    required: boolean;
+    defaultValue?: string;
+    placeholder?: string;
+  }>;
 }> {
   return Object.values(CHANNEL_KINDS)
     .filter((m) => Boolean(m.oauthAuthorizeUrl))
@@ -281,5 +346,75 @@ export function oauthCapableChannelKinds(): Array<{
       label: m.label,
       scopeDefault: m.scopeDefault,
       authorizeUrl: m.oauthAuthorizeUrl!(),
+      additionalConfigSchema: m.additionalConfigSchema ?? [],
     }));
+}
+
+/**
+ * Validate + clean the user-supplied additional config against the
+ * kind's declared schema.
+ *   - Unknown keys → silently dropped (defence in depth: only what
+ *     the registry knows about ever lands in the JSONB column).
+ *   - Required keys missing → `ValidationError`.
+ *   - Per-value length capped at 256 chars to bound the JSONB column;
+ *     overlong values throw rather than silently truncate.
+ *   - Empty/whitespace values → key omitted (so the URL builder falls
+ *     back to its `defaultValue`).
+ */
+function validateAdditionalConfig(
+  meta: {
+    additionalConfigSchema?: ReadonlyArray<{
+      key: string;
+      label: string;
+      required: boolean;
+    }>;
+  },
+  raw: Record<string, string> | undefined,
+): Record<string, string> {
+  const schema = meta.additionalConfigSchema ?? [];
+  const declaredKeys = new Set(schema.map((s) => s.key));
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw ?? {})) {
+    if (!declaredKeys.has(k)) continue; // drop unknown keys
+    const trimmed = (v ?? "").trim();
+    if (trimmed.length === 0) continue; // empty → use defaultValue
+    if (trimmed.length > 256) {
+      throw new ValidationError(
+        `Value for "${k}" exceeds 256 chars.`,
+        "invalid_additional_config",
+      );
+    }
+    out[k] = trimmed;
+  }
+  for (const field of schema) {
+    if (field.required && !(field.key in out)) {
+      throw new ValidationError(
+        `Field "${field.label}" is required.`,
+        "missing_required_additional_config",
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * Audit-safe fingerprint of additionalConfig values for the
+ * `CHANNEL_OAUTH_APP_CONFIGURED` payload. Today every declared key
+ * is public-by-design (M365 `aadTenantId` is part of the OAuth URL,
+ * not a secret) so we record values verbatim. If a future kind
+ * declares a sensitive extra, change the per-key handling here to
+ * emit a hash/last-4 instead — the chain readers downstream are
+ * tolerant of unknown keys appearing in the map.
+ */
+function fingerprintAdditionalConfig(
+  meta: { additionalConfigSchema?: ReadonlyArray<{ key: string }> },
+  cleaned: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const declared = new Set((meta.additionalConfigSchema ?? []).map((f) => f.key));
+  for (const [k, v] of Object.entries(cleaned)) {
+    if (!declared.has(k)) continue;
+    out[k] = v; // public-by-design today; revisit if a sensitive extra is declared.
+  }
+  return out;
 }
