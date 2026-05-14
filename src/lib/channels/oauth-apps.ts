@@ -372,6 +372,8 @@ export const KINDS_WITH_REAL_ADAPTER: ReadonlySet<ChannelKind> = new Set([
   "GOOGLE",
   "M365",
   "SLACK",
+  "TEAMS",
+  "SHAREPOINT",
 ]);
 
 export function isAdapterImplemented(kind: ChannelKind): boolean {

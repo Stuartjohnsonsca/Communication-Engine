@@ -35,6 +35,8 @@ import { mockAdapter } from "@/lib/channels/adapters/mock";
 import { googleAdapter } from "@/lib/channels/adapters/google";
 import { m365Adapter } from "@/lib/channels/adapters/m365";
 import { slackAdapter } from "@/lib/channels/adapters/slack";
+import { teamsAdapter } from "@/lib/channels/adapters/teams";
+import { sharepointAdapter } from "@/lib/channels/adapters/sharepoint";
 import {
   oauthCapableChannelKinds,
   isAdapterImplemented,
@@ -54,16 +56,12 @@ describe("adapter resolution — adapterFor switches by kind only (item 105)", (
     expect(adapterFor("M365")).toBe(m365Adapter);
   });
 
-  it("TEAMS → mockAdapter (adapter pending; previously wrong-route to m365Adapter)", () => {
-    // Item 105 invariant: TEAMS no longer routes to m365Adapter,
-    // because m365Adapter only fetches mail — TEAMS connections
-    // would have ingested Outlook mail labelled as Teams data.
-    // Routed to mockAdapter until a real Teams adapter ships.
-    expect(adapterFor("TEAMS")).toBe(mockAdapter);
+  it("TEAMS → teamsAdapter (item 107 — real Graph chats + channels)", () => {
+    expect(adapterFor("TEAMS")).toBe(teamsAdapter);
   });
 
-  it("SHAREPOINT → mockAdapter (adapter pending; same reason as TEAMS)", () => {
-    expect(adapterFor("SHAREPOINT")).toBe(mockAdapter);
+  it("SHAREPOINT → sharepointAdapter (item 108 — real Graph drive items)", () => {
+    expect(adapterFor("SHAREPOINT")).toBe(sharepointAdapter);
   });
 
   it("SLACK → slackAdapter (item 106)", () => {
@@ -151,19 +149,64 @@ describe("UI surfacing — adapterImplemented flag", () => {
     expect(byKind.GOOGLE.adapterImplemented).toBe(true);
     expect(byKind.M365.adapterImplemented).toBe(true);
     expect(byKind.SLACK.adapterImplemented).toBe(true); // item 106
-    expect(byKind.TEAMS.adapterImplemented).toBe(false);
-    expect(byKind.SHAREPOINT.adapterImplemented).toBe(false);
+    expect(byKind.TEAMS.adapterImplemented).toBe(true); // item 107
+    expect(byKind.SHAREPOINT.adapterImplemented).toBe(true); // item 108
   });
 
   it("KINDS_WITH_REAL_ADAPTER + isAdapterImplemented agree", () => {
     expect(isAdapterImplemented("GOOGLE")).toBe(true);
     expect(isAdapterImplemented("M365")).toBe(true);
-    expect(isAdapterImplemented("SLACK")).toBe(true); // item 106
-    expect(isAdapterImplemented("TEAMS")).toBe(false);
-    expect(isAdapterImplemented("SHAREPOINT")).toBe(false);
+    expect(isAdapterImplemented("SLACK")).toBe(true);
+    expect(isAdapterImplemented("TEAMS")).toBe(true);
+    expect(isAdapterImplemented("SHAREPOINT")).toBe(true);
     expect(KINDS_WITH_REAL_ADAPTER.has("GOOGLE")).toBe(true);
     expect(KINDS_WITH_REAL_ADAPTER.has("SLACK")).toBe(true);
-    expect(KINDS_WITH_REAL_ADAPTER.has("TEAMS")).toBe(false);
+    expect(KINDS_WITH_REAL_ADAPTER.has("TEAMS")).toBe(true);
+    expect(KINDS_WITH_REAL_ADAPTER.has("SHAREPOINT")).toBe(true);
+  });
+});
+
+describe("teamsAdapter + sharepointAdapter — mock fallback shape", () => {
+  it("teamsAdapter falls back to mockAdapter when tokens.mock === true", async () => {
+    const rows = await teamsAdapter.ingest({
+      tenantId: "tenant-mock",
+      channelId: "channel-mock",
+      tokens: {
+        mock: true,
+        access_token: "mock-TEAMS-channel-mock",
+      },
+    });
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  it("teamsAdapter falls back when tokens.access_token is absent", async () => {
+    const rows = await teamsAdapter.ingest({
+      tenantId: "tenant-empty",
+      channelId: "channel-empty",
+      tokens: {},
+    });
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  it("sharepointAdapter falls back to mockAdapter when tokens.mock === true", async () => {
+    const rows = await sharepointAdapter.ingest({
+      tenantId: "tenant-mock",
+      channelId: "channel-mock",
+      tokens: {
+        mock: true,
+        access_token: "mock-SHAREPOINT-channel-mock",
+      },
+    });
+    expect(Array.isArray(rows)).toBe(true);
+  });
+
+  it("sharepointAdapter falls back when tokens.access_token is absent", async () => {
+    const rows = await sharepointAdapter.ingest({
+      tenantId: "tenant-empty",
+      channelId: "channel-empty",
+      tokens: {},
+    });
+    expect(Array.isArray(rows)).toBe(true);
   });
 });
 

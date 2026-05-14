@@ -3,6 +3,8 @@ import { mockAdapter } from "./mock";
 import { m365Adapter } from "./m365";
 import { googleAdapter } from "./google";
 import { slackAdapter } from "./slack";
+import { teamsAdapter } from "./teams";
+import { sharepointAdapter } from "./sharepoint";
 import { meta, type ChannelKind } from "../registry";
 
 export type { ChannelAdapter, IngestRow, AdapterContext, Tokens } from "./types";
@@ -38,21 +40,17 @@ export function adapterFor(kind: string): ChannelAdapter {
     case "SLACK":
       return slackAdapter;
     case "TEAMS":
+      // Item 107 — real Teams adapter (chats + team-channel
+      // messages via Graph). Replaces the item-105 stop-gap that
+      // routed Teams to mockAdapter to avoid the wrong-kind
+      // mail-data ingest from m365Adapter.
+      return teamsAdapter;
     case "SHAREPOINT":
-      // Item 105 — these kinds have OAuth wiring (item 103) but
-      // their REAL adapters don't exist yet. Previously they were
-      // routed to `m365Adapter`, which only fetches Outlook mail —
-      // a Teams or SharePoint connection would silently ingest
-      // mailbox data labelled with the wrong kind. Worse than mock
-      // because operators couldn't tell from row counts that
-      // anything was off. Routing to `mockAdapter` here is the
-      // honest interim: Teams/SharePoint connect succeeds, ingest
-      // returns synthetic rows, the operator sees mock data and
-      // knows real adapter work is pending. The OAuth-apps UI
-      // surfaces an "adapter not yet implemented" badge so a
-      // FIRM_ADMIN doesn't think they configured something
-      // production-ready. Real adapters land as future items.
-      return mockAdapter;
+      // Item 108 — real SharePoint adapter (file activity from
+      // OneDrive + sites the User can see). Treats file events
+      // as IN-direction evidence rows; see adapter docstring for
+      // why SharePoint isn't a 2-way correspondence channel.
+      return sharepointAdapter;
     default:
       // Tier 2 kinds (IMANAGE / ZOOM / WHATSAPP_BUSINESS) have
       // `realOAuthAvailable: NEVER` so connect can't even start;
