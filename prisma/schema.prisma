@@ -515,6 +515,18 @@ enum AuditEventType {
   /// deployments) and otherwise return a configuration error to
   /// the User. Payload: `{ channelKind, hadCredentials: true }`.
   CHANNEL_OAUTH_APP_DELETED
+  /// Post-PRD hardening item 104 — a Membership-scoped ChannelAuth was
+  /// revoked. Distinct from the historic `CHANNEL_AUTHORISED` (the
+  /// connect side) so the chain reader can audit "who lost access
+  /// when, by whose action." Payload: `{ channelId, channelKind,
+  /// membershipId, byActor: "self" | "admin", reason?: string }`.
+  /// `byActor: "self"` = the User revoked their own connection from
+  /// /account; `byActor: "admin"` = a FIRM_ADMIN force-revoked from
+  /// /admin/channels (e.g. for a terminated staff member or compromised
+  /// account). The `actorMembershipId` on the audit row is the actor;
+  /// `payload.membershipId` is the WHOSE-AUTH was revoked. They MAY be
+  /// the same (self-revoke) or different (admin-force-revoke).
+  CHANNEL_DEAUTHORISED
   /// Post-PRD hardening item 100 — FIRM_ADMIN saved per-tenant
   /// overrides for one or more cron thresholds via /admin/sensitivity.
   /// Payload: `{ changes: Array<{ key, prior: number|null, next: number|null }> }`

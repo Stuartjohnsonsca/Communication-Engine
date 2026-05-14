@@ -39,6 +39,20 @@ export const PERMISSIONS: Record<string, Role[]> = {
   "members:write":       ["FIRM_ADMIN"],
   "channels:write":      ["FIRM_ADMIN"],
 
+  // Post-PRD hardening item 104 — per-staff-member self-service OAuth.
+  // Every Membership can connect/disconnect THEIR OWN ChannelAuth on
+  // an existing tenant Channel via /account. The Channel itself
+  // (which tenant + which kind) is still admin-managed via
+  // `channels:write`. The bypassed-send compliance gate (item 1) +
+  // adherence rollups (items 66/74) work per-Membership precisely
+  // because each Member's mailbox is ingested separately under their
+  // own ChannelAuth — without this permission, only the FIRM_ADMIN
+  // who initially connected the channel would have ingest rolling.
+  // SALES_REVIEWER excluded: their role is read-only review of
+  // commercial signals, not active correspondence; granting them
+  // mailbox-connect rights would conflate the two responsibilities.
+  "channels:connect-own": ["FIRM_ADMIN", "FCT_MEMBER", "USER", "CURATOR", "ACUMON_ADMIN"],
+
   // Item 58 — tenant-level auto-draft pause toggle. Operationally
   // invasive (pauses background production for every Member in the
   // tenant), so FIRM_ADMIN only. FCT can see the state on

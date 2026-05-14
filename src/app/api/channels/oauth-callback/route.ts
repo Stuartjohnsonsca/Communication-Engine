@@ -3,6 +3,7 @@ import { superDb } from "@/lib/db";
 import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
 import { getTenantOAuthApp } from "@/lib/channels/oauth-apps";
+import { revokePriorAuthsForMembership } from "@/lib/channels/auths";
 import { verifyOAuthState } from "@/lib/channels/oauth-state";
 import { writeAuditEvent } from "@/lib/audit";
 import { rateLimitByIp, tooManyRequestsResponse } from "@/lib/ratelimit";
@@ -107,6 +108,19 @@ export async function GET(req: Request) {
     expires_in?: number;
     scope?: string;
   };
+
+  // Item 104 — soft-revoke any prior ACTIVE auth for THIS
+  // (channel, membership) pair before inserting the fresh one.
+  // Without this step a User who re-connects (e.g. after a token
+  // refresh failure) would accumulate stale ACTIVE rows and the
+  // ingest worker would arbitrarily pick one — possibly the stale
+  // refresh-failed one. Per-Member uniqueness invariant
+  // (documented in src/lib/channels/auths.ts) is enforced here at
+  // the connect side; ingest assumes it.
+  await revokePriorAuthsForMembership({
+    channelId: channel.id,
+    membershipId,
+  });
 
   await superDb.channelAuth.create({
     data: {

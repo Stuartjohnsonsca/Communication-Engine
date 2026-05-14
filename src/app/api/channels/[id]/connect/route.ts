@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getTenantContext } from "@/lib/tenant";
 import { superDb } from "@/lib/db";
-import { requirePermission } from "@/lib/rbac";
+import { hasPermission } from "@/lib/rbac";
+import { ForbiddenError } from "@/lib/api-errors";
 import { meta } from "@/lib/channels/registry";
 import { encryptJson } from "@/lib/channels/crypto";
 import { getTenantOAuthApp } from "@/lib/channels/oauth-apps";
@@ -23,7 +24,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const ctx = await getTenantContext(parsed.data.tenantSlug);
   if (!ctx) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  requirePermission(ctx.membership.role, "channels:write");
+  // Item 104 — accept either `channels:write` (FIRM_ADMIN, can
+  // create / configure channels) OR `channels:connect-own` (every
+  // Membership, can self-connect their own auth on an
+  // already-existing channel). Connect always attributes the
+  // ChannelAuth to `ctx.membership.id` via the OAuth state, so a
+  // non-admin self-connect inherently scopes to their own
+  // mailbox / inbox / calendar — there's no path to attribute
+  // someone else's auth via this route.
+  if (
+    !hasPermission(ctx.membership.role, "channels:write") &&
+    !hasPermission(ctx.membership.role, "channels:connect-own")
+  ) {
+    throw new ForbiddenError("missing channels:write or channels:connect-own");
+  }
 
   const channel = await superDb.channel.findFirst({
     where: { id, tenantId: ctx.tenant.id },

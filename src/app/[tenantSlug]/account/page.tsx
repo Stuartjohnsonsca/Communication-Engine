@@ -58,6 +58,9 @@ import {
   type OptOutableKind,
 } from "@/lib/notifications";
 import { TwoFactorCard } from "./TwoFactorCard";
+import { ConnectChannelButtons } from "./ConnectChannelButtons";
+import { listChannelAuthsForMembership } from "@/lib/channels/auths";
+import { meta as channelMeta } from "@/lib/channels/registry";
 
 export default async function AccountPage({
   params,
@@ -81,6 +84,10 @@ export default async function AccountPage({
     priorSentimentMetrics,
     adherenceMetrics,
     priorAdherenceMetrics,
+    // Item 104 — per-tenant Channels with the User's own ACTIVE
+    // ChannelAuth status. One row per Channel: shows a Connect
+    // button if not yet authorised, Disconnect if active.
+    channelConnectStatus,
   ] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
@@ -155,6 +162,10 @@ export default async function AccountPage({
       tenantId: ctx.tenant.id,
       membershipId: ctx.membership.id,
       windowDays: 30,
+    }),
+    listChannelAuthsForMembership({
+      tenantId: ctx.tenant.id,
+      membershipId: ctx.membership.id,
     }),
   ]);
   if (!member) redirect("/login");
@@ -651,6 +662,53 @@ export default async function AccountPage({
         action={setNotificationPrefAction}
         t={t}
       />
+
+      {hasPermission(ctx.membership.role, "channels:connect-own") && channelConnectStatus.length > 0 && (
+        <div className="card space-y-3">
+          <h2 className="text-base font-medium">Connect provider accounts</h2>
+          <p className="text-sm text-ink/70">
+            Each staff member connects their own mailbox / calendar /
+            messaging account. Acumon never sees plaintext provider
+            credentials &mdash; OAuth tokens are encrypted at rest and only
+            decrypted in-memory at handshake time. Disconnect at any time;
+            ingest from your account stops immediately.
+          </p>
+          <ul className="space-y-2">
+            {channelConnectStatus.map((row) => {
+              let label = row.channelKind;
+              try {
+                label = channelMeta(row.channelKind).label;
+              } catch {
+                /* unknown kind — fall back to raw */
+              }
+              return (
+                <li
+                  key={row.channelId}
+                  className="flex items-start justify-between gap-3 border-t border-ink/5 pt-2 first:border-0 first:pt-0"
+                >
+                  <div className="text-sm">
+                    <div className="font-medium">{label}</div>
+                    <div className="text-xs text-ink/60">
+                      {row.authId
+                        ? `Connected ${row.connectedAt!.toISOString().slice(0, 10)}` +
+                          (row.expiresAt
+                            ? ` · expires ${row.expiresAt.toISOString().slice(0, 10)}`
+                            : "")
+                        : "Not connected"}
+                    </div>
+                  </div>
+                  <ConnectChannelButtons
+                    channelId={row.channelId}
+                    tenantSlug={tenantSlug}
+                    authId={row.authId}
+                    channelKind={label}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <div className="card space-y-3">
         <h2 className="text-base font-medium">Channel authorisations</h2>
