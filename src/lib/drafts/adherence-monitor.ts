@@ -117,6 +117,14 @@ export async function evaluateTenantAdherence(input: {
   const now = input.now ?? new Date();
   const isoWeek = isoWeekKey(now);
 
+  // Item 100 — per-tenant override resolver. Tenants without a row use
+  // the constants exported from this file as platform defaults; tenants
+  // with a row may tighten or loosen the threshold + volume floor.
+  const { resolveCronThresholds } = await import("@/lib/cron-thresholds/resolve");
+  const thresholds = await resolveCronThresholds(input.tenantId);
+  const adherenceThreshold = thresholds.adherenceThreshold;
+  const minDeadlinedSends = thresholds.minDeadlinedSends;
+
   // Reuse the firm-wide rollup so this can't drift from /admin/drafts.
   // We only need the firm-wide block, but skipping the per-Member top-N
   // sort isn't worth a second code path.
@@ -135,11 +143,11 @@ export async function evaluateTenantAdherence(input: {
   }
 
   // Volume floor — small denominators don't get to fire the alert.
-  if (sentWithDeadline < MIN_DEADLINED_SENDS) {
+  if (sentWithDeadline < minDeadlinedSends) {
     return { result: "skipped_low_volume", sentWithDeadline };
   }
 
-  if (withinWindowRate >= ADHERENCE_THRESHOLD) {
+  if (withinWindowRate >= adherenceThreshold) {
     return { result: "above_threshold", sentWithDeadline, withinWindowRate };
   }
 
@@ -156,7 +164,7 @@ export async function evaluateTenantAdherence(input: {
   // below (dispatchNotification is idempotent per recipient).
   const tenant = await superDb.tenant.findUnique({
     where: { id: input.tenantId },
-    select: { name: true },
+    select: { name: true, slug: true },
   });
   if (!tenant) {
     return { result: "no_data" };
@@ -190,7 +198,7 @@ export async function evaluateTenantAdherence(input: {
   }
 
   const pct = Math.round(withinWindowRate * 100);
-  const threshPct = Math.round(ADHERENCE_THRESHOLD * 100);
+  const threshPct = Math.round(adherenceThreshold * 100);
   const subject = `[${tenant.name}] FCG-window adherence below ${threshPct}% (${pct}% over ${WINDOW_DAYS}d)`;
   const text =
     `The firm's FCG response-window adherence over the last ${WINDOW_DAYS} days is ${pct}%, ` +
@@ -199,7 +207,7 @@ export async function evaluateTenantAdherence(input: {
     `On time: ${sentWithinWindow}\n` +
     `After window: ${sentAfterWindow}\n` +
     `Open + overdue: ${openOverdue}\n\n` +
-    `Open /admin/drafts for the per-Member breakdown. The FCG promised a response window for ` +
+    `Open /${tenant.slug}/admin/drafts for the per-Member breakdown. The FCG promised a response window for ` +
     `each of these threads; this alert means the firm is currently breaking that promise more ` +
     `often than the ${threshPct}% bar permits. One alert per week — escalation will not re-fire ` +
     `until next ISO week even if the rate stays below threshold.`;
@@ -211,8 +219,8 @@ export async function evaluateTenantAdherence(input: {
     sentAfterWindow,
     openOverdue,
     withinWindowRate,
-    threshold: ADHERENCE_THRESHOLD,
-    minDeadlinedSends: MIN_DEADLINED_SENDS,
+    threshold: adherenceThreshold,
+    minDeadlinedSends: minDeadlinedSends,
     isoWeek,
   };
 
@@ -241,7 +249,7 @@ export async function evaluateTenantAdherence(input: {
         subject,
         text,
         summary: `FCG-window adherence ${pct}% over ${WINDOW_DAYS}d (threshold ${threshPct}%)`,
-        href: `/admin/drafts`,
+        href: `/${tenant.slug}/admin/drafts`,
         payload: auditPayload,
       });
       notifiedMembershipIds.push(m.id);
