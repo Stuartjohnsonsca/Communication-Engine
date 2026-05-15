@@ -59,8 +59,11 @@ import {
 } from "@/lib/notifications";
 import { TwoFactorCard } from "./TwoFactorCard";
 import { ConnectChannelButtons } from "./ConnectChannelButtons";
+import { ConnectImapForm } from "./ConnectImapForm";
+import { ExtendReauthButton } from "./ExtendReauthButton";
 import { listChannelAuthsForMembership } from "@/lib/channels/auths";
-import { meta as channelMeta } from "@/lib/channels/registry";
+import { meta as channelMeta, passwordAuthAvailable } from "@/lib/channels/registry";
+import { resolveCronThresholds } from "@/lib/cron-thresholds/resolve";
 
 export default async function AccountPage({
   params,
@@ -88,6 +91,9 @@ export default async function AccountPage({
     // ChannelAuth status. One row per Channel: shows a Connect
     // button if not yet authorised, Disconnect if active.
     channelConnectStatus,
+    // Item 110 — tenant's resolved cron thresholds (we use
+    // `passwordReauthDays` as the floor for ExtendReauthButton).
+    tenantThresholds,
   ] = await Promise.all([
     superDb.membership.findUnique({
       where: { id: ctx.membership.id },
@@ -167,6 +173,10 @@ export default async function AccountPage({
       tenantId: ctx.tenant.id,
       membershipId: ctx.membership.id,
     }),
+    // Item 110 — tenant's IMAP password re-entry floor (default 90),
+    // surfaced to ExtendReauthButton so the dropdown only offers
+    // valid extension durations.
+    resolveCronThresholds(ctx.tenant.id),
   ]);
   if (!member) redirect("/login");
 
@@ -669,11 +679,12 @@ export default async function AccountPage({
           <p className="text-sm text-ink/70">
             Each staff member connects their own mailbox / calendar /
             messaging account. Acumon never sees plaintext provider
-            credentials &mdash; OAuth tokens are encrypted at rest and only
-            decrypted in-memory at handshake time. Disconnect at any time;
-            ingest from your account stops immediately.
+            credentials &mdash; OAuth tokens AND IMAP passwords are encrypted
+            at rest and only decrypted in-memory at handshake time.
+            Disconnect at any time; ingest from your account stops
+            immediately.
           </p>
-          <ul className="space-y-2">
+          <ul className="space-y-3">
             {channelConnectStatus.map((row) => {
               let label = row.channelKind;
               try {
@@ -681,28 +692,67 @@ export default async function AccountPage({
               } catch {
                 /* unknown kind — fall back to raw */
               }
+              const isPasswordKind = passwordAuthAvailable(row.channelKind);
               return (
                 <li
                   key={row.channelId}
-                  className="flex items-start justify-between gap-3 border-t border-ink/5 pt-2 first:border-0 first:pt-0"
+                  className="space-y-2 border-t border-ink/5 pt-2 first:border-0 first:pt-0"
                 >
-                  <div className="text-sm">
-                    <div className="font-medium">{label}</div>
-                    <div className="text-xs text-ink/60">
-                      {row.authId
-                        ? `Connected ${row.connectedAt!.toISOString().slice(0, 10)}` +
-                          (row.expiresAt
-                            ? ` · expires ${row.expiresAt.toISOString().slice(0, 10)}`
-                            : "")
-                        : "Not connected"}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="text-sm">
+                      <div className="font-medium">{label}</div>
+                      <div className="text-xs text-ink/60">
+                        {row.authId
+                          ? `Connected ${row.connectedAt!.toISOString().slice(0, 10)}` +
+                            (row.expiresAt
+                              ? ` · OAuth token expires ${row.expiresAt.toISOString().slice(0, 10)}`
+                              : "") +
+                            (row.nextReauthAt
+                              ? ` · Re-enter password by ${row.nextReauthAt.toISOString().slice(0, 10)}`
+                              : "")
+                          : "Not connected"}
+                      </div>
                     </div>
+                    {!isPasswordKind && (
+                      <ConnectChannelButtons
+                        channelId={row.channelId}
+                        tenantSlug={tenantSlug}
+                        authId={row.authId}
+                        channelKind={label}
+                      />
+                    )}
                   </div>
-                  <ConnectChannelButtons
-                    channelId={row.channelId}
-                    tenantSlug={tenantSlug}
-                    authId={row.authId}
-                    channelKind={label}
-                  />
+                  {isPasswordKind && (
+                    <ConnectImapForm
+                      channelId={row.channelId}
+                      tenantSlug={tenantSlug}
+                      channelKind={label}
+                      imapConfigSummary={row.imapConfigSummary}
+                      hasExistingAuth={row.authId !== null}
+                      hasFailure={row.lastFailureAt !== null}
+                      failureReason={row.lastFailureReason}
+                    />
+                  )}
+                  {isPasswordKind && row.authId && row.nextReauthAt && (
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-ink/60">
+                      <span>
+                        Next re-entry due{" "}
+                        <strong>
+                          {row.nextReauthAt.toISOString().slice(0, 10)}
+                        </strong>
+                        . Extend later if you want a longer interval (cannot
+                        be reduced below the firm&rsquo;s{" "}
+                        {tenantThresholds.passwordReauthDays}-day floor).
+                      </span>
+                      <ExtendReauthButton
+                        authId={row.authId}
+                        channelId={row.channelId}
+                        tenantSlug={tenantSlug}
+                        currentReauthAt={row.nextReauthAt.toISOString()}
+                        tenantFloorDays={tenantThresholds.passwordReauthDays}
+                      />
+                    </div>
+                  )}
                 </li>
               );
             })}

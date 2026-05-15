@@ -5,6 +5,7 @@ import { googleAdapter } from "./google";
 import { slackAdapter } from "./slack";
 import { teamsAdapter } from "./teams";
 import { sharepointAdapter } from "./sharepoint";
+import { imapAdapter } from "./imap";
 import { meta, type ChannelKind } from "../registry";
 
 export type { ChannelAdapter, IngestRow, AdapterContext, Tokens } from "./types";
@@ -51,6 +52,14 @@ export function adapterFor(kind: string): ChannelAdapter {
       // as IN-direction evidence rows; see adapter docstring for
       // why SharePoint isn't a 2-way correspondence channel.
       return sharepointAdapter;
+    case "IMAP":
+      // Item 110 — generic IMAP server (legacy on-prem, smaller
+      // providers without OAuth). Reads per-Member username/password
+      // from `ctx.tokens` (with `kind: "password"`) + per-tenant
+      // server config from `ctx.imapConfig`. ImapAuthError on auth
+      // failure routes to `markPasswordAuthFailed` in `runIngest`'s
+      // per-Member catch.
+      return imapAdapter;
     default:
       // Tier 2 kinds (IMANAGE / ZOOM / WHATSAPP_BUSINESS) have
       // `realOAuthAvailable: NEVER` so connect can't even start;

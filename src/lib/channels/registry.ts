@@ -19,6 +19,11 @@ export type ChannelKind =
   | "IMANAGE"
   | "ZOOM"
   | "WHATSAPP_BUSINESS"
+  /// Item 110 — generic IMAP server (legacy on-prem mail, smaller
+  /// providers without OAuth). Per-tenant server config lives on
+  /// `Channel.imapConfigJson`; per-staff credentials live on
+  /// `ChannelAuth.encryptedTokens` with `authMethod = "PASSWORD"`.
+  | "IMAP"
   | "MOCK";
 
 /**
@@ -265,6 +270,22 @@ export const CHANNEL_KINDS: Record<ChannelKind, ChannelKindMeta> = {
     prdRef: "§10.2",
     realOAuthAvailable: NEVER,
   },
+  /// Item 110 — generic IMAP server. NOT OAuth (provider rejects /
+  /// doesn't support OAuth). Per-tenant `Channel.imapConfigJson`
+  /// holds the server URL/port/TLS; per-staff `ChannelAuth` rows with
+  /// `authMethod = "PASSWORD"` hold the username + encrypted
+  /// password. Periodic re-entry every `tenant.passwordReauthDays`
+  /// (default 90); see `passwordAuthAvailable()` for the discriminator
+  /// the UI uses to swap the OAuth Connect button for an IMAP form.
+  IMAP: {
+    kind: "IMAP",
+    label: "Generic IMAP mail server",
+    covers: ["EMAIL"],
+    tier: 2,
+    scopeDefault: [],
+    prdRef: "§10.2",
+    realOAuthAvailable: NEVER,
+  },
   MOCK: {
     kind: "MOCK",
     label: "Mock channel (demo / sandbox)",
@@ -277,6 +298,16 @@ export const CHANNEL_KINDS: Record<ChannelKind, ChannelKindMeta> = {
 };
 
 export const ALL_KINDS: ChannelKindMeta[] = Object.values(CHANNEL_KINDS);
+
+/**
+ * Item 110 — discriminator for the /account UI: should this kind be
+ * connected via the IMAP password form (true) or the OAuth flow
+ * (false)? Today only `IMAP` returns true. Future generic-credential
+ * kinds (e.g. legacy iManage with username+password) plug in here.
+ */
+export function passwordAuthAvailable(kind: string): boolean {
+  return kind === "IMAP";
+}
 
 export function meta(kind: string): ChannelKindMeta {
   const m = CHANNEL_KINDS[kind as ChannelKind];

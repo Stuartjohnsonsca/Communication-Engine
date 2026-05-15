@@ -81,15 +81,50 @@ export async function runIngest(channelId: string): Promise<{
     authId: string | null;
     membershipId: string | null;
     scope: string | null;
+    /// Item 110 — discriminator. OAUTH passes go through
+    /// `ensureFreshTokens` (refresh-driven). PASSWORD passes pull
+    /// credentials directly via `getPasswordCreds` and skip the
+    /// refresh path entirely.
+    authMethod: "OAUTH" | "PASSWORD";
   };
   const passes: Pass[] =
     activeAuths.length === 0
-      ? [{ authId: null, membershipId: null, scope: null }]
+      ? [
+          {
+            authId: null,
+            membershipId: null,
+            scope: null,
+            authMethod: "OAUTH",
+          },
+        ]
       : activeAuths.map((a) => ({
           authId: a.id,
           membershipId: a.membershipId,
           scope: a.scope,
+          authMethod: (a.authMethod === "PASSWORD" ? "PASSWORD" : "OAUTH"),
         }));
+
+  // Item 110 — parse Channel.imapConfigJson once for IMAP channels.
+  // Adapter receives it via AdapterContext.imapConfig.
+  let imapConfig: import("./adapters/types").ImapServerConfig | undefined;
+  if (channel.kind === "IMAP" && channel.imapConfigJson) {
+    const cfg = channel.imapConfigJson as {
+      imapHost?: string;
+      imapPort?: number;
+      imapSecurity?: string;
+    };
+    if (
+      cfg.imapHost &&
+      typeof cfg.imapPort === "number" &&
+      (cfg.imapSecurity === "TLS" || cfg.imapSecurity === "STARTTLS" || cfg.imapSecurity === "NONE")
+    ) {
+      imapConfig = {
+        imapHost: cfg.imapHost,
+        imapPort: cfg.imapPort,
+        imapSecurity: cfg.imapSecurity,
+      };
+    }
+  }
 
   let totalFetched = 0;
   let totalInserted = 0;
@@ -112,12 +147,29 @@ export async function runIngest(channelId: string): Promise<{
     let tokens: Tokens = {};
     let refreshFailed = false;
     if (pass.authId) {
-      const refresh = await ensureFreshTokens(pass.authId);
-      if (refresh.result === "failed") {
-        refreshFailed = true;
-        anyRefreshFailed = true;
+      // Item 110 — branch on authMethod. OAUTH uses the existing
+      // refresh path; PASSWORD pulls plaintext credentials directly
+      // (no refresh — re-auth is User-driven via /account, not
+      // automatic).
+      if (pass.authMethod === "PASSWORD") {
+        const { getPasswordCreds } = await import("./password-creds");
+        const creds = await getPasswordCreds(pass.authId);
+        if (creds) {
+          tokens = creds;
+        } else {
+          // No usable creds — skip this pass. The /account UI
+          // surfaces the broken state via lastFailureAt.
+          refreshFailed = true;
+          anyRefreshFailed = true;
+        }
       } else {
-        tokens = refresh.tokens;
+        const refresh = await ensureFreshTokens(pass.authId);
+        if (refresh.result === "failed") {
+          refreshFailed = true;
+          anyRefreshFailed = true;
+        } else {
+          tokens = refresh.tokens;
+        }
       }
     }
 
@@ -130,11 +182,25 @@ export async function runIngest(channelId: string): Promise<{
           membershipId: pass.membershipId,
           tokens,
           scope: pass.scope ?? undefined,
+          // Item 110 — IMAP channels need the per-tenant server
+          // config; other adapters ignore this field.
+          imapConfig,
         });
       } catch (e) {
-        // Per-Member adapter failure: log and continue with the
-        // next Member. One Member's transient API outage does not
-        // block another Member's ingest.
+        // Item 110 — IMAP auth failure (typed `ImapAuthError`) gets
+        // routed to `markPasswordAuthFailed` so /account surfaces
+        // the broken state + the Member gets a mandatory
+        // `channel_auth_failed` notification. Other thrown errors
+        // (transient API outage) just log + continue.
+        const isImapAuthError =
+          e instanceof Error && e.name === "ImapAuthError";
+        if (isImapAuthError && pass.authId && pass.authMethod === "PASSWORD") {
+          const { markPasswordAuthFailed } = await import("./password-creds");
+          await markPasswordAuthFailed({
+            authId: pass.authId,
+            reason: e.message,
+          });
+        }
         reportError(e, {
           route: "lib/channels/ingest",
           tenantId: channel.tenantId,

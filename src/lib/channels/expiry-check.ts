@@ -5,46 +5,45 @@ import { reportError } from "@/lib/observability";
 
 /**
  * Post-PRD hardening item 53 — pre-emptive channel-auth expiry warning.
+ * Extended by item 110 to also handle PASSWORD-method auths.
  *
  * OAuth tokens on connected channels (Google Workspace, Microsoft 365,
- * Slack) expire silently if not refreshed. When that happens the
- * ingestion path stops fetching mail; with item 52's auto-draft
- * activity card the operator sees "0 candidates" forever but has no
- * upstream breadcrumb to the expiring token. This sweep closes that
- * loop by warning the owning Membership before the token dies.
+ * Slack, Teams, SharePoint) expire silently if not refreshed.
+ * Item 110 added a second class of auths — PASSWORD-method (IMAP) —
+ * where the deadline is platform-enforced (`nextReauthAt`) rather
+ * than provider-stamped (`expiresAt`).
  *
- * Two thresholds, fired independently:
- *   - **7-day warning**: token expires inside (now, now+7d]. One
- *     dispatch per (ChannelAuth, "7d"); subsequent daily cron runs are
- *     no-ops because the NotificationDispatch row already exists.
- *   - **1-day urgent**: token expires inside (now, now+1d]. Same
- *     dedupe, separate key — a token that crosses both thresholds
- *     fires both warnings (7d first, then 1d when it gets close).
+ * Both paths fire the SAME notification kind (`channel_auth_expiring`)
+ * because the User-facing semantic is identical: "your connection
+ * needs re-authorisation soon, click here." The thresholds differ
+ * because re-entry friction differs:
+ *   - **OAuth**: 7d warning, 1d urgent. Re-auth = one click on the
+ *     consent screen — low friction so the warning window can be
+ *     short.
+ *   - **PASSWORD**: 14d warning, 3d urgent. Re-auth = look up
+ *     password in a manager OR ask IT — higher friction so the
+ *     warning window starts wider.
  *
- * Skip conditions:
- *   - `revokedAt` is set (operator already disconnected the channel).
- *   - `expiresAt` is null (some adapters don't set an explicit expiry).
- *   - `expiresAt` is already in the past (too late to warn; the
- *     refresh-failed path emits `CHANNEL_TOKEN_REFRESH_FAILED`
- *     separately, and the operator will see ingest failing in the
- *     channels table regardless).
- *   - `membershipId` is null (orphan auth; can't address the email).
- *   - The owning Membership is not ACTIVE (lifecycle-revoked /
- *     leaver-frozen / anonymised / suspended). Same gate as the
- *     drafting path — alerting a leaver about a token expiry is
- *     useless and forwarding goes to nobody.
+ * Skip conditions (apply to both paths):
+ *   - `revokedAt` is set.
+ *   - `membershipId` is null.
+ *   - The owning Membership is not ACTIVE.
+ * OAuth-specific skips:
+ *   - `expiresAt` is null OR already past.
+ * PASSWORD-specific skips:
+ *   - `nextReauthAt` is null OR already past (the
+ *     `markPasswordAuthFailed` path handles "broken NOW"
+ *     separately via `channel_auth_failed`).
  *
  * Cron-driven; no operator entry point. Run daily.
- *
- * Notification kind is `channel_auth_expiring` — mandatory (not in
- * `OPT_OUTABLE_KINDS`), because muting it defeats the engine's "no
- * missed emails" premise.
  */
 
-export type ExpiryThreshold = "7d" | "1d";
+export type ExpiryThreshold = "7d" | "1d" | "14d" | "3d";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 
 export type ChannelAuthExpiryCheckResult = {
   /// ChannelAuth rows inspected this pass (across all tenants).
@@ -53,7 +52,7 @@ export type ChannelAuthExpiryCheckResult = {
   /// day produces 0 (or only the rows that crossed a threshold since
   /// the last run).
   warned: number;
-  /// Per-threshold counters.
+  /// Per-threshold counters. OAuth uses 7d/1d; PASSWORD uses 14d/3d.
   warnedByThreshold: Record<ExpiryThreshold, number>;
   /// Dispatch already existed for (channelAuth, threshold) — counted
   /// for visibility but not re-actioned.
@@ -72,14 +71,22 @@ export async function runChannelAuthExpiryCheck(opts?: {
   tenantId?: string;
 }): Promise<ChannelAuthExpiryCheckResult> {
   const now = opts?.now ?? new Date();
-  const horizon = new Date(now.getTime() + SEVEN_DAYS_MS);
+  const oauthHorizon = new Date(now.getTime() + SEVEN_DAYS_MS);
   const oneDayBoundary = new Date(now.getTime() + ONE_DAY_MS);
+  const passwordHorizon = new Date(now.getTime() + FOURTEEN_DAYS_MS);
+  const threeDayBoundary = new Date(now.getTime() + THREE_DAYS_MS);
 
   const auths = await superDb.channelAuth.findMany({
     where: {
       revokedAt: null,
-      expiresAt: { gt: now, lte: horizon },
       ...(opts?.tenantId ? { tenantId: opts.tenantId } : {}),
+      // Item 110 — match BOTH OAuth (expiresAt window) AND password
+      // (nextReauthAt window). One Prisma query with an OR — the
+      // Member-side filter that follows is identical for both paths.
+      OR: [
+        { authMethod: "OAUTH", expiresAt: { gt: now, lte: oauthHorizon } },
+        { authMethod: "PASSWORD", nextReauthAt: { gt: now, lte: passwordHorizon } },
+      ],
     },
     include: {
       channel: { select: { id: true, kind: true, tenantId: true } },
@@ -100,7 +107,7 @@ export async function runChannelAuthExpiryCheck(opts?: {
   const result: ChannelAuthExpiryCheckResult = {
     scanned: auths.length,
     warned: 0,
-    warnedByThreshold: { "7d": 0, "1d": 0 },
+    warnedByThreshold: { "7d": 0, "1d": 0, "14d": 0, "3d": 0 },
     alreadyWarned: 0,
     skipped: 0,
     errored: 0,
@@ -124,26 +131,37 @@ export async function runChannelAuthExpiryCheck(opts?: {
         continue;
       }
 
-      const expiresAt = auth.expiresAt!;
-      const threshold: ExpiryThreshold = expiresAt <= oneDayBoundary ? "1d" : "7d";
+      // Item 110 — branch on authMethod for the deadline source +
+      // threshold ladder. OAuth uses provider-stamped `expiresAt`
+      // (7d/1d), PASSWORD uses platform-set `nextReauthAt` (14d/3d).
+      const isPassword = auth.authMethod === "PASSWORD";
+      const deadline = isPassword ? auth.nextReauthAt! : auth.expiresAt!;
+      let threshold: ExpiryThreshold;
+      if (isPassword) {
+        threshold = deadline <= threeDayBoundary ? "3d" : "14d";
+      } else {
+        threshold = deadline <= oneDayBoundary ? "1d" : "7d";
+      }
       const dedupeKey = `${auth.id}:${threshold}`;
       const daysUntilExpiry = Math.max(
         0,
-        Math.ceil((expiresAt.getTime() - now.getTime()) / ONE_DAY_MS),
+        Math.ceil((deadline.getTime() - now.getTime()) / ONE_DAY_MS),
       );
 
-      const subject =
-        threshold === "1d"
-          ? `Urgent: ${auth.channel.kind} channel token expires in ~24 hours`
-          : `${auth.channel.kind} channel token expires in ~${daysUntilExpiry} days`;
-      const text =
-        threshold === "1d"
-          ? `Your ${auth.channel.kind} channel connection will expire on ${expiresAt.toISOString()}. ` +
-            `Reconnect within 24 hours or ingest will stop and the engine will produce no new drafts ` +
-            `for messages on that channel. Open Channels → Connect to refresh.`
-          : `Heads up: your ${auth.channel.kind} channel connection expires on ${expiresAt.toISOString()} ` +
-            `(~${daysUntilExpiry} days). Reconnecting now prevents an interruption — ingest stops the moment ` +
-            `the OAuth token expires. Open Channels → Connect to refresh.`;
+      const reauthCallToAction = isPassword
+        ? "Open /account → your IMAP connection → re-enter your password to extend by another cycle."
+        : "Open Channels → Connect to refresh.";
+      const isUrgent = threshold === "1d" || threshold === "3d";
+      const subject = isUrgent
+        ? `Urgent: ${auth.channel.kind} channel re-authorisation due in ~${daysUntilExpiry} day${daysUntilExpiry === 1 ? "" : "s"}`
+        : `${auth.channel.kind} channel needs re-authorisation in ~${daysUntilExpiry} days`;
+      const text = isUrgent
+        ? `Your ${auth.channel.kind} channel connection requires re-authorisation by ${deadline.toISOString()}. ` +
+          `Without it, ingest will stop and the engine will produce no new drafts for messages on that channel. ` +
+          reauthCallToAction
+        : `Heads up: your ${auth.channel.kind} channel connection needs re-authorisation by ${deadline.toISOString()} ` +
+          `(~${daysUntilExpiry} days). Re-authorising now prevents an interruption. ` +
+          reauthCallToAction;
 
       const dispatch = await dispatchNotification({
         tenantId: auth.tenantId,
@@ -154,13 +172,18 @@ export async function runChannelAuthExpiryCheck(opts?: {
         subject,
         text,
         summary: subject,
-        href: `/admin/channels`,
+        // Item 110 — point to /account for password (the User
+        // re-enters there). OAuth path retains /admin/channels
+        // because the FIRM_ADMIN-side connect button lives there
+        // historically.
+        href: isPassword ? `/account` : `/admin/channels`,
         payload: {
           channelAuthId: auth.id,
           channelId: auth.channelId,
           channelKind: auth.channel.kind,
+          authMethod: auth.authMethod,
           threshold,
-          expiresAt: expiresAt.toISOString(),
+          expiresAt: deadline.toISOString(),
           daysUntilExpiry,
         },
       });
@@ -187,8 +210,9 @@ export async function runChannelAuthExpiryCheck(opts?: {
           channelId: auth.channelId,
           channelKind: auth.channel.kind,
           membershipId: auth.membership.id,
+          authMethod: auth.authMethod,
           threshold,
-          expiresAt: expiresAt.toISOString(),
+          expiresAt: deadline.toISOString(),
           daysUntilExpiry,
           dispatchId: dispatch.dispatchId ?? null,
         },

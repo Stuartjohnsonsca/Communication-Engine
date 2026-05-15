@@ -374,6 +374,11 @@ export const KINDS_WITH_REAL_ADAPTER: ReadonlySet<ChannelKind> = new Set([
   "SLACK",
   "TEAMS",
   "SHAREPOINT",
+  // Item 110 — IMAP isn't OAuth-capable so it doesn't appear on
+  // /admin/channels/oauth-apps; this set is queried by the
+  // adapter-pending UI badge to know whether the kind has real
+  // ingest. IMAP has a real adapter (item 110), so it belongs.
+  "IMAP",
 ]);
 
 export function isAdapterImplemented(kind: ChannelKind): boolean {

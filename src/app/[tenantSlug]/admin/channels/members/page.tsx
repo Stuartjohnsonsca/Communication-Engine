@@ -117,14 +117,36 @@ export default async function ChannelMembersPage({
                     className="flex items-start justify-between gap-3 border-t border-zinc-200 pt-2 first:border-0 first:pt-0 dark:border-zinc-800"
                   >
                     <div className="text-sm">
-                      <div className="font-medium">{a.memberName}</div>
+                      <div className="flex items-center gap-2 font-medium">
+                        {a.memberName}
+                        {/* Item 110 — auth-method badge so admin sees at a glance whether
+                            this connection is OAuth (provider-managed expiry) or
+                            password (platform-enforced re-entry). */}
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                            a.authMethod === "PASSWORD"
+                              ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200"
+                              : "bg-blue-100 text-blue-900 dark:bg-blue-900/30 dark:text-blue-200"
+                          }`}
+                        >
+                          {a.authMethod}
+                        </span>
+                        {a.lastFailureAt && (
+                          <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-900 dark:bg-red-900/30 dark:text-red-200">
+                            FAILING
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-zinc-600 dark:text-zinc-400">
                         {a.memberEmail ?? "(no email)"}
                       </div>
                       <div className="text-xs text-zinc-500">
                         Connected {a.connectedAt.toISOString().slice(0, 10)}
                         {a.expiresAt
-                          ? ` · expires ${a.expiresAt.toISOString().slice(0, 10)}`
+                          ? ` · OAuth token expires ${a.expiresAt.toISOString().slice(0, 10)}`
+                          : ""}
+                        {a.nextReauthAt
+                          ? ` · password re-entry due ${a.nextReauthAt.toISOString().slice(0, 10)}`
                           : ""}
                       </div>
                     </div>

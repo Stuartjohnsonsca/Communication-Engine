@@ -62,6 +62,13 @@ const KEYS: ReadonlyArray<{
     description:
       "Tenants with fewer than this many escalations in the 7-day window skip the firm_*_ack_rate alerts. Default 5.",
   },
+  {
+    key: "passwordReauthDays",
+    label: "IMAP password re-entry cadence",
+    unit: "days",
+    description:
+      "How often staff must re-enter their IMAP password (PASSWORD-method ChannelAuth only — OAuth channels are unaffected). Individual staff can extend their personal deadline LATER but never below this floor. Default 90 days. Tightening pushes a re-entry prompt to every active IMAP user; loosening lets existing extensions stand. Bounds: 30–365.",
+  },
 ];
 
 export default async function SensitivityPage({
@@ -96,6 +103,7 @@ export default async function SensitivityPage({
       staleThresholdHours: null,
       minDeadlinedSends: null,
       minEscalatedForAlert: null,
+      passwordReauthDays: null,
     };
     try {
       for (const { key } of KEYS) {
@@ -122,6 +130,7 @@ export default async function SensitivityPage({
       staleThresholdHours: prior?.staleThresholdHours ?? null,
       minDeadlinedSends: prior?.minDeadlinedSends ?? null,
       minEscalatedForAlert: prior?.minEscalatedForAlert ?? null,
+      passwordReauthDays: prior?.passwordReauthDays ?? null,
     };
     const changes: Array<{
       key: CronThresholdKey;

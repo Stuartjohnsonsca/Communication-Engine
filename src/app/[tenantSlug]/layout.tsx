@@ -213,6 +213,15 @@ export default async function TenantLayout({
       label: t("nav.oauthApps"),
     });
   }
+  // Post-PRD hardening item 110 — IMAP server config (sibling to
+  // OAuth apps for legacy / on-prem mail servers without OAuth).
+  // Same RBAC gate as channel CRUD.
+  if (hasPermission(ctx.membership.role, "channels:write")) {
+    nav.push({
+      href: `/${tenantSlug}/admin/channels/imap-servers`,
+      label: t("nav.imapServers"),
+    });
+  }
   // Post-PRD hardening item 16 — programmatic API keys. FIRM_ADMIN
   // creates / revokes; FCT can read (same posture as webhooks).
   if (hasPermission(ctx.membership.role, "apikeys:read")) {

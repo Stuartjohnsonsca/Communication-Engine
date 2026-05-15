@@ -36,6 +36,23 @@ export type MemberAuthStatus = {
   connectedAt: Date | null;
   expiresAt: Date | null;
   scope: string | null;
+  /// Item 110 — auth method discriminator. Drives /account UI to
+  /// swap the OAuth Connect button for an IMAP form. Always
+  /// "OAUTH" for legacy rows (default schema value).
+  authMethod: "OAUTH" | "PASSWORD";
+  /// Item 110 — PASSWORD-only. The platform-enforced re-entry
+  /// deadline. Surfaced on /account so the User sees when their
+  /// next password prompt is due.
+  nextReauthAt: Date | null;
+  /// Item 110 — PASSWORD-only. Set by ingest when adapter hits an
+  /// auth failure. Triggers the inline red prompt on /account.
+  lastFailureAt: Date | null;
+  lastFailureReason: string | null;
+  /// Item 110 — IMAP server config (host/port/security) for the
+  /// channel, parsed from `Channel.imapConfigJson`. Surfaced so the
+  /// User can verify they're entering creds for the right server.
+  /// Null for non-IMAP channels.
+  imapConfigSummary: string | null;
 };
 
 /**
@@ -75,6 +92,17 @@ export async function listChannelAuthsForMembership(input: {
       },
       orderBy: { createdAt: "desc" },
     });
+    let imapConfigSummary: string | null = null;
+    if (c.kind === "IMAP" && c.imapConfigJson) {
+      const cfg = c.imapConfigJson as {
+        imapHost?: string;
+        imapPort?: number;
+        imapSecurity?: string;
+      };
+      if (cfg.imapHost) {
+        imapConfigSummary = `${cfg.imapHost}:${cfg.imapPort ?? "?"} (${cfg.imapSecurity ?? "?"})`;
+      }
+    }
     results.push({
       channelId: c.id,
       channelKind: c.kind,
@@ -82,6 +110,11 @@ export async function listChannelAuthsForMembership(input: {
       connectedAt: auth?.createdAt ?? null,
       expiresAt: auth?.expiresAt ?? null,
       scope: auth?.scope ?? null,
+      authMethod: (auth?.authMethod === "PASSWORD" ? "PASSWORD" : "OAUTH"),
+      nextReauthAt: auth?.nextReauthAt ?? null,
+      lastFailureAt: auth?.lastFailureAt ?? null,
+      lastFailureReason: auth?.lastFailureReason ?? null,
+      imapConfigSummary,
     });
   }
   return results;
@@ -104,6 +137,15 @@ export async function listActiveAuthsForChannel(input: {
     connectedAt: Date;
     expiresAt: Date | null;
     scope: string | null;
+    /// Item 110 — auth method discriminator surfaced for the
+    /// /admin/channels/members roster badge.
+    authMethod: "OAUTH" | "PASSWORD";
+    /// Item 110 — PASSWORD-only. Surfaced so a FIRM_ADMIN sees
+    /// who's overdue for re-entry at a glance.
+    nextReauthAt: Date | null;
+    /// Item 110 — PASSWORD-only. Surfaced so a FIRM_ADMIN can
+    /// triage broken connections without DM-ing every staff member.
+    lastFailureAt: Date | null;
   }>
 > {
   const rows = await superDb.channelAuth.findMany({
@@ -132,6 +174,9 @@ export async function listActiveAuthsForChannel(input: {
       connectedAt: r.createdAt,
       expiresAt: r.expiresAt,
       scope: r.scope,
+      authMethod: r.authMethod === "PASSWORD" ? "PASSWORD" : "OAUTH",
+      nextReauthAt: r.nextReauthAt,
+      lastFailureAt: r.lastFailureAt,
     }));
 }
 

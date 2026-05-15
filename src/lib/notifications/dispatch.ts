@@ -54,6 +54,20 @@ export type NotificationKind =
   /// stops. Not opt-outable: a muted warning here defeats the engine's
   /// "no missed emails" premise.
   | "channel_auth_expiring"
+  /// Post-PRD item 110 — mandatory operational alert, sibling to
+  /// `channel_auth_expiring` but for the FAILURE moment (not the
+  /// expiring-soon moment). When ingest hits an IMAP auth failure
+  /// — most often a password reset upstream by the provider —
+  /// `markPasswordAuthFailed` fires this notification immediately
+  /// to the owning Member. Distinct kind from `channel_auth_expiring`
+  /// because the operational urgency differs ("you have 7 days"
+  /// vs "ingest is broken right now"). Not opt-outable: a muted
+  /// failure means the User won't know their mailbox stopped
+  /// ingesting until adherence/sentiment scores quietly degrade.
+  /// dedupeKey = `auth-failed:<authId>:<lastFailureAt-day>` so a
+  /// chronically-failing auth re-fires daily until fixed (vs
+  /// every 5min auto-draft tick).
+  | "channel_auth_failed"
   /// Post-PRD item 54 — mandatory operational alert. A Draft's
   /// `fcgWindowDeadline` has passed without send/discard; the FCG
   /// promised "respond within N hours" and the engine is now

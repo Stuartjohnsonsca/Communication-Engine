@@ -515,6 +515,31 @@ enum AuditEventType {
   /// deployments) and otherwise return a configuration error to
   /// the User. Payload: `{ channelKind, hadCredentials: true }`.
   CHANNEL_OAUTH_APP_DELETED
+  /// Post-PRD hardening item 110 — User entered (or re-entered) IMAP
+  /// credentials on /account. Fresh-connect AND re-entry both write
+  /// this event so the chain captures every credential rotation
+  /// without ambiguity. Payload: `{ channelId, channelKind,
+  /// authMethod: "PASSWORD", isFreshConnect: boolean, nextReauthAt }`.
+  /// Distinct from `CHANNEL_AUTHORISED` (OAuth path) because the
+  /// security posture differs — passwords are stored at rest by us;
+  /// OAuth tokens are revocable upstream by the provider.
+  CHANNEL_PASSWORD_AUTH_REENTERED
+  /// Post-PRD hardening item 110 — ingest detected IMAP auth failure
+  /// (most likely a password reset upstream, less commonly an account
+  /// lockout). Payload: `{ channelId, authId, membershipId, reason }`.
+  /// Triggers mandatory `channel_auth_failed` notification + inline
+  /// prompt on /account. The `reason` is the `imapflow` error
+  /// classification truncated to 500 chars so a sequence of failures
+  /// is correlatable without exposing credentials.
+  CHANNEL_PASSWORD_AUTH_FAILED
+  /// Post-PRD hardening item 110 — User extended their personal
+  /// `nextReauthAt` later than the previous deadline. Audit per
+  /// extension so a chain reader can answer "did Carol keep
+  /// extending past the firm's stated cadence?". Payload:
+  /// `{ channelId, authId, priorReauthAt, nextReauthAt, deltaDays }`.
+  /// Reduction is server-rejected — only extensions reach this
+  /// event.
+  CHANNEL_PASSWORD_REAUTH_EXTENDED
   /// Post-PRD hardening item 104 — a Membership-scoped ChannelAuth was
   /// revoked. Distinct from the historic `CHANNEL_AUTHORISED` (the
   /// connect side) so the chain reader can audit "who lost access
@@ -1528,10 +1553,19 @@ model AuditEvent {
 model Channel {
   id           String   @id @default(cuid())
   tenantId     String
-  kind         String // M365 | GOOGLE | SLACK | SHAREPOINT | IMANAGE | TEAMS | ZOOM | WHATSAPP_BUSINESS
+  kind         String // M365 | GOOGLE | SLACK | SHAREPOINT | IMANAGE | TEAMS | ZOOM | WHATSAPP_BUSINESS | IMAP
   scope        Json?
   status       String   @default("INACTIVE")
   dpiaApproved Boolean  @default(false)
+  /// Item 110 — IMAP server config when kind = "IMAP". Set by FIRM_ADMIN
+  /// on /admin/channels/imap-servers. JSON shape:
+  ///   { imapHost: string, imapPort: number,
+  ///     imapSecurity: "TLS" | "STARTTLS" | "NONE" }
+  /// Per-staff credentials are stored separately on
+  /// `ChannelAuth.encryptedTokens` (see `authMethod = "PASSWORD"`),
+  /// so multiple staff each connect their own mailbox to the same
+  /// shared IMAP server.
+  imapConfigJson Json?
   createdAt    DateTime @default(now())
 
   tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1550,12 +1584,34 @@ model ChannelAuth {
   scope           String?   @db.Text
   expiresAt       DateTime?
   revokedAt       DateTime?
+  /// Item 110 — discriminator. OAUTH (default) = existing OAuth path
+  /// (encryptedTokens carries the OAuth access/refresh JSON, expiresAt
+  /// is the provider's stamp, refresh-driven). PASSWORD = generic-IMAP
+  /// path (encryptedTokens carries `{username, password}` JSON,
+  /// nextReauthAt is the platform-enforced re-entry deadline, no
+  /// auto-refresh — the User must come back and re-enter credentials).
+  authMethod        String    @default("OAUTH")
+  /// PASSWORD-only. Deadline at which the User must re-enter their
+  /// password. Default on insert = createdAt + tenant.passwordReauthDays
+  /// (or platform default 90d if NULL). User extension: User can update
+  /// this to a LATER date only; the API rejects earlier dates AND
+  /// rejects extensions that would put the next deadline below
+  /// `now + tenantReauthDays` (the floor is enforced on every change,
+  /// not just initial set).
+  nextReauthAt      DateTime?
+  /// PASSWORD-only. Set by ingest when IMAP login fails (auth error,
+  /// most often a password reset upstream). Triggers mandatory
+  /// `channel_auth_failed` notification + inline prompt on /account.
+  /// Cleared on successful re-entry via `setPasswordCreds`.
+  lastFailureAt     DateTime?
+  lastFailureReason String?   @db.Text
   createdAt       DateTime  @default(now())
 
   channel    Channel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
   membership Membership? @relation(fields: [membershipId], references: [id])
 
   @@index([tenantId, channelId])
+  @@index([nextReauthAt])
 }
 
 model IngestedMessage {
@@ -3481,6 +3537,13 @@ model TenantCronThreshold {
   /// floor for the firm-wide ack-rate crons (sentiment + adherence
   /// pillars share this knob — see item 95).
   minEscalatedForAlert     Int?
+  /// Item 110 — per-tenant default for the IMAP password re-entry
+  /// cadence (PASSWORD-method ChannelAuths only). NULL = platform
+  /// default (90 days). Bounds: 30–365. FIRM_ADMIN configures on
+  /// /admin/sensitivity. Individual Users can extend their personal
+  /// `ChannelAuth.nextReauthAt` LATER than this default but never
+  /// to a date that would put them under the floor.
+  passwordReauthDays       Int?
   updatedAt                DateTime @updatedAt
   updatedByMembershipId    String?
 

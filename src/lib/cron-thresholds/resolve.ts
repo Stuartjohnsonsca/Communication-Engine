@@ -33,9 +33,19 @@ export type CronThresholdKey =
   | "ackRateThreshold"
   | "staleThresholdHours"
   | "minDeadlinedSends"
-  | "minEscalatedForAlert";
+  | "minEscalatedForAlert"
+  /// Item 110 — IMAP password re-entry cadence (PASSWORD-method
+  /// ChannelAuths only). Default 90 days. Bounds 30–365.
+  | "passwordReauthDays";
 
 export type CronThresholds = Record<CronThresholdKey, number>;
+
+/// Item 110 — platform default for the password re-entry cadence.
+/// 90 days matches Stuart's stated "every 3 months" target +
+/// industry-standard for compliance-minded credential rotation.
+/// Per-tenant override widens or tightens via
+/// `TenantCronThreshold.passwordReauthDays`.
+export const PASSWORD_REAUTH_DAYS_DEFAULT = 90;
 
 /**
  * Platform defaults — exported so the UI can render "Default: X"
@@ -67,6 +77,7 @@ export const PLATFORM_DEFAULTS: CronThresholds = (() => {
     staleThresholdHours: SENTIMENT_STALE_THRESHOLD_HOURS,
     minDeadlinedSends: MIN_DEADLINED_SENDS,
     minEscalatedForAlert: SENTIMENT_MIN_ESCALATED_FOR_ALERT,
+    passwordReauthDays: PASSWORD_REAUTH_DAYS_DEFAULT,
   };
 })();
 
@@ -90,6 +101,10 @@ export const BOUNDS = {
   staleThresholdHours: { min: 1, max: 168 },
   minDeadlinedSends: { min: 1, max: 1000 },
   minEscalatedForAlert: { min: 1, max: 1000 },
+  /// Item 110 — 30 days minimum (anything less = friction overload
+  /// for compliance staff), 365 days maximum (a year-long unprompted
+  /// password is governance-poor regardless of risk appetite).
+  passwordReauthDays: { min: 30, max: 365 },
 } as const;
 
 export type CronThresholdRow = {
@@ -98,6 +113,7 @@ export type CronThresholdRow = {
   staleThresholdHours: number | null;
   minDeadlinedSends: number | null;
   minEscalatedForAlert: number | null;
+  passwordReauthDays: number | null;
 };
 
 /**
@@ -128,6 +144,7 @@ export function mergeWithDefaults(row: CronThresholdRow | null): CronThresholds 
     minDeadlinedSends: row.minDeadlinedSends ?? PLATFORM_DEFAULTS.minDeadlinedSends,
     minEscalatedForAlert:
       row.minEscalatedForAlert ?? PLATFORM_DEFAULTS.minEscalatedForAlert,
+    passwordReauthDays: row.passwordReauthDays ?? PLATFORM_DEFAULTS.passwordReauthDays,
   };
 }
 
