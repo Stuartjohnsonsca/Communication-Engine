@@ -1,17 +1,28 @@
 import { createTransport } from "nodemailer";
 import { reportError } from "@/lib/observability";
+import { isGraphMailerConfigured, sendViaGraph } from "./graph-mailer";
 
 /**
- * Notification mailer — uses the same EMAIL_SERVER + EMAIL_FROM env vars as
- * NextAuth's sign-in code email so deploys that are already configured for
- * passwordless auth get notification emails for free. When the env isn't
- * set we return SKIPPED_NO_EMAIL_SERVER so callers can still write the
- * NotificationDispatch row + the NotificationInbox row — the in-app inbox
- * is the fallback channel when SMTP isn't configured (eg. local dev).
+ * Notification mailer — sends transactional email to internal
+ * recipients (User's work email or the FCT, never to a counterparty —
+ * aligns with `feedback_drafts_only_post_send_check.md`).
  *
- * Internal-only — these messages go to the User's own work email or the
- * FCT, never to a counterparty. Aligns with the no-send-to-counterparty
- * invariant (`feedback_drafts_only_post_send_check.md`).
+ * Transport precedence (item 111):
+ *   1. Microsoft Graph if GRAPH_TENANT_ID + GRAPH_CLIENT_ID +
+ *      GRAPH_CLIENT_SECRET + GRAPH_FROM are all set. Recommended for
+ *      M365-shop tenants where Security Defaults / Conditional Access
+ *      block SMTP AUTH.
+ *   2. SMTP (nodemailer) if EMAIL_SERVER + EMAIL_FROM are set. The
+ *      original transport — still works for non-M365 setups (Resend,
+ *      Postmark, SendGrid, raw SMTP) and as a fallback during a
+ *      Graph migration window.
+ *   3. SKIPPED_NO_EMAIL_SERVER if neither is configured. Callers
+ *      still write the NotificationDispatch + NotificationInbox rows
+ *      so the in-app inbox is the fallback channel (local dev).
+ *
+ * Both transports return the same SendResult shape so callers don't
+ * need to know which is in use. The decision is per-call (re-checks
+ * env on each send) so a config change doesn't require a restart.
  */
 
 export type SendInput = {
@@ -26,12 +37,26 @@ export type SendResult =
   | { status: "FAILED"; errorMessage: string }
   | { status: "SKIPPED_NO_EMAIL_SERVER" };
 
-export function isMailerConfigured(): boolean {
+export function isSmtpMailerConfigured(): boolean {
   return !!process.env.EMAIL_SERVER && !!process.env.EMAIL_FROM;
 }
 
+/**
+ * True if EITHER transport (Graph or SMTP) is configured. Callers
+ * that need to know "will this email actually send?" check this.
+ */
+export function isMailerConfigured(): boolean {
+  return isGraphMailerConfigured() || isSmtpMailerConfigured();
+}
+
 export async function sendNotificationEmail(input: SendInput): Promise<SendResult> {
-  if (!isMailerConfigured()) {
+  // Prefer Graph if configured — it's the recommended transport on
+  // M365 tenants where SMTP AUTH is blocked.
+  if (isGraphMailerConfigured()) {
+    const html = input.html ?? renderDefaultHtml(input.subject, input.text);
+    return sendViaGraph({ ...input, html });
+  }
+  if (!isSmtpMailerConfigured()) {
     return { status: "SKIPPED_NO_EMAIL_SERVER" };
   }
   try {

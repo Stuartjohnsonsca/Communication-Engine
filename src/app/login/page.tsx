@@ -15,7 +15,12 @@ async function LoginInner({
   searchParams: Promise<{ error?: string; timeout?: string }>;
 }) {
   const sp = await searchParams;
-  const hasEmailServer = !!process.env.EMAIL_SERVER && !!process.env.EMAIL_FROM;
+  // Item 111 — accept EITHER Graph or SMTP transport. Renamed local to
+  // hasMailerConfigured for accuracy; the "No EMAIL_SERVER configured"
+  // message stays as-is for operator familiarity (EMAIL_SERVER is the
+  // legacy env var that started this whole pattern).
+  const { isMailerConfigured } = await import("@/lib/notifications/mailer");
+  const hasEmailServer = isMailerConfigured();
   const timeoutReason =
     sp.timeout === "idle-timeout" || sp.timeout === "absolute-timeout"
       ? sp.timeout
