@@ -1,4 +1,4 @@
-import type { ChannelAdapter, IngestRow } from "./types";
+import type { ChannelAdapter, IngestRow, DraftPushInput, DraftPushResult } from "./types";
 import { mockAdapter } from "./mock";
 
 /**
@@ -27,6 +27,93 @@ export const m365Adapter: ChannelAdapter = {
     for (const m of inbox) rows.push(toRow(m, "IN"));
     for (const m of sent) rows.push(toRow(m, "OUT"));
     return rows.slice(0, 25);
+  },
+
+  /**
+   * Backlog item 113 — push a draft into the User's Outlook drafts
+   * folder via the Microsoft Graph API. Two paths:
+   *
+   * 1. Reply draft: POST /me/messages/{id}/createReply, then PATCH the
+   *    new draft's body to replace Outlook's quote-prepended template.
+   *    The reply correctly threads under the original conversation.
+   * 2. New draft: POST /me/messages with subject + body + recipients.
+   *
+   * Both return a Message resource whose `id` is stable and whose
+   * `webLink` opens the draft in Outlook on the web. Requires the
+   * `Mail.ReadWrite` delegated scope — existing connections with only
+   * `Mail.Read` will 403 and the push helper logs + skips.
+   */
+  async createDraft(ctx, input: DraftPushInput): Promise<DraftPushResult> {
+    if (!ctx.tokens.access_token || ctx.tokens.mock === true) {
+      throw new Error("m365 createDraft: no real OAuth token");
+    }
+    const token = ctx.tokens.access_token;
+
+    if (input.inReplyToExternalId) {
+      // Step 1 — Graph generates the reply draft (threaded, with quoted
+      // original below). We then overwrite the body with our composed
+      // text. `createReply` returns the new draft Message resource.
+      const replyRes = await fetch(
+        `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(input.inReplyToExternalId)}/createReply`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}` },
+        },
+      );
+      if (!replyRes.ok) {
+        const text = await replyRes.text();
+        throw new Error(`Graph createReply ${replyRes.status}: ${text.slice(0, 300)}`);
+      }
+      const replyDraft = (await replyRes.json()) as { id: string; webLink?: string };
+      // Step 2 — overwrite the body with our composed draft.
+      const patchRes = await fetch(
+        `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(replyDraft.id)}`,
+        {
+          method: "PATCH",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            body: {
+              contentType: input.bodyKind === "html" ? "HTML" : "Text",
+              content: input.body,
+            },
+            ...(input.subject ? { subject: input.subject } : {}),
+          }),
+        },
+      );
+      if (!patchRes.ok) {
+        const text = await patchRes.text();
+        throw new Error(`Graph PATCH message ${patchRes.status}: ${text.slice(0, 300)}`);
+      }
+      return { externalId: replyDraft.id, webLink: replyDraft.webLink };
+    }
+
+    // Net-new draft.
+    const newRes = await fetch(`https://graph.microsoft.com/v1.0/me/messages`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        subject: input.subject,
+        body: {
+          contentType: input.bodyKind === "html" ? "HTML" : "Text",
+          content: input.body,
+        },
+        toRecipients: input.to.map((address) => ({ emailAddress: { address } })),
+        ccRecipients: (input.cc ?? []).map((address) => ({ emailAddress: { address } })),
+        bccRecipients: (input.bcc ?? []).map((address) => ({ emailAddress: { address } })),
+      }),
+    });
+    if (!newRes.ok) {
+      const text = await newRes.text();
+      throw new Error(`Graph POST messages ${newRes.status}: ${text.slice(0, 300)}`);
+    }
+    const created = (await newRes.json()) as { id: string; webLink?: string };
+    return { externalId: created.id, webLink: created.webLink };
   },
 };
 

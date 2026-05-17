@@ -10,6 +10,7 @@ import {
 } from "@/lib/drafts";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { LiveDeadline } from "./LiveDeadline";
+import { ExternalDraftLink } from "./ExternalDraftLink";
 
 /**
  * Post-PRD hardening item 64 — FCG-deadline triage on the Member
@@ -200,6 +201,10 @@ type DraftRow = {
   createdAt: Date;
   sentMarkedAt: Date | null;
   fcgWindowDeadline: Date | null;
+  // Item 113 — when the draft was also pushed to the User's mailbox,
+  // `externalDraftUrl` deep-links to it in Outlook/Gmail.
+  externalProvider: string | null;
+  externalDraftUrl: string | null;
   _count: { actions: number };
 };
 
@@ -295,6 +300,12 @@ function DraftSection({
                       {d._count.actions > 0 && (
                         <span>· {d._count.actions} actions</span>
                       )}
+                      {d.externalDraftUrl && (
+                        <ExternalDraftLink
+                          href={d.externalDraftUrl}
+                          label={providerLabel(d.externalProvider)}
+                        />
+                      )}
                     </div>
                     <div className="mt-2 truncate text-xs text-ink/60">{preview}</div>
                   </div>
@@ -307,4 +318,10 @@ function DraftSection({
       </ul>
     </section>
   );
+}
+
+function providerLabel(provider: string | null): string {
+  if (provider === "M365") return "Outlook";
+  if (provider === "GOOGLE") return "Gmail";
+  return "mailbox";
 }

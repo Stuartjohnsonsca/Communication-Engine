@@ -6,6 +6,7 @@ import { classifyAndRecordInbound } from "@/lib/sentiment/record";
 import { getMemberLifecycleState, isDraftingPermitted } from "@/lib/lifecycle";
 import { reportError } from "@/lib/observability";
 import { dispatchNotification } from "@/lib/notifications/dispatch";
+import { pushDraftToMailbox } from "./push-to-mailbox";
 
 /**
  * Item 50 — produce a Draft for an ingested inbound message **without
@@ -492,6 +493,15 @@ export async function produceDraftFromInbound(input: {
       ingestedMessageId: ingested.id,
       fcgWindowDeadline: created.fcgWindowDeadline?.toISOString() ?? null,
     },
+  });
+
+  // Item 113 — also push the draft into the User's actual Outlook /
+  // Gmail drafts folder. Fire-and-forget: a failure here mustn't
+  // leak into the auto-draft sweep's per-pass counters.
+  void pushDraftToMailbox({
+    tenantId: input.tenantId,
+    draftId: created.id,
+    membershipId: input.membershipId,
   });
 
   return {

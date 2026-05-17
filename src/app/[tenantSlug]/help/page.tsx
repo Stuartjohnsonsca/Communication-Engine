@@ -58,7 +58,11 @@ export default async function HelpPage({
           <li>
             We <strong>draft</strong> client-facing messages on your behalf — emails,
             replies, follow-ups — and we <strong>never send anything ourselves</strong>.
-            Drafts arrive in your inbox / drafting console; you press send.
+            Each draft lands directly in your Outlook or Gmail Drafts folder
+            (when your mailbox is connected), threaded under the original
+            message; you edit and press send from your normal mail client.
+            A copy is also visible in the in-app {link("/drafts", "Drafts")}
+            console with a one-click "Open in Outlook / Gmail" deep-link.
           </li>
           <li>
             Before drafting, the AI consults your firm&apos;s written rules (the{" "}
@@ -135,8 +139,12 @@ export default async function HelpPage({
             <p className="font-medium">If you&apos;re a fee-earner (USER)</p>
             <ul className="mt-1 list-disc pl-5 text-ink/80 space-y-1">
               <li>
-                Drafts arrive at {link("/drafts", "Drafts")} when a client message lands
-                in your connected mailbox. Read, edit, send.
+                Drafts arrive in <strong>your Outlook or Gmail Drafts folder</strong>
+                (and at {link("/drafts", "Drafts")}) when a client message lands
+                in your connected mailbox. Edit and send from your normal mail
+                client. If you connected your mailbox before May 2026 you may
+                need to reconnect from {link("/integrations", "Integrations")} so
+                the engine has draft-write permission.
               </li>
               <li>
                 Tasks the engine identifies (a callback to schedule, a document to

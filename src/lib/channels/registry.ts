@@ -94,7 +94,12 @@ export const CHANNEL_KINDS: Record<ChannelKind, ChannelKindMeta> = {
     scopeDefault: [
       "offline_access",
       "User.Read",
-      "Mail.Read",
+      // Item 113 — `Mail.ReadWrite` (superset of `Mail.Read`) lets the
+      // engine push drafts into the User's Outlook drafts folder so
+      // they can edit + send from their normal mail client. Existing
+      // connections with only `Mail.Read` will continue to ingest;
+      // their createDraft calls will 403 until the User reconnects.
+      "Mail.ReadWrite",
       "Calendars.Read",
       "Files.Read",
       "ChannelMessage.Read.All",
@@ -136,6 +141,14 @@ export const CHANNEL_KINDS: Record<ChannelKind, ChannelKindMeta> = {
     covers: ["EMAIL", "CALENDAR", "FILES", "MEET"],
     tier: 1,
     scopeDefault: [
+      // Item 113 — `gmail.compose` (replaces `gmail.readonly`) lets the
+      // engine push drafts into the User's Gmail drafts folder. Compose
+      // is read+modify on drafts only — strictly narrower than gmail.modify
+      // and Google still surfaces the broader permission in the consent
+      // screen, so the User sees we're asking to "manage your drafts."
+      // Existing connections with only `gmail.readonly` will continue to
+      // ingest; their createDraft calls will 403 until the User reconnects.
+      "https://www.googleapis.com/auth/gmail.compose",
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/calendar.readonly",
       "https://www.googleapis.com/auth/drive.readonly",

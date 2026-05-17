@@ -158,6 +158,7 @@ enum AuditEventType {
   DRAFT_EDITED
   DRAFT_REGENERATED
   DRAFT_SENT_MARKED
+  DRAFT_PUSHED_TO_MAILBOX
   ACTION_CREATED
   ACTION_COMPLETED
   ACTION_DISMISSED
@@ -1498,6 +1499,18 @@ model Draft {
   outboundIngestedMessageId     String?          @unique
   outboundIngestedMessage       IngestedMessage? @relation("DraftOutbound", fields: [outboundIngestedMessageId], references: [id])
   synthesisedFromOutboundIngest Boolean          @default(false)
+  /// Backlog item 113 — drafts also materialise in the User's actual
+  /// mailbox (Outlook via Graph, Gmail via Gmail API) so the fee-earner
+  /// can edit + send from their normal mail client. `externalProvider`
+  /// records which channel kind we pushed to ("M365" | "GOOGLE"; null =
+  /// push not attempted or failed). `externalDraftId` is the provider's
+  /// id. `externalDraftUrl` is the deep-link the in-app /drafts list
+  /// renders as "Open in Outlook / Open in Gmail". On push failure all
+  /// three remain null and the Draft row still exists — falling back
+  /// gracefully to the in-app surface.
+  externalProvider              String?
+  externalDraftId               String?
+  externalDraftUrl              String?
 
   tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   membership      Membership              @relation(fields: [membershipId], references: [id])

@@ -9,6 +9,7 @@ import { requirePermission } from "@/lib/rbac";
 import { getMemberLifecycleState, isDraftingPermitted } from "@/lib/lifecycle";
 import { reportError } from "@/lib/observability";
 import { rateLimitByMembership, tooManyRequestsResponse } from "@/lib/ratelimit";
+import { pushDraftToMailbox } from "@/lib/drafts/push-to-mailbox";
 
 const inputSchema = z.object({
   tenantSlug: z.string(),
@@ -240,6 +241,16 @@ export async function POST(req: Request) {
       actions: created.actions.length,
       autoSpawnedActions: synthesised.length,
     },
+  });
+
+  // Item 113 — also push the draft into the User's actual Outlook /
+  // Gmail drafts folder so they can edit + send from their normal mail
+  // client. Fire-and-forget; failures are logged inside the helper and
+  // never bubble up — a draft pushed only to Postgres is still useful.
+  void pushDraftToMailbox({
+    tenantId: ctx.tenant.id,
+    draftId: created.id,
+    membershipId: ctx.membership.id,
   });
 
   return NextResponse.json({ draft: created, output: draft });

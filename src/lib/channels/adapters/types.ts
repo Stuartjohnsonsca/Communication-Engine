@@ -72,7 +72,46 @@ export type AdapterContext = {
   imapConfig?: ImapServerConfig;
 };
 
+/**
+ * Backlog item 113 — payload for creating a draft inside the User's
+ * real mailbox. Used by the M365 + Gmail adapters; other kinds (Slack,
+ * Teams chat, IMAP in v1) leave `createDraft` unimplemented and the
+ * push helper records null externalProvider on the Draft row.
+ */
+export type DraftPushInput = {
+  subject: string;
+  /** The draft body. HTML when `bodyKind = "html"`, otherwise plain text. */
+  body: string;
+  bodyKind: "html" | "text";
+  /** The User's own email (for the `From` header — providers ignore it if it doesn't match the OAuthed mailbox, but it's required by Graph's schema). */
+  fromEmail: string;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  /**
+   * Provider's id of the inbound message we're replying to. When set,
+   * the provider threads the draft as a reply (Graph: createReply;
+   * Gmail: `In-Reply-To` + `References` headers + `threadId`).
+   * Absent for net-new drafts.
+   */
+  inReplyToExternalId?: string;
+};
+
+export type DraftPushResult = {
+  /** Provider's draft id (Graph message id; Gmail draft id). */
+  externalId: string;
+  /** Deep-link to open the draft in the User's mail client. Provider-specific shape. */
+  webLink?: string;
+};
+
 export interface ChannelAdapter {
   /** Returns up to ~25 messages per call so the caller can page. */
   ingest(ctx: AdapterContext): Promise<IngestRow[]>;
+  /**
+   * Backlog item 113 — push a draft into the User's mailbox so they
+   * can edit and send from their normal mail client. Optional: only
+   * implemented by adapters whose provider exposes a draft-creation
+   * API (M365, Google today; future Slack/IMAP TODO).
+   */
+  createDraft?(ctx: AdapterContext, input: DraftPushInput): Promise<DraftPushResult>;
 }
