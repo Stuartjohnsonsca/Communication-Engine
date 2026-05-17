@@ -170,9 +170,32 @@ export async function POST(req: Request) {
     },
   });
 
+  // Item 115 — return the post-turn rules list + UCG status so the
+  // client can render the actual current state. The previous client
+  // tried to refresh via `fetch(pathname).then(x => x.text())` then
+  // threw the response away, so rules stayed at their initial-load
+  // count and the User couldn't see that the chat had done anything.
+  const rulesAfter = await superDb.uCGRule.findMany({
+    where: { ucgId: ucg.id },
+    orderBy: { externalId: "asc" },
+  });
+  const ucgAfter = await superDb.userCultureGuide.findUnique({
+    where: { id: ucg.id },
+    select: { status: true, judgeStatus: true },
+  });
+
   return NextResponse.json({
     ucgId: ucg.id,
     message: result.message,
     toolCalls: result.toolCalls,
+    rules: rulesAfter.map((r) => ({
+      externalId: r.externalId,
+      category: r.category,
+      channel: r.channel,
+      statement: r.statement,
+      narrowsFcgRule: r.narrowsFcgRule,
+    })),
+    status: ucgAfter?.status ?? null,
+    judgeStatus: ucgAfter?.judgeStatus ?? null,
   });
 }
