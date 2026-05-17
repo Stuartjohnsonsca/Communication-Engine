@@ -99,7 +99,10 @@ async function main() {
       console.log("\n" + "=".repeat(60));
       console.log("Bootstrap missing Railway cron services");
       console.log("=".repeat(60));
-      await bootstrapRailwayCrons(prisma);
+      // Pass null prisma when DB isn't reachable — bootstrap then
+      // skips the "which crons are already wired" check and attempts
+      // all of them (Railway API rejects duplicates harmlessly).
+      await bootstrapRailwayCrons(dbReachable ? prisma : null);
     }
 
     if (wantSmokeIngest) {
