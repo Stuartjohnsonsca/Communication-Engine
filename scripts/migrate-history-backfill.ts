@@ -66,7 +66,12 @@ export async function backfillMigrationHistory(connectionString: string): Promis
 }
 
 async function main() {
-  const url = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
+  // Prefer DATABASE_URL; fall back to DIRECT_URL only if DATABASE_URL
+  // is unset. (Pre-2026-05-17 this preferred DIRECT_URL — fine on
+  // PgBouncer-fronted setups but on Railway it meant a broken
+  // DIRECT_URL value crashed the backfill even when DATABASE_URL was
+  // healthy. Reversed the priority.)
+  const url = process.env.DATABASE_URL ?? process.env.DIRECT_URL;
   if (!url) {
     console.log("DATABASE_URL / DIRECT_URL not set; skipping migration-history backfill.");
     return;

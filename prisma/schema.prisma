@@ -7,9 +7,13 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // `directUrl` removed — Railway Postgres doesn't expose a separate
+  // pooled vs direct connection, so DATABASE_URL works for both
+  // runtime queries AND `prisma migrate deploy`. Re-add if migrating
+  // to a PgBouncer-fronted DB (Supabase, Neon, etc.) where the
+  // pooled URL can't handle DDL.
 }
 
 // ─── Enums ──────────────────────────────────────────────────────────────────
