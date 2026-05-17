@@ -673,6 +673,48 @@ export default async function AccountPage({
         t={t}
       />
 
+      {hasPermission(ctx.membership.role, "channels:connect-own") && channelConnectStatus.length === 0 && (
+        // Item 116 — when the tenant has zero Channel rows the previous
+        // code silently hid the entire "Connect provider accounts" block,
+        // so a brand-new tenant saw no path to wire up their email and
+        // assumed it was a bug. Show an explicit empty-state with the
+        // concrete admin step instead. FIRM_ADMINs get a deep-link to
+        // /admin/channels; everyone else gets a "ask your firm admin"
+        // copy so they know who can unblock them.
+        <div className="card space-y-3">
+          <h2 className="text-base font-medium">Connect provider accounts</h2>
+          <p className="text-sm text-ink/70">
+            Your firm hasn&apos;t configured any mailbox / chat / file
+            channels yet, so there&apos;s nothing to connect to here.
+            Acumon doesn&apos;t store email passwords by default — Outlook
+            and Gmail use OAuth (you sign in with Microsoft / Google
+            directly, we receive a scoped access token). Username +
+            password storage is available only for legacy IMAP servers
+            without OAuth.
+          </p>
+          {hasPermission(ctx.membership.role, "channels:write") ? (
+            <p className="text-sm">
+              <Link
+                href={`/${tenantSlug}/admin/channels`}
+                className="underline decoration-dotted"
+              >
+                Admin → Channels
+              </Link>{" "}
+              is where you add a channel (Microsoft 365, Google
+              Workspace, Slack, or IMAP). Once a channel exists, this
+              card will show a Connect button for it.
+            </p>
+          ) : (
+            <p className="text-sm text-ink/70">
+              Ask your Firm Administrator to add a channel via{" "}
+              <code className="rounded bg-ink/5 px-1">Admin → Channels</code>;
+              once that&apos;s done, this card will show a Connect
+              button for you.
+            </p>
+          )}
+        </div>
+      )}
+
       {hasPermission(ctx.membership.role, "channels:connect-own") && channelConnectStatus.length > 0 && (
         <div className="card space-y-3">
           <h2 className="text-base font-medium">Connect provider accounts</h2>
