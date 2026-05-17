@@ -50,16 +50,16 @@ CREATE TABLE "AuditChainVerification" (
   "startedAt"    TIMESTAMP(3) NOT NULL DEFAULT NOW(),
   "finishedAt"   TIMESTAMP(3),
   "eventCount"   INTEGER NOT NULL DEFAULT 0,
-  /// Seq of the FIRST event whose hash didn't validate. Stable across
-  /// reruns of the same tampering — used as part of the dedupe key so a
-  /// persistent tamper alerts once, not every day. Null on OK / RUNNING.
+  -- Seq of the FIRST event whose hash didn't validate. Stable across
+  -- reruns of the same tampering — used as part of the dedupe key so a
+  -- persistent tamper alerts once, not every day. Null on OK / RUNNING.
   "failedAtSeq"  BIGINT,
   "tookMs"       INTEGER,
   "errorMessage" TEXT,
-  /// Last time a tamper notification fired for this run. Subsequent runs
-  /// that find the SAME failedAtSeq within the dedupe window are silent
-  /// (the row's status still records the outcome). A NEW failedAtSeq
-  /// (tamper extended to a different event) re-alerts immediately.
+  -- Last time a tamper notification fired for this run. Subsequent runs
+  -- that find the SAME failedAtSeq within the dedupe window are silent
+  -- (the row's status still records the outcome). A NEW failedAtSeq
+  -- (tamper extended to a different event) re-alerts immediately.
   "notifiedAt"   TIMESTAMP(3),
   "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT NOW(),
   "updatedAt"    TIMESTAMP(3) NOT NULL DEFAULT NOW()
