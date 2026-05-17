@@ -59,20 +59,41 @@ function record(outcome: Outcome, line: string) {
 }
 
 async function main() {
-  if (!process.env.DATABASE_URL) {
-    console.error("DATABASE_URL not set");
-    process.exit(3);
+  // DB connectivity is optional now. If it works, the audit checks run.
+  // If not (e.g. running from outside Railway's network where the
+  // `.railway.internal` host doesn't resolve), the audit phases are
+  // skipped with a WARN and bootstrap-only mode still works because
+  // the Railway API doesn't need DB access.
+  let prisma: PrismaClient | null = null;
+  let dbReachable = false;
+  if (process.env.DATABASE_URL) {
+    prisma = new PrismaClient();
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      dbReachable = true;
+    } catch (e) {
+      record(
+        "WARN",
+        `DB unreachable from this terminal (${e instanceof Error ? e.message.split("\n")[0].slice(0, 200) : String(e)}). Audit phases will be skipped; bootstrap-crons + manual fallbacks still work.`,
+      );
+    }
+  } else {
+    record("WARN", "DATABASE_URL not set; audit phases will be skipped.");
   }
-  const prisma = new PrismaClient();
+
   try {
     console.log("=".repeat(60));
     console.log("Launch-readiness audit");
     console.log("=".repeat(60));
 
-    await checkAcumonBootstrap(prisma);
-    await checkCronWiring(prisma);
-    await checkPerTenantOAuth(prisma);
-    await checkPerMemberAuths(prisma);
+    if (dbReachable && prisma) {
+      await checkAcumonBootstrap(prisma);
+      await checkCronWiring(prisma);
+      await checkPerTenantOAuth(prisma);
+      await checkPerMemberAuths(prisma);
+    } else {
+      console.log("\n[skipped audit phases — DB not reachable from here]");
+    }
 
     if (wantBootstrapCrons) {
       console.log("\n" + "=".repeat(60));
@@ -82,10 +103,17 @@ async function main() {
     }
 
     if (wantSmokeIngest) {
-      console.log("\n" + "=".repeat(60));
-      console.log("Smoke-ingest pass");
-      console.log("=".repeat(60));
-      await smokeIngest(prisma);
+      if (!dbReachable || !prisma) {
+        record(
+          "FAIL",
+          "Smoke-ingest requires DB access — run from inside Railway's network OR enable Postgres public networking + use DATABASE_PUBLIC_URL.",
+        );
+      } else {
+        console.log("\n" + "=".repeat(60));
+        console.log("Smoke-ingest pass");
+        console.log("=".repeat(60));
+        await smokeIngest(prisma);
+      }
     }
 
     console.log("\n" + "=".repeat(60));
@@ -102,7 +130,7 @@ async function main() {
     console.error(`SCRIPT ERROR: ${e instanceof Error ? e.message : e}`);
     process.exit(3);
   } finally {
-    await prisma.$disconnect();
+    if (prisma) await prisma.$disconnect();
   }
 }
 
@@ -262,18 +290,26 @@ async function checkPerMemberAuths(prisma: PrismaClient) {
 // Action 1 — Bootstrap Railway cron services.
 // ───────────────────────────────────────────────────────────────────
 
-async function bootstrapRailwayCrons(prisma: PrismaClient) {
+async function bootstrapRailwayCrons(prisma: PrismaClient | null) {
   const token = process.env.RAILWAY_API_TOKEN;
   const projectId = process.env.RAILWAY_PROJECT_ID;
   const envId = process.env.RAILWAY_ENVIRONMENT_ID;
   const webHost = process.env.RAILWAY_WEB_HOST;
   const cronSecret = process.env.CRON_SECRET;
 
-  // Compute which crons need creating.
-  const heartbeats = await prisma.cronHeartbeat.findMany();
-  const wiredNames = new Set(
-    heartbeats.filter((h) => h.lastSuccessAt !== null).map((h) => h.cronName),
-  );
+  // Compute which crons need creating. If DB unreachable, just attempt
+  // all of them — Railway API will skip on duplicate service name.
+  let wiredNames = new Set<string>();
+  if (prisma) {
+    try {
+      const heartbeats = await prisma.cronHeartbeat.findMany();
+      wiredNames = new Set(
+        heartbeats.filter((h) => h.lastSuccessAt !== null).map((h) => h.cronName),
+      );
+    } catch {
+      // ignore — proceed as if no crons are wired
+    }
+  }
   const missing = REGISTERED_CRONS.filter((c) => !wiredNames.has(c.cronName));
 
   if (missing.length === 0) {
