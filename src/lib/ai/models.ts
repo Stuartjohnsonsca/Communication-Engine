@@ -16,6 +16,13 @@ export type ModelBinding = {
  *    measurably lower reliability on per-rule pass/fail with citation.
  *  - Statutory verifier stays on Haiku — cheap but accurate; second pass
  *    that suppresses unverified citations.
+ *  - **FCG + UCG chat use Haiku** (item 114). The drafting flow depends on
+ *    the agent reliably emitting `propose_rule_change` tool calls — if it
+ *    chats in free-text the wizard stages nothing and the user can't save.
+ *    Llama 3.3 on Together (the previous default) was inconsistent at
+ *    `tool_choice: auto` with the FCG system prompt; Haiku on Anthropic
+ *    is rock-solid at structured tool calls and is roughly cost-parity
+ *    per million output tokens for low-volume chat surfaces.
  *  - Everything else defaults to Llama 3.3 70B Turbo on Together — high
  *    volume, drafting/classification tasks where Llama is good enough.
  *
@@ -29,8 +36,8 @@ export type ModelBinding = {
  * doesn't have a more specific override.
  */
 const DEFAULTS: Record<AgentRole, ModelBinding> = {
-  "fcg-chat":    { provider: "together",  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 4096, temperature: 0.5 },
-  "ucg-chat":    { provider: "together",  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 4096, temperature: 0.5 },
+  "fcg-chat":    { provider: "anthropic", model: "claude-haiku-4-5-20251001",               maxTokens: 4096, temperature: 0.3 },
+  "ucg-chat":    { provider: "anthropic", model: "claude-haiku-4-5-20251001",               maxTokens: 4096, temperature: 0.3 },
   "judge":       { provider: "anthropic", model: "claude-sonnet-4-6",                       maxTokens: 4096, temperature: 0   },
   "draft":       { provider: "together",  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo", maxTokens: 4096, temperature: 0.4 },
   "verifier":    { provider: "anthropic", model: "claude-haiku-4-5-20251001",               maxTokens: 1024, temperature: 0   },

@@ -4,7 +4,17 @@ import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 
 type StagedOp = { tool: string; input: Record<string, unknown> };
-type Turn = { role: "user" | "assistant"; content: string };
+type StagedThisTurn = { externalId: string; statement: string; category: string };
+// `stagedThisTurn` is the slice of rules whose `propose_rule_change`
+// tool call landed on the assistant's most recent reply — visible
+// confirmation that the chat did something structural, not just chatty.
+// Empty array signals "the assistant responded but didn't stage a
+// rule" — the wizard nudges the user to rephrase.
+type Turn = {
+  role: "user" | "assistant";
+  content: string;
+  stagedThisTurn?: StagedThisTurn[];
+};
 
 type Step = {
   id: string;
@@ -183,7 +193,54 @@ export default function WizardClient({
         const data = await res.json();
         setProposalId(data.proposalId);
         setOps(data.diffOps ?? []);
-        setTurns(step.id, (t) => [...t, { role: "assistant", content: data.message ?? "(no text)" }]);
+        // Item 114 — surface this turn's stagings inline so the user
+        // sees the structural side-effect of the chat, not just the
+        // assistant's prose. Without this, a chatty reply with no
+        // tool call looked identical to a chatty reply that staged a
+        // rule, and the wizard's "Submit" disabled-state was the
+        // user's only signal anything was wrong.
+        const stagedThisTurn: StagedThisTurn[] = Array.isArray(data.toolCalls)
+          ? data.toolCalls
+              .filter(
+                (tc: { name?: string }) =>
+                  tc?.name === "propose_rule_change" || tc?.name === "finalise_fcg",
+              )
+              .flatMap((tc: { name: string; input: Record<string, unknown> }) => {
+                if (tc.name === "propose_rule_change") {
+                  const r = tc.input?.rule as
+                    | { externalId?: string; statement?: string; category?: string }
+                    | undefined;
+                  return r
+                    ? [
+                        {
+                          externalId: r.externalId ?? "—",
+                          statement: r.statement ?? "(no statement)",
+                          category: r.category ?? "—",
+                        },
+                      ]
+                    : [];
+                }
+                // finalise_fcg can carry many rules — surface them all.
+                const rules = (tc.input?.rules ?? []) as Array<{
+                  externalId?: string;
+                  statement?: string;
+                  category?: string;
+                }>;
+                return rules.map((r) => ({
+                  externalId: r.externalId ?? "—",
+                  statement: r.statement ?? "(no statement)",
+                  category: r.category ?? "—",
+                }));
+              })
+          : [];
+        setTurns(step.id, (t) => [
+          ...t,
+          {
+            role: "assistant",
+            content: data.message ?? "(no text)",
+            stagedThisTurn,
+          },
+        ]);
       } catch (e) {
         setError(e instanceof Error ? e.message : "unknown error");
       }
@@ -365,17 +422,59 @@ export default function WizardClient({
                     </ul>
                   </div>
                 )}
-                {turns.map((t, i) => (
-                  <div key={i} className={t.role === "user" ? "text-right" : ""}>
-                    <div
-                      className={`inline-block max-w-prose whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
-                        t.role === "user" ? "bg-accent text-white" : "bg-ink/5"
-                      }`}
-                    >
-                      {t.content}
+                {turns.map((t, i) => {
+                  // Item 114 — was this turn's reply the response to a
+                  // user message that wasn't an obvious filler/question?
+                  // If so AND nothing staged, nudge the user. We can't
+                  // perfectly detect "this was a rule statement", but
+                  // checking the prior turn's length filters out
+                  // one-word follow-ups where no-stage is fine.
+                  const priorUser = i > 0 ? turns[i - 1] : null;
+                  const looksLikeARuleAttempt =
+                    priorUser?.role === "user" && (priorUser.content?.length ?? 0) > 30;
+                  const showNothingStagedHint =
+                    t.role === "assistant" &&
+                    t.stagedThisTurn !== undefined &&
+                    t.stagedThisTurn.length === 0 &&
+                    looksLikeARuleAttempt;
+                  return (
+                    <div key={i} className={t.role === "user" ? "text-right" : ""}>
+                      <div
+                        className={`inline-block max-w-prose whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
+                          t.role === "user" ? "bg-accent text-white" : "bg-ink/5"
+                        }`}
+                      >
+                        {t.content}
+                      </div>
+                      {t.role === "assistant" && t.stagedThisTurn && t.stagedThisTurn.length > 0 && (
+                        <div className="mt-1 inline-block rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-900">
+                          <div className="font-medium">
+                            Staged {t.stagedThisTurn.length} rule
+                            {t.stagedThisTurn.length === 1 ? "" : "s"} this turn:
+                          </div>
+                          <ul className="mt-0.5 list-disc pl-4">
+                            {t.stagedThisTurn.map((s, j) => (
+                              <li key={j}>
+                                <span className="font-mono">{s.externalId}</span>{" "}
+                                <span className="opacity-70">({s.category.toLowerCase()})</span>
+                                {" — "}
+                                {s.statement}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {showNothingStagedHint && (
+                        <div className="mt-1 inline-block rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                          The assistant replied but didn&apos;t stage a rule this turn.
+                          Try restating as one concrete rule, e.g. &quot;External client emails
+                          open with &lsquo;Dear Name&rsquo; and sign off &lsquo;Kind
+                          regards&rsquo;.&quot;
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <form
